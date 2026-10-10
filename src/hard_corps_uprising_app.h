@@ -4,7 +4,7 @@
 
 #include <rex/rex_app.h>
 
-#include "debug_saulo_input.h"
+#include "window_host.h"
 
 class HardCorpsUprisingApp : public rex::ReXApp {
  public:
@@ -15,7 +15,5 @@ class HardCorpsUprisingApp : public rex::ReXApp {
         new HardCorpsUprisingApp(ctx, "hard_corps_uprising", PPCImageConfig));
   }
 
-  void OnPostSetup() override {
-    DebugSauloAttachKeyboardLog(window());  // DEBUG_SAULO
-  }
+  void OnPostSetup() override { AttachWindowHost(window(), app_context()); }
 };
