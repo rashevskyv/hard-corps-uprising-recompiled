@@ -26,6 +26,7 @@ Fix: one `[functions]` entry for each address the runtime actually hit, added in
 | `0x8257DE38` | `0x8257DE40` | vtable `0x8201233C` | tail-call thunk after a `b` |
 | `0x826ED8D8` | `0x826ED8E8` | `0x8203B5D0`, `0x8203B5D4`, `0x8203B5D8` | argument-shuffle tail call after a `b` |
 | `0x825251A0` | `0x825251BC` | `0x823CCBB8` | vcall thunk after a `bctr` |
+| `0x82521F28` | `0x82521F78` | same slot of vtables `0x823CCA3C`, `0x823CCB7C`, `0x823CD8DC` | guarded vcall tail (`bctr` at `0x82521F70`) after the `bctr` of `sub_82521EB8`; the trailing `blr` at `0x82521F74` is unreferenced padding |
 
 Evidence required for each entry:
 
@@ -50,15 +51,28 @@ Not registered speculatively: 83 data-referenced addresses directly follow a `bc
 | Staging | The SDK's `rexglue_configure_target` copies the plugin next to the exe after linking (the plugin is loaded at runtime, so `TARGET_RUNTIME_DLLS` misses it). `tools/build.ps1` checks that all of these files exist. |
 | Shaders | Translated by the Xenos plugin at runtime. There is no build step. |
 
-Before Xenos, the guest ran past the boot fixes. It stayed alive with an SDL window titled `hard_corps_uprising [rexglue-v0.10.0-RelWithDebInfo]`, initialized audio, and logged `VdInitializeRingBuffer: no GPU emulation loaded`. The Xenos build has not been run yet.
+Before Xenos, the guest ran past the boot fixes. It stayed alive with an SDL window titled `hard_corps_uprising [rexglue-v0.10.0-RelWithDebInfo]`, initialized audio, and logged `VdInitializeRingBuffer: no GPU emulation loaded`.
+
+First Xenos run: the RTX 4070 was selected, D3D12 initialized, and shaders and pipelines were created from storage. The window was black and fullscreen, then the guest hit the unregistered `0x82521F28` (fixed above).
+
+## Development window
+
+ReXGlue's `fullscreen` cvar defaults to `true` (borderless desktop fullscreen). That was the cause of the fullscreen start. The window settings use only the official v0.10.0 cvars in `config/hard_corps_uprising.toml`:
+
+| Setting | Effect |
+|---|---|
+| `fullscreen = false` | normal resizable window |
+| `window_width = 853`, `window_height = 480` | logical size, so Windows scaling applies. At ~337% on the 3840×2160 display this is about 2880×1620 physical. ReXApp's 1280×720 logical default would be larger than the screen. |
+| `monitor = 1` | `SDL_WINDOWPOS_CENTERED_DISPLAY` on the first (primary) display |
+| `video_mode_width = 1280`, `video_mode_height = 720` | pins the guest video mode, which otherwise follows `window_width/height` once they are set |
 
 Known v0.10.0 risk (Outpost Kaloki X, Earthworm Jim HD): guest callbacks that run on host threads can unmask host FP exceptions (`0xC000008F`). The graphics interrupt callback `0x82556300` has no direct `enableFlushMode` in its static call tree, but it makes indirect calls. No guard has been added.
 
 ## Result
 
-Highest confirmed milestone: **WINDOW OPENS** (without a GPU plugin). The first Xenos frame is waiting on a manual test.
+Highest confirmed milestone: **XENOS INITIALIZES** (D3D12 device, shader storage, pipelines). The build with the `0x82521F28` fix and the windowed config built cleanly (incremental codegen, no warnings) and is waiting on a manual test.
 
 ## Remaining blockers
 
-- Runtime test of the Xenos build: first frame, or the next fatal.
+- Runtime test of this build: first frame, or the next fatal.
 - `game:\builddate.bin` open fails (`0xC000000F`). The file isn't in the package, and the game continued past it.

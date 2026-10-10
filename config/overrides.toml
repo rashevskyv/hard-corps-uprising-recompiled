@@ -8,6 +8,7 @@
 # two padding words; GapFill only splits on blr, so they were never registered.
 0x8257DE38 = { end = 0x8257DE40 }  # data ptr 0x8201233C
 0x8257DE40 = { end = 0x8257DE4C }  # data ptr 0x82012340
+0x82521F28 = { end = 0x82521F78 }  # data ptr 0x823CCA3C, 0x823CCB7C, 0x823CD8DC
 0x825251A0 = { end = 0x825251BC }  # data ptr 0x823CCBB8
 0x82585980 = { end = 0x8258598C }  # data ptr 0x8200CE8C
 0x825C26F0 = { end = 0x825C26FC }  # data ptr 0x8201D940
