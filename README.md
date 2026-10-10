@@ -80,6 +80,14 @@ The recompiled sources are generated from your own game and are not in the repos
 
 How the launcher, settings and installer work is described in [docs/launcher.md](docs/launcher.md).
 
+## License
+
+Original code in this project is licensed under the GNU General Public License v2.0 only (GPL-2.0-only). See [LICENSE](LICENSE).
+
+Third-party components retain their respective licenses and notices. See [licenses/ReXGlue-LICENSE.txt](packaging/licenses/ReXGlue-LICENSE.txt) and [licenses/THIRD-PARTY-LICENSES.txt](packaging/licenses/THIRD-PARTY-LICENSES.txt).
+
+No game files are included. Hard Corps: Uprising and its assets are not covered by this project's license.
+
 ## Credits
 
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) for the recompiler and runtime (BSD 3-Clause)

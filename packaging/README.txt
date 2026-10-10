@@ -75,8 +75,15 @@ If the game does not start or crashes, please attach the newest file from the
 https://github.com/saulob/hard-corps-uprising-recompiled/issues
 
 
-LICENSES
---------
+LICENSE
+-------
+The original project code of this port is licensed under the GNU General
+Public License v2.0 only (GPL-2.0-only). The full text is in LICENSE.
+
+Third-party components keep their own licenses. Their license files and
+notices are in the "licenses" folder: ReXGlue-LICENSE.txt and
+THIRD-PARTY-LICENSES.txt.
+
+Game files are not included and are not covered by this project's license.
 This port is not affiliated with or endorsed by the makers or publishers of
-Hard Corps: Uprising, and contains none of their files. Third-party license
-notices are included in the "licenses" folder.
+Hard Corps: Uprising.

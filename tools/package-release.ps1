@@ -28,7 +28,7 @@ $Packaging = Join-Path $Root 'packaging'
 $Sdk = Join-Path $Root 'tools\rexglue\win-amd64\bin'
 
 $Utf8NoBom = New-Object System.Text.UTF8Encoding $false
-$RootFiles = @('hard_corps_uprising.exe', 'rexruntime.dll', 'rexgpu-xenos.dll', 'hard_corps_uprising.toml', 'README.txt')
+$RootFiles = @('hard_corps_uprising.exe', 'rexruntime.dll', 'rexgpu-xenos.dll', 'hard_corps_uprising.toml', 'README.txt', 'LICENSE')
 $LicenseFiles = @('ReXGlue-LICENSE.txt', 'THIRD-PARTY-LICENSES.txt')
 # Names that mean game data, a package, saves, settings, caches or logs.
 $ForbiddenNames = @('default.xex', 'DataXENON', 'game', 'game-install-temp', 'game-install-backup', 'user_data',
@@ -131,6 +131,9 @@ foreach ($leaf in @('rexruntime.dll', 'rexgpu-xenos.dll')) {
     $official = (Get-FileHash (Join-Path $Sdk $leaf) -Algorithm SHA256).Hash
     if ($built -ne $official) { throw "$leaf is not the ReXGlue SDK release file" }
 }
+$RootLicense = Join-Path $Root 'LICENSE'
+if (-not (Test-Path -LiteralPath $RootLicense -PathType Leaf)) { throw "Missing project license: $RootLicense" }
+Copy-Item -LiteralPath $RootLicense $Stage
 foreach ($leaf in $LicenseFiles) {
     $source = Join-Path $Packaging "licenses\$leaf"
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing license file: $source" }
