@@ -1,0 +1,9 @@
+[project]
+name = "hard_corps_uprising"
+sdk_version = "0.10.0"
+game_root = "game/extracted"
+
+[entrypoint]
+file_path = "game/extracted/default.xex"
+out_directory_path = "generated/default"
+includes = ["config/overrides.toml"]

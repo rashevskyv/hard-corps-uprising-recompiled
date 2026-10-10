@@ -1,0 +1,5 @@
+# Manual analysis fixes for Hard Corps: Uprising (default.xex, title 58410A18)
+
+[functions]
+# Vtable slot 0x8201C6E8; analysis missed the null-check entry and started the function at 0x825DA8F0.
+0x825DA8E0 = { end = 0x825DA988 }

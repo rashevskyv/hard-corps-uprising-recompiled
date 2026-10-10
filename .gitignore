@@ -4,6 +4,9 @@
 /build/
 /out/
 
+# Downloaded ReXGlue SDK
+/tools/rexglue/
+
 # Logs, dumps and binaries
 *.log
 *.dmp
