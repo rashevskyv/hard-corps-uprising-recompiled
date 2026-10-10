@@ -84,7 +84,10 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 
 ## Screenshots
 
-Screenshots will be added here once they are captured. The planned list is in [docs/images/README.md](docs/images/README.md).
+<img width="1966" height="1179" alt="title_screen" src="https://github.com/user-attachments/assets/bff13f4f-3a4e-488d-8cf0-1b6cde1c0875" />
+
+<img width="1966" height="1172" alt="gameplay" src="https://github.com/user-attachments/assets/6029f8f7-e0a8-49af-ac51-46d6ab54926d" />
+
 
 ## Reporting problems
 
