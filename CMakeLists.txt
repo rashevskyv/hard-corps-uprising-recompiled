@@ -13,7 +13,7 @@ include(generated/rexglue.cmake)
 
 add_executable(hard_corps_uprising WIN32 src/main.cpp)
 
-rexglue_setup_target(hard_corps_uprising)
+rexglue_setup_target(hard_corps_uprising GPU_PLUGINS xenos)
 
 # The runtime reads its cvars from <exe dir>/hard_corps_uprising.toml.
 add_custom_command(TARGET hard_corps_uprising POST_BUILD

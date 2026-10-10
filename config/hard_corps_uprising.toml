@@ -1,3 +1,4 @@
 # ReXGlue runtime settings, read from <exe dir>/hard_corps_uprising.toml.
 # Full (purchased) license for XamContentGetLicenseMask; the SDK default 0 means trial.
 license_mask = 1
+gpu_plugin = "xenos"

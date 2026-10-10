@@ -3,3 +3,16 @@
 [functions]
 # Vtable slot 0x8201C6E8; analysis missed the null-check entry and started the function at 0x825DA8F0.
 0x825DA8E0 = { end = 0x825DA988 }
+
+# Indirect-only functions placed directly after another function's bctr/b with less than
+# two padding words; GapFill only splits on blr, so they were never registered.
+0x8257DE38 = { end = 0x8257DE40 }  # data ptr 0x8201233C
+0x8257DE40 = { end = 0x8257DE4C }  # data ptr 0x82012340
+0x825251A0 = { end = 0x825251BC }  # data ptr 0x823CCBB8
+0x82585980 = { end = 0x8258598C }  # data ptr 0x8200CE8C
+0x825C26F0 = { end = 0x825C26FC }  # data ptr 0x8201D940
+0x825C7ED0 = { end = 0x825C7EEC }  # data ptr 0x8201C56C
+0x825CBC28 = { end = 0x825CBC50 }  # data ptr 0x82015798, 0x820158A0
+0x825DEAE0 = { end = 0x825DEB0C }  # pointer built at 0x82634478
+0x825F8350 = { end = 0x825F835C }  # data ptr 0x8201ABF0
+0x826ED8D8 = { end = 0x826ED8E8 }  # data ptr 0x8203B5D0, 0x8203B5D4, 0x8203B5D8
