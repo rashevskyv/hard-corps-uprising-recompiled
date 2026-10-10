@@ -17,3 +17,4 @@
 0x825DEAE0 = { end = 0x825DEB0C }  # pointer built at 0x82634478
 0x825F8350 = { end = 0x825F835C }  # data ptr 0x8201ABF0
 0x826ED8D8 = { end = 0x826ED8E8 }  # data ptr 0x8203B5D0, 0x8203B5D4, 0x8203B5D8
+0x8291BE58 = { end = 0x8291BE70 }  # data ptr 0x82339BBC

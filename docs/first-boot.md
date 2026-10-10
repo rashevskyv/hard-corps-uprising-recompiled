@@ -27,6 +27,7 @@ Fix: one `[functions]` entry for each address the runtime actually hit, added in
 | `0x826ED8D8` | `0x826ED8E8` | `0x8203B5D0`, `0x8203B5D4`, `0x8203B5D8` | argument-shuffle tail call after a `b` |
 | `0x825251A0` | `0x825251BC` | `0x823CCBB8` | vcall thunk after a `bctr` |
 | `0x82521F28` | `0x82521F78` | same slot of vtables `0x823CCA3C`, `0x823CCB7C`, `0x823CD8DC` | guarded vcall tail (`bctr` at `0x82521F70`) after the `bctr` of `sub_82521EB8`; the trailing `blr` at `0x82521F74` is unreferenced padding |
+| `0x8291BE58` | `0x8291BE70` | vtable `0x82339BBC` (`.rdata`), next to `sub_8291BE40` in slot `0x82339BB8` | 6-instruction vcall thunk (`lwz 72(r3)`, `+64`, slot 20, `bctr`) after the `bctr` of `sub_8291BE40`; ends at the `.pdata` start of `sub_8291BE70` |
 
 Evidence required for each entry:
 
@@ -70,9 +71,11 @@ Known v0.10.0 risk (Outpost Kaloki X, Earthworm Jim HD): guest callbacks that ru
 
 ## Result
 
-Highest confirmed milestone: **XENOS INITIALIZES** (D3D12 device, shader storage, pipelines). The build with the `0x82521F28` fix and the windowed config built cleanly (incremental codegen, no warnings) and is waiting on a manual test.
+Highest confirmed milestone: **FIRST VISIBLE FRAME**. With the `0x82521F28` fix and the windowed config, the game opened a centered 853×480 window and Xenos rendered the KONAMI logo. About 19 s after start, the guest hit the unregistered `0x8291BE58` (fixed above).
+
+`0x8291BE58` has no `.pdata` entry. Its sibling `sub_8291BE40` was found only because the preceding `sub_8291BD70` ends in a `b` to `__restgprlr`, which GapFill splits on. `0x8291BE58` follows a `bctr`, which GapFill does not split on. The fix added one `SetFunction`. Codegen rewrote 4 sources (`init`, `register`, `funcs.h`, `recomp.124`) and changed no other function.
 
 ## Remaining blockers
 
-- Runtime test of this build: first frame, or the next fatal.
+- Runtime test of this build: execution past `0x8291BE58`, or the next fatal.
 - `game:\builddate.bin` open fails (`0xC000000F`). The file isn't in the package, and the game continued past it.
