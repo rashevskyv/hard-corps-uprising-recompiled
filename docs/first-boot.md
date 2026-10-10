@@ -40,7 +40,24 @@ Evidence required for each entry:
 
 After codegen, every entry is registered (`hard_corps_uprising_register.cpp`), no other function starts inside any entry's range, and the neighbouring functions are unchanged.
 
-Not registered speculatively: 83 data-referenced addresses directly follow a `bctr` (for example `0x825C8030`, in the same vtable as `0x825C7ED0`). Add them only when the runtime reaches them.
+### Batch discovery (`tools/find-missing-functions.py`)
+
+Fixing one address per runtime test was replaced by one static batch after the 13th blocker (`0x82915370`).
+
+Root cause in ReXGlue v0.10.0 (`rexglue-sdk/src/codegen`): `phase_scan.cpp` cuts code regions at every null word; `phase_gapfill.cpp` then splits a region only on `blr` or a `b` to a known function and drops any segment whose start lies inside a registered function. A function that directly follows a `bctr` (or an in-function `b`) is therefore never a segment start. The SDK's own `vtable_scanner.cpp` only finds vtables through MSVC RTTI complete object locators; this image has five `.?AV` strings, so the game was built without RTTI and the vtable pass finds nothing. The lis/addi `functionPointerScan` is disabled (`analyze.cpp`). Hand-listed `[functions]` entries are the only supported input.
+
+Reference projects: Outpost Kaloki X ships `tools/FindMissingFuncs.cs` (data pointers and lis/addi pairs into `.text`, candidate = unregistered, not a `loc_` label, preceded by a terminator; end = next known start or first null word; 81 entries in a generated `missing_funcs.toml` listed in the manifest `includes`). Earthworm Jim HD has the Python port `find_missing_funcs.py` plus thunk, veneer and tail-call seeders using the same include mechanism. The Simpsons Arcade (XenonRecomp) `find_missing_vtable_funcs.py` uses pointer clusters of 2+ entries. Aegis Wing, GoldenEye, Nocturne and afterburner only hand-list `[functions]` entries found at runtime.
+
+Hard Corps uses the Outpost Kaloki X / Earthworm Jim mechanism with stricter classification, since the SDK composes several include files deterministically (`config.cpp`, same key last wins):
+
+- References: aligned pointers in `.rdata` and `.data` into `0x82400000`–`0x82BD3CEC` (import thunks excluded), and lis/addi pairs in code. C++ EH tables (`FuncInfo`, unwind/try/IP maps, C scope tables) are parsed and tagged `eh`; pointer runs that contain a generated `loc_` label are tagged `jumptable`.
+- HIGH requires all of: previous word is `bctr`/`blr`/`b`; previous function (or previous HIGH candidate) ends exactly at the candidate; not inside any `.pdata` extent; every instruction decodes; the CFG from the entry only leaves through `blr`, `bctr` or branches to registered functions; no direct branch from outside enters the body; nothing but a trailing `blr`/`nop` between the walked end and the next boundary; at least one vtable, data-pointer or lis/addi reference; the referencing table is not loaded as a switch table (`lis/addi` + `lbzx/lwzx/add` + `bctr`) by the previous function. Anything weaker is MEDIUM, LOW or EH and is left alone.
+- Calibration: all 13 hand-made overrides above re-classify as HIGH with identical ends when removed from the config.
+- Output: `build/missing-functions-report.txt` (ignored) and, with `--apply-high`, `config/discovered-functions.toml` (committed, fully regenerated, second entry of the manifest `includes`). `--verify` checks registration, generation and overlap against `generated/default` after codegen.
+
+Result (2026-10-10): 75,640 references to 16,634 code addresses, 730 unregistered. HIGH 122, MEDIUM 0, LOW 459, EH 149. All 122 HIGH entries applied, including `0x82915370`–`0x82915378` (this-adjusting thunk, vtable `0x82339614`, 4th in a chain of 8-byte thunks after `0x82915368`). Codegen rewrote 70 files: 122 new functions, 0 existing function bodies changed, 0 partition moves, 0 overlaps, 0 duplicate registrations, 0 warnings. Incremental build: 43 objects, 0 warnings, 0 errors.
+
+Runtime skipping of unregistered calls was rejected: `ResolveIndirectFunction` in the prebuilt `rexruntime.dll` returns a fatal trap, so a "log and return" mode would need an SDK fork, and a skipped function may leave registers, condition codes or object state wrong and move the failure somewhere meaningless.
 
 ## GPU setup
 
@@ -75,7 +92,9 @@ Highest confirmed milestone: **FIRST VISIBLE FRAME**. With the `0x82521F28` fix 
 
 `0x8291BE58` has no `.pdata` entry. Its sibling `sub_8291BE40` was found only because the preceding `sub_8291BD70` ends in a `b` to `__restgprlr`, which GapFill splits on. `0x8291BE58` follows a `bctr`, which GapFill does not split on. The fix added one `SetFunction`. Codegen rewrote 4 sources (`init`, `register`, `funcs.h`, `recomp.124`) and changed no other function.
 
+The following test reached about 19 s again and hit `0x82915370`, the 13th function of the same class. It is covered by the batch above.
+
 ## Remaining blockers
 
-- Runtime test of this build: execution past `0x8291BE58`, or the next fatal.
+- Runtime test of the batch build: execution past the KONAMI logo, or the next fatal. A new unregistered address means a candidate the rules left MEDIUM/LOW/EH (check `build/missing-functions-report.txt`) or a shape the scanner does not model.
 - `game:\builddate.bin` open fails (`0xC000000F`). The file isn't in the package, and the game continued past it.

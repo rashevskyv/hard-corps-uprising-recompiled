@@ -6,4 +6,4 @@ game_root = "game/extracted"
 [entrypoint]
 file_path = "game/extracted/default.xex"
 out_directory_path = "generated/default"
-includes = ["config/overrides.toml"]
+includes = ["config/overrides.toml", "config/discovered-functions.toml"]
