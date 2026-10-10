@@ -22,10 +22,10 @@ The pre-game launcher is [TRG Launcher](https://github.com/TekRantGaming/trg-lau
 
 - With `tools\build.ps1`, user data is `build\user_data`, which `-Clean` keeps.
 - Launcher edits are pending in `hcu::GameSettings` until Save or Play. Save writes only the changed keys to `settings.toml`, through `trg::TextFileSettings`; comments and other lines are kept. A key whose cvar is not registered is refused rather than written.
-- Play when the game files are missing shows the reason and does not save, as before.
+- Play when the game files are missing shows the reason and does not save.
 - Reset all settings puts the launcher's values back to the shipped ones, pending until Save or Play.
 - Legacy repair: an unreleased development build wrote `key = on` and `key = off`, which TOML rejects and which made ReXGlue ignore the whole file. Before the file is parsed, each exact bare `on`/`off` value is rewritten as `true`/`false`. Nothing else changes. The original is kept as `settings.toml.bak`. Once the file holds no bare on/off, this does nothing.
-- The dependency is `third_party/trg-launcher`, a submodule pinned to `b384a28` (TRG Launcher 1.1.0), the same commit as Earthworm Jim HD. Until the submodule exists, `HCU_TRG_LAUNCHER_DIR` (CMake cache or environment) can point to a local checkout. The upstream repository has no LICENSE file yet.
+- The dependency is the `third_party/trg-launcher` submodule, pinned to `b384a28` (TRG Launcher 1.1.0). After cloning, run `git submodule update --init third_party/trg-launcher`. When the submodule is not checked out, CMake falls back to the checkout named by `HCU_TRG_LAUNCHER_DIR` (CMake cache or environment). The upstream repository has no LICENSE file.
 
 ## Window
 
@@ -103,7 +103,7 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 - Every default is the value the game already used.
 - VSync controls tearing only. The D3D12 presenter always presents with sync interval 0; frame pacing comes from the guest `vsync` cvar, which the launcher does not touch.
 - Keyboard keys are listed read-only on the Controls page.
-- An Xbox controller drives the launcher through XInput: Start plays, A, B and the D-pad navigate. ReXGlue's input system only starts with the game.
+- An Xbox controller drives the launcher through XInput: Start plays; A, B, the D-pad and the left stick navigate. ReXGlue's input system only starts with the game.
 - The accent is a neon green (`kAccent`) with a dark emerald for the ready card, both in `src/launcher.cpp` with the header gradient. Amber is kept only for the "game files" warning, which is a status colour.
 
 ## Not offered yet

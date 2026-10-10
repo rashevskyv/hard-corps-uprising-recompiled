@@ -84,6 +84,8 @@ ReXGlue's `fullscreen` cvar defaults to `true` (borderless desktop fullscreen). 
 | `monitor = 1` | `SDL_WINDOWPOS_CENTERED_DISPLAY` on the first (primary) display |
 | `video_mode_width = 1280`, `video_mode_height = 720` | pins the guest video mode, which otherwise follows `window_width/height` once they are set |
 
+The guest video mode was later changed to 853×480 ([display.md](display.md)).
+
 Known v0.10.0 risk (Outpost Kaloki X, Earthworm Jim HD): guest callbacks that run on host threads can unmask host FP exceptions (`0xC000008F`). The graphics interrupt callback `0x82556300` has no direct `enableFlushMode` in its static call tree, but it makes indirect calls. No guard has been added.
 
 ## Result

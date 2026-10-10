@@ -85,6 +85,8 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     }
   }
 
+  void OnShutdown() override { DetachWindowHost(); }
+
  private:
   hcu::GameSettings game_settings_;
   std::filesystem::path shipped_config_;

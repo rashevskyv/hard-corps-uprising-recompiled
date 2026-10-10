@@ -95,6 +95,11 @@ void AttachWindowHost(rex::ui::Window* window, rex::ui::WindowedAppContext& app_
   window->AddInputListener(&window_host, kWindowHostZOrder);
 }
 
+// The guest can end without the window receiving OnClosing.
+void DetachWindowHost() {
+  g_active.store(false, std::memory_order_relaxed);
+}
+
 REX_EXTERN(__imp__sub_825520F8);
 
 // Swap routine. VdSwap is gated by obj+21748, so calls can exceed presented frames.

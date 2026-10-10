@@ -1,5 +1,7 @@
 # Minimal Native Build
 
+> Phase 3 record. Later work added the TRG Launcher submodule and more sources ([launcher.md](launcher.md)).
+
 ## Environment
 
 | Item | Value |
@@ -41,6 +43,7 @@ Game content is not copied. The runtime has no default game path, so the game is
 Commands:
 
 ```
+git submodule update --init third_party/trg-launcher   # TRG Launcher, added after this phase
 tools\codegen.ps1      # only if generated\ is missing or its inputs changed
 tools\build.ps1        # [-Config RelWithDebInfo|Release|Debug] [-Jobs N]
 build\hard_corps_uprising.exe --game_data_root=<repo>\game\extracted

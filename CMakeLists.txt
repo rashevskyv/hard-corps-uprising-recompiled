@@ -20,7 +20,7 @@ if(NOT EXISTS "${_trg_dir}/CMakeLists.txt")
     set(_trg_dir "${HCU_TRG_LAUNCHER_DIR}")
 endif()
 if(NOT EXISTS "${_trg_dir}/CMakeLists.txt")
-    message(FATAL_ERROR "TRG Launcher not found: check out the third_party/trg-launcher submodule")
+    message(FATAL_ERROR "TRG Launcher not found: run `git submodule update --init third_party/trg-launcher`")
 endif()
 
 # The launcher draws inside the runtime's own Dear ImGui frame, so it must use

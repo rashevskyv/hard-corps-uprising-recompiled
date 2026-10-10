@@ -2,9 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -32,7 +32,7 @@ namespace {
 constexpr uint64_t kXexSize = 12955648;
 constexpr uint32_t kXexCrc32 = 0x3DF903B9;
 
-// Earthworm Jim HD's launcher window: ReXGlue's default 1280x720 (its screenshots are 1600x900 at 125%).
+// Logical pixels.
 constexpr std::pair<int, int> kLauncherWindowSize = {1280, 720};
 // Share of the primary display's work area the launcher may take.
 constexpr double kLauncherMaxShare = 0.9;
@@ -455,7 +455,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     if (ui.ButtonRow("Settings file", "Your launcher choices, as plain text. Loaded after hard_corps_uprising.toml.",
                      "Show settings file") &&
         launcher_->Save()) {
-      trg::OpenInFileManager(Utf8(paths_.settings_file));
+      std::error_code ec;
+      const bool exists = std::filesystem::exists(paths_.settings_file, ec);
+      trg::OpenInFileManager(Utf8(exists ? paths_.settings_file : paths_.user_dir));
     }
     ui.ResetAllRow();
     ui.Info("Version", "ReXGlue SDK " REXGLUE_VERSION_STRING "   \xC2\xB7   TRG Launcher " HCU_TRG_VERSION);
