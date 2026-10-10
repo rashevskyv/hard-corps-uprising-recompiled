@@ -11,7 +11,7 @@ list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/win-amd
 
 include(generated/rexglue.cmake)
 
-add_executable(hard_corps_uprising WIN32 src/main.cpp)
+add_executable(hard_corps_uprising WIN32 src/main.cpp src/debug_saulo_input.cpp)
 
 rexglue_setup_target(hard_corps_uprising GPU_PLUGINS xenos)
 

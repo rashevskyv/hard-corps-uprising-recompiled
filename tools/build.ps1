@@ -56,6 +56,8 @@ try {
     Write-Host '===================================================='
     Write-Host ''
     Write-Host 'Loading Visual Studio x64 environment...'
+    # VsDevCmd calls vswhere.exe by bare name; cmd does not resolve it from the current folder.
+    $env:PATH = "$env:PATH;$(Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer')"
     $vsEnv = cmd.exe /c "`"$VsDevCmd`" -arch=x64 -host_arch=x64 -no_logo >nul && set"
     foreach ($line in $vsEnv) {
         if ($line -match '^([^=]+)=(.*)$') { Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2] }
