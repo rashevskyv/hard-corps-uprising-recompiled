@@ -40,7 +40,6 @@ const std::vector<std::string> kGameSettingKeys = {
     "swap_post_effect",
     "native_2x_msaa",
     "anisotropic_override",
-    "async_shader_compilation",
     "hcu_show_fps",
     "mnk_mode",
 };

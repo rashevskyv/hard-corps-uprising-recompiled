@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
 #include <rex/ui/flags.h>
@@ -24,7 +25,12 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   }
 
  protected:
-  void OnConfigurePaths(rex::PathConfig& paths) override { shipped_config_ = paths.config_path; }
+  void OnConfigurePaths(rex::PathConfig& paths) override {
+    shipped_config_ = paths.config_path;
+    if (paths.game_data_root.empty()) {
+      paths.game_data_root = rex::filesystem::GetExecutableFolder() / "game";
+    }
+  }
 
   void OnPostInitLogging() override { hcu::LoadPlayerSettings(hcu::PlayerSettingsPath(user_data_root())); }
 

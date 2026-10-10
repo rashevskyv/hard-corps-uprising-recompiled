@@ -93,6 +93,10 @@ std::string Utf8(const std::filesystem::path& path) {
   return std::string(s.begin(), s.end());
 }
 
+std::filesystem::path PathFromUtf8(const std::string& utf8) {
+  return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
+}
+
 std::filesystem::path SystemFontsFolder() {
   wchar_t windows[MAX_PATH];
   const UINT length = GetWindowsDirectoryW(windows, MAX_PATH);

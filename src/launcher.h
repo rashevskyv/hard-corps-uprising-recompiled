@@ -29,6 +29,15 @@ struct LauncherCallbacks {
 // `density` is the window's display scale, so text is rasterized for its real pixel size.
 void LoadLauncherFonts(ImFontAtlas* atlas, float density);
 
+// Game files that are not ready always show the launcher: it is the only way to install them, so neither
+// the player's "off" choice nor the relaunch flag can hide it.
+inline bool LauncherWanted(bool game_ready, bool skip_once, bool shift_held, bool enabled) {
+  if (!game_ready) {
+    return true;
+  }
+  return !skip_once && (shift_held || enabled);
+}
+
 // Shown when the game files are not ready, when Shift is held, or unless the
 // player turned it off. Not shown on the relaunch that follows a window change.
 bool ShouldShowLauncher(const std::filesystem::path& game_dir);

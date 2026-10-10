@@ -1,11 +1,9 @@
 #include "launcher.h"
 
 #include <algorithm>
-#include <array>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <utility>
@@ -22,15 +20,12 @@
 #include "trg/launcher.h"
 #include "trg/platform.h"
 
+#include "game_files.h"
 #include "platform.h"
 #include "settings.h"
 
 namespace hcu {
 namespace {
-
-// The default.xex the code was recompiled from (XBLA 0.0.0.3, see tools/codegen.ps1).
-constexpr uint64_t kXexSize = 12955648;
-constexpr uint32_t kXexCrc32 = 0x3DF903B9;
 
 // Logical pixels.
 constexpr std::pair<int, int> kLauncherWindowSize = {1280, 720};
@@ -61,60 +56,19 @@ trg::HeaderPainter LauncherHeader() {
 
 trg::Fonts g_fonts;
 
-enum class GameFiles { kReady, kMissing, kUnsupported };
-
-uint32_t Crc32(std::istream& in) {
-  static const auto table = [] {
-    std::array<uint32_t, 256> t{};
-    for (uint32_t i = 0; i < 256; ++i) {
-      uint32_t c = i;
-      for (int k = 0; k < 8; ++k) {
-        c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-      }
-      t[i] = c;
-    }
-    return t;
-  }();
-  uint32_t crc = 0xFFFFFFFFu;
-  std::vector<char> chunk(1 << 20);
-  while (in) {
-    in.read(chunk.data(), std::streamsize(chunk.size()));
-    for (std::streamsize i = 0; i < in.gcount(); ++i) {
-      crc = table[(crc ^ uint8_t(chunk[size_t(i)])) & 0xFF] ^ (crc >> 8);
-    }
+GameFiles CheckAndLogGameFiles(const std::filesystem::path& game_dir) {
+  const GameCheck check = CheckGameFiles(game_dir);
+  if (check.state == GameFiles::kUnsupported && check.xex_crc32 != 0) {
+    REXLOG_WARN("default.xex is not the supported version (CRC32 {:08X})", check.xex_crc32);
   }
-  return ~crc;
+  return check.state;
 }
 
-GameFiles CheckGameFiles(const std::filesystem::path& game_dir) {
-  static std::filesystem::path checked_dir;
-  static std::filesystem::file_time_type checked_time{};
-  static GameFiles result = GameFiles::kMissing;
-  const auto xex = game_dir / "default.xex";
-  std::error_code ec;
-  if (game_dir.empty() || !std::filesystem::is_regular_file(xex, ec) ||
-      !std::filesystem::is_directory(game_dir / "DataXENON", ec)) {
-    return GameFiles::kMissing;
-  }
-  const auto time = std::filesystem::last_write_time(xex, ec);
-  if (checked_dir == game_dir && checked_time == time) {
-    return result;
-  }
-  checked_dir = game_dir;
-  checked_time = time;
-  result = GameFiles::kUnsupported;
-  if (std::filesystem::file_size(xex, ec) != kXexSize || ec) {
-    return result;
-  }
-  std::ifstream in(xex, std::ios::binary);
-  const uint32_t crc = Crc32(in);
-  if (crc == kXexCrc32) {
-    result = GameFiles::kReady;
-  } else {
-    REXLOG_WARN("default.xex is not the supported version (CRC32 {:08X})", crc);
-  }
-  return result;
-}
+// Written by the install job, read once the Task has finished.
+struct InstallOutcome {
+  InstallResult result;
+  GameFiles files = GameFiles::kMissing;
+};
 
 std::string Size(int width, int height) {
   return std::to_string(width) + " \xC3\x97 " + std::to_string(height);
@@ -155,7 +109,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
         paths_(std::move(paths)),
         cb_(std::move(callbacks)),
         settings_(settings),
-        game_files_(CheckGameFiles(paths_.game_dir)),
+        game_files_(CheckAndLogGameFiles(paths_.game_dir)),
         monitors_(ListMonitors()) {
     launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
   }
@@ -165,6 +119,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     if (done_) {
       return;
     }
+    PollInstall();
     if (!nav_taken_) {
       saved_nav_flags_ = io.ConfigFlags & kNavFlags;
       saved_has_gamepad_ = io.BackendFlags & ImGuiBackendFlags_HasGamepad;
@@ -203,7 +158,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
 
   // Every PLAY (mouse, Enter, Xbox Start) ends here. The one save happens here; StartGame never saves.
   void RequestPlay() {
-    if (starting_) {
+    if (starting_ || install_.running() || game_files_ != GameFiles::kReady) {
       return;
     }
     if (!launcher_->Save()) {
@@ -279,6 +234,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
          [this](trg::Ui& ui) { PageAbout(ui); }},
     };
     c.can_play = [this] {
+      if (install_.running()) {
+        return trg::PlayCheck{false, "Wait for the install to finish.", 0};
+      }
       if (game_files_ == GameFiles::kReady) {
         return trg::PlayCheck{};
       }
@@ -288,24 +246,117 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   }
 
   void PagePlay(trg::Ui& ui) {
-    const std::string dir = paths_.game_dir.string();
-    switch (game_files_) {
-      case GameFiles::kReady:
-        ui.StatusCard(trg::Status::kReady, "Ready to play", dir.c_str());
-        break;
-      case GameFiles::kUnsupported:
-        ui.StatusCard(trg::Status::kAttention, "Unsupported game version",
-                      "This port needs the Xbox Live Arcade release, version 0.0.0.3 (default.xex CRC32 3DF903B9).");
-        break;
-      case GameFiles::kMissing: {
-        const std::string detail = dir.empty() ? "No game folder was given: start the game with --game_data_root."
-                                               : "default.xex and DataXENON are needed in " + dir;
-        ui.StatusCard(trg::Status::kAttention, "Game files not found", detail.c_str());
-        break;
+    const std::string dir = Utf8(paths_.game_dir);
+    if (install_.running()) {
+      ui.StatusCard(trg::Status::kBusy, "Installing game files", nullptr, std::max(0.0f, install_.fraction()));
+    } else {
+      switch (game_files_) {
+        case GameFiles::kReady:
+          ui.StatusCard(trg::Status::kReady, "Ready to play", dir.c_str());
+          break;
+        case GameFiles::kUnsupported:
+          ui.StatusCard(trg::Status::kAttention, "Different version of the game",
+                        DescribeInstall(InstallStatus::kWrongVersion).text);
+          break;
+        case GameFiles::kMissing:
+          ui.StatusCard(trg::Status::kAttention, "Game files needed",
+                        "This port requires your own Hard Corps: Uprising Xbox Live Arcade package.");
+          break;
+      }
+    }
+    if (!install_failure_.empty()) {
+      DrawInstallFailure(ui);
+    }
+    if (paths_.game_dir.empty()) {
+      ui.Help("No game folder was given: start the game with --game_data_root.");
+    } else {
+      ui.Row("Game package",
+             "Title ID: 58410A18. No game files are included with this port; the package's files (about 1 GB) are "
+             "copied next to the program.");
+      if (!ui.TaskProgress(install_)) {
+        const bool clicked = game_files_ == GameFiles::kReady
+                                 ? ImGui::Button("Reinstall from package...", ImVec2(-FLT_MIN, 0))
+                                 : ui.AccentButton("Install from package...");
+        if (clicked) {
+          BrowseAndInstall();
+        }
       }
     }
     ui.LauncherVisibilityRow("hcu_launcher");
     ui.EndRows();
+  }
+
+  void DrawInstallFailure(trg::Ui& ui) {
+    ui.Spacer(4);
+    ImGui::PushStyleColor(ImGuiCol_Text, ui.theme().warn_dot);
+    ImGui::TextUnformatted(install_failure_.c_str());
+    ImGui::PopStyleColor();
+    ui.Help(install_failure_text_.c_str());
+    ui.Spacer(4);
+  }
+
+  void BrowseAndInstall() {
+    PollInstall();
+    if (install_.running()) {
+      return;
+    }
+    const std::string picked = trg::BrowseForFile("Select your Hard Corps: Uprising Xbox Live Arcade package",
+                                                  {{"Xbox Live Arcade package", "*"}});
+    if (picked.empty()) {
+      return;
+    }
+    install_failure_.clear();
+    install_failure_text_.clear();
+    outcome_ = std::make_shared<InstallOutcome>();
+    const bool started = install_.Start(
+        "Reading package...",
+        [outcome = outcome_, package = PathFromUtf8(picked), game_dir = paths_.game_dir](trg::Task& task) {
+          InstallHooks hooks;
+          hooks.phase = [&task](const char* text) {
+            task.SetLabel(text);
+            task.Progress(0, 0);
+          };
+          hooks.progress = [&task](uint64_t done, uint64_t total) {
+            task.Progress(static_cast<long long>(done), static_cast<long long>(total));
+            return !task.cancelled();
+          };
+          outcome->result = InstallFromPackage(package, game_dir, hooks);
+          if (outcome->result.ok()) {
+            outcome->files = CheckGameFiles(game_dir).state;
+          }
+          return outcome->result.ok() ? std::string() : std::string(DescribeInstall(outcome->result.status).title);
+        });
+    if (started) {
+      REXLOG_INFO("Installing game files from {}", picked);
+    }
+  }
+
+  // Runs every frame so a finished install is picked up whichever page is open.
+  void PollInstall() {
+    std::string error;
+    if (install_.Finish(&error) == trg::Task::State::kIdle) {
+      return;
+    }
+    const std::shared_ptr<InstallOutcome> outcome = std::move(outcome_);
+    if (!outcome) {
+      return;
+    }
+    const InstallResult& result = outcome->result;
+    const InstallMessage message = DescribeInstall(result.status);
+    if (result.ok() || result.status == InstallStatus::kCancelled) {
+      if (result.ok()) {
+        game_files_ = outcome->files;
+        REXLOG_INFO("Game files installed: {} files, {} bytes", result.files, result.bytes);
+      } else {
+        REXLOG_INFO("Game install cancelled");
+      }
+      launcher_->SetStatus(std::string(message.title) + ". " + message.text, 6.0);
+      return;
+    }
+    REXLOG_WARN("Game install failed: {} ({})", message.title, result.detail);
+    install_failure_ = message.title;
+    install_failure_text_ = message.text;
+    launcher_->SetStatus("Install failed: " + install_failure_, 8.0);
   }
 
   void PageDisplay(trg::Ui& ui) {
@@ -417,10 +468,6 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
                {"4", "8\xC3\x97"},
                {"5", "16\xC3\x97"}},
               6);
-    ui.Toggle("Shader compilation",
-              "Background avoids a pause the first time an effect appears, but the effect can briefly be missing. "
-              "Wait draws it correctly after a short pause. Shaders are kept for later runs.",
-              "async_shader_compilation", true, "Wait", "Background");
   }
 
   static void PageGameplay(trg::Ui& ui) {
@@ -460,8 +507,10 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       trg::OpenInFileManager(Utf8(exists ? paths_.settings_file : paths_.user_dir));
     }
     ui.ResetAllRow();
-    ui.Info("Version", "ReXGlue SDK " REXGLUE_VERSION_STRING "   \xC2\xB7   TRG Launcher " HCU_TRG_VERSION);
-    ui.Info("Game", "Xbox Live Arcade, title 58410A18, version 0.0.0.3");
+    ui.Info("Port version", HCU_PORT_VERSION);
+    ui.Info("Libraries", "ReXGlue SDK " REXGLUE_VERSION_STRING "   \xC2\xB7   TRG Launcher " HCU_TRG_VERSION);
+    ui.Info("Game", "Xbox Live Arcade, title 58410A18, game version 0.0.0.3");
+    ui.Help("github.com/saulob/hard-corps-uprising-recompiled");
   }
 
   LauncherPaths paths_;
@@ -477,6 +526,10 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   ImGuiConfigFlags saved_nav_flags_ = 0;
   ImGuiBackendFlags saved_has_gamepad_ = 0;
   bool done_ = false;
+  std::string install_failure_;
+  std::string install_failure_text_;
+  std::shared_ptr<InstallOutcome> outcome_;
+  trg::Task install_;
 };
 
 }  // namespace
@@ -503,13 +556,8 @@ void LoadLauncherFonts(ImFontAtlas* atlas, float density) {
 bool ShouldShowLauncher(const std::filesystem::path& game_dir) {
   const bool skip_once = REXCVAR_GET(hcu_skip_launcher);
   rex::cvar::ResetToDefault("hcu_skip_launcher");
-  if (CheckGameFiles(game_dir) != GameFiles::kReady) {
-    return true;
-  }
-  if (skip_once) {
-    return false;
-  }
-  return trg::ShiftHeld() || REXCVAR_GET(hcu_launcher);
+  return LauncherWanted(CheckAndLogGameFiles(game_dir) == GameFiles::kReady, skip_once, trg::ShiftHeld(),
+                        REXCVAR_GET(hcu_launcher));
 }
 
 namespace {

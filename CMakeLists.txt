@@ -1,13 +1,16 @@
 # SDK boilerplate lives in generated/rexglue.cmake.
 
 cmake_minimum_required(VERSION 3.25)
-project(hard_corps_uprising LANGUAGES C CXX)
+project(hard_corps_uprising VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Where tools/codegen.ps1 unpacks the pinned SDK.
 list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/win-amd64")
+
+# Release binaries must not carry the build machine's folders (__FILE__ in log calls).
+add_compile_options("$<$<CONFIG:Release>:-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=.>")
 
 include(generated/rexglue.cmake)
 
@@ -40,16 +43,20 @@ get_directory_property(HCU_TRG_VERSION DIRECTORY "${_trg_dir}" DEFINITION PROJEC
 
 add_executable(hard_corps_uprising WIN32
     src/main.cpp
+    src/game_files.cpp
     src/launcher.cpp
     src/legacy_settings.cpp
     src/platform.cpp
     src/settings.cpp
+    src/stfs.cpp
     src/window_host.cpp
 )
 
 rexglue_setup_target(hard_corps_uprising GPU_PLUGINS xenos)
 target_link_libraries(hard_corps_uprising PRIVATE trg::launcher shcore)
-target_compile_definitions(hard_corps_uprising PRIVATE HCU_TRG_VERSION="${HCU_TRG_VERSION}")
+target_compile_definitions(hard_corps_uprising PRIVATE
+    HCU_PORT_VERSION="${PROJECT_VERSION}"
+    HCU_TRG_VERSION="${HCU_TRG_VERSION}")
 
 # The runtime reads its cvars from <exe dir>/hard_corps_uprising.toml.
 add_custom_command(TARGET hard_corps_uprising POST_BUILD
@@ -58,3 +65,11 @@ add_custom_command(TARGET hard_corps_uprising POST_BUILD
         "$<TARGET_FILE_DIR:hard_corps_uprising>"
     VERBATIM
 )
+
+# Installer tests, not part of the default build: cmake --build <dir> --target hcu_installer_tests
+add_executable(hcu_installer_tests EXCLUDE_FROM_ALL
+    tests/installer_tests.cpp
+    src/game_files.cpp
+    src/stfs.cpp
+)
+target_include_directories(hcu_installer_tests PRIVATE src)

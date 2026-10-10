@@ -11,6 +11,7 @@ namespace hcu {
 
 // TRG Launcher takes UTF-8 paths.
 std::string Utf8(const std::filesystem::path& path);
+std::filesystem::path PathFromUtf8(const std::string& utf8);
 
 std::filesystem::path SystemFontsFolder();
 
