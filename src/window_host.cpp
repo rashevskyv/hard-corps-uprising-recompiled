@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <string>
 
 #include <fmt/format.h>
 
@@ -16,9 +17,10 @@
 #include <rex/ui/window_listener.h>
 #include <rex/ui/windowed_app_context.h>
 
+#include "settings.h"
+
 namespace {
 
-constexpr char kTitle[] = "Hard Corps: Uprising";
 constexpr double kSampleSeconds = 1.0;
 // Above the app's own input listener (z-order 0), so F11 never reaches the game.
 constexpr size_t kWindowHostZOrder = 1000;
@@ -35,7 +37,8 @@ uint64_t g_sample_frames = 0;
 
 void ShowFps(double fps) {
   if (g_active.load(std::memory_order_relaxed)) {
-    g_window->SetTitle(fmt::format("{} | FPS: {:.2f}", kTitle, fps));
+    g_window->SetTitle(REXCVAR_GET(hcu_show_fps) ? fmt::format("{} | FPS: {:.2f}", kWindowTitle, fps)
+                                                 : std::string(kWindowTitle));
   }
 }
 
@@ -87,7 +90,7 @@ void AttachWindowHost(rex::ui::Window* window, rex::ui::WindowedAppContext& app_
   g_window = window;
   g_app_context = &app_context;
   g_active.store(true, std::memory_order_relaxed);
-  window->SetTitle(kTitle);
+  window->SetTitle(kWindowTitle);
   window->AddListener(&window_host);
   window->AddInputListener(&window_host, kWindowHostZOrder);
 }

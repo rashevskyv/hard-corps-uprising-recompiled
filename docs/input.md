@@ -57,7 +57,7 @@ Quick menu check: Enter, WASD, Shift + Arrow, Space, Backspace.
 
 `config/hard_corps_uprising.toml`:
 
-- `mnk_mode = true`: the keyboard works alongside a connected controller. Side effect: user 0 always reports connected, even with no pad attached.
+- `mnk_mode = true`: the keyboard works alongside a connected controller. Side effect: user 0 always reports connected, even with no pad attached. The launcher's Controls page switches it (Keyboard: Enabled / Disabled).
 - `hid_mappings_file = ""`: the optional `gamecontrollerdb.txt` load is skipped. SDL's built-in mappings still apply. No database is shipped.
 
 ## Guest state the game reads

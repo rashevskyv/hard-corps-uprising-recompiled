@@ -1,5 +1,7 @@
 #pragma once
 
+inline constexpr char kWindowTitle[] = "Hard Corps: Uprising";
+
 namespace rex::ui {
 class Window;
 class WindowedAppContext;
