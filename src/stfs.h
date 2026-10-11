@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -39,6 +40,13 @@ class Package {
   Result LoadFiles();
 
   uint32_t title_id() const { return title_id_; }
+  uint32_t content_type() const { return content_type_; }
+  // Upper-case hexadecimal, 40 digits.
+  std::string content_id_hex() const;
+  // The English display name from the package metadata, empty when there is none.
+  const std::u16string& display_name() const { return display_name_; }
+  // Licence bits of the entries that have flags set, combined as the SDK's content manager does.
+  uint32_t license_mask() const;
   uint64_t total_bytes() const { return total_bytes_; }
   size_t file_count() const { return file_count_; }
 
@@ -55,11 +63,15 @@ class Package {
 
   bool ReadAt(uint64_t offset, void* out, size_t length);
   uint64_t BlockOffset(uint64_t block) const;
+  std::u16string ReadEnglishName();
 
   std::ifstream in_;
   uint64_t file_size_ = 0;
   uint8_t header_[0x400] = {};
   uint32_t title_id_ = 0;
+  uint32_t content_type_ = 0;
+  std::array<uint8_t, 20> content_id_ = {};
+  std::u16string display_name_;
   uint64_t base_ = 0;
   uint64_t total_bytes_ = 0;
   size_t file_count_ = 0;

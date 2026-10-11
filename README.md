@@ -28,7 +28,7 @@
 | Game version | `0.0.0.3` |
 | `default.xex` | 12,955,648 bytes, CRC32 `3DF903B9`, SHA-256 `530EDE8ED5271051A2AB19C077A97FB167E4F30B094C292E8F59D37D0D2069DC` |
 
-The launcher checks the Title ID when you pick the package, and checks `default.xex` after extracting it. Package containers can differ between copies, so `default.xex` is what identifies the version. Any other version is refused, because the port is built for this exact game code.
+The launcher checks the Title ID and content type when you pick the package, and checks `default.xex` after extracting it. Package containers can differ between copies, so `default.xex` is what identifies the version. Any other version is refused, because the port is built for this exact game code.
 
 ## Installing
 
@@ -41,6 +41,16 @@ The launcher checks the Title ID when you pick the package, and checks `default.
 **No game files are included** in the release.
 
 **Reinstall from package...** repairs the game files and keeps your settings and saves.
+
+### Optional DLC
+
+The DLC characters are Harley Daniels, Sayuri and Leviathan. DLC is optional, and the port does not include or download DLC packages: you need your own Xbox 360 DLC package for each one.
+
+1. Install the game first.
+2. Open the **DLC** page, click **Install DLC...**, and pick your DLC package. The launcher checks that it is a Hard Corps: Uprising package (Title ID `58410A18`, content type `00000002`, Marketplace). It refuses the game package and other packages.
+3. The **DLC** page shows each character as Installed or Not installed. **Remove** on an installed character removes only that package, after a confirmation. The game and the other DLC are not touched, and you can install the package again later from your own copy.
+
+Installed DLC is stored in your user data folder (`Documents\hard_corps_uprising` on Windows, or the `--user_data_root` folder), not in the game folder. Reinstalling the game does not remove it.
 
 ### Linux and Steam Deck
 
@@ -63,6 +73,10 @@ The launcher opens before the game. Your choices are saved to `settings.toml` in
 ### Play
 - **Install from package...** with the Title ID and game version checks, and **Reinstall from package...**
 - The **Ready to play** status, and the **Show this launcher** setting
+
+### DLC
+- Harley Daniels, Sayuri and Leviathan, each shown as **Installed** or **Not installed**
+- **Install DLC...** for your own package, and **Remove** for an installed character (see [Optional DLC](#optional-dlc))
 
 ### Display
 - **Display mode**: Windowed or Borderless Fullscreen. Press **F11** while playing to switch between them.

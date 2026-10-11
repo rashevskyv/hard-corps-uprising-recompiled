@@ -46,6 +46,20 @@ To repair the game files, use "Reinstall from package..." on the Play page.
 Your settings and saves are kept.
 
 
+DLC (OPTIONAL)
+--------------
+The DLC characters are Harley Daniels, Sayuri and Leviathan. DLC packages are
+not included with this program, and it does not download them. Use your own
+Xbox 360 DLC package for Hard Corps: Uprising (Title ID 58410A18, content type
+00000002, Marketplace).
+
+Open the DLC page, click "Install DLC..." and select the package. The DLC page
+shows each character as Installed or Not installed. "Remove" on an installed
+character removes only that package, after a confirmation. You can install the
+package again later from your own copy. DLC is stored in your user data folder
+(Documents\hard_corps_uprising), not in the game folder.
+
+
 WINDOWS SMARTSCREEN
 -------------------
 The first time you run hard_corps_uprising.exe, Windows SmartScreen may show a
