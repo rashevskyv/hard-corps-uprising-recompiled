@@ -1,6 +1,6 @@
 <div align="center">
 
-# Hard Corps: Uprising — PC Port
+# Hard Corps: Uprising - PC Port
 
 ### Hard Corps: Uprising, the Xbox 360 XBLA spin-off of the Contra series, running natively on Windows, and experimentally on Linux and Steam Deck, through static recompilation, with the TRG launcher and modern PC options
 
