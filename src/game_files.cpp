@@ -269,18 +269,19 @@ bool IsAbsentOrPlainFolder(const std::filesystem::path& path) {
   return !ec && std::filesystem::is_directory(status) && !ContainsReparsePoint(path);
 }
 
-// The DLC work folder is exactly <root>/dlc-install-temp and holds no link. Nothing else is ever cleared.
-bool IsSafeDlcWorkFolder(const std::filesystem::path& root, const std::filesystem::path& work) {
-  return root.is_absolute() && work == root / kDlcWorkFolder && IsAbsentOrPlainFolder(work);
+// A DLC work folder is exactly <root>/dlc-install-temp or <root>/dlc-remove-temp and holds no link.
+// Nothing else is ever cleared.
+bool IsSafeWorkFolder(const std::filesystem::path& root, const std::filesystem::path& work) {
+  return root.is_absolute() && (work == root / kDlcWorkFolder || work == root / kDlcRemoveFolder) &&
+         IsAbsentOrPlainFolder(work);
 }
 
-// Clears the DLC work folder when the install ends, unless released. A folder that fails the check is left alone.
-class DlcWorkGuard {
+// Clears the work folder when the operation ends, unless released. A folder that fails the check is left alone.
+class WorkGuard {
  public:
-  DlcWorkGuard(std::filesystem::path root, std::filesystem::path work)
-      : root_(std::move(root)), work_(std::move(work)) {}
-  ~DlcWorkGuard() {
-    if (armed_ && IsSafeDlcWorkFolder(root_, work_)) {
+  WorkGuard(std::filesystem::path root, std::filesystem::path work) : root_(std::move(root)), work_(std::move(work)) {}
+  ~WorkGuard() {
+    if (armed_ && IsSafeWorkFolder(root_, work_)) {
       std::error_code ec;
       std::filesystem::remove_all(work_, ec);
     }
@@ -433,25 +434,25 @@ uint64_t CountFiles(const std::filesystem::path& dir) {
   return count;
 }
 
+enum class SwapResult { kActivated, kUnchanged, kStranded };
+
 // Moves `staged` into place and keeps the previous `live` in `backup`, so the caller can still revert.
-bool SwapIn(const std::filesystem::path& staged, const std::filesystem::path& live,
-            const std::filesystem::path& backup, bool& had_previous) {
+// kStranded: the previous copy could not be put back and is still in `backup`.
+SwapResult SwapIn(const std::filesystem::path& staged, const std::filesystem::path& live,
+                  const std::filesystem::path& backup, bool& had_previous) {
   std::error_code ec;
   had_previous = std::filesystem::exists(live, ec);
   if (had_previous && !RenameWithRetry(live, backup)) {
-    return false;
+    return SwapResult::kUnchanged;
   }
   std::filesystem::create_directories(live.parent_path(), ec);
   if (!RenameWithRetry(staged, live)) {
-    if (had_previous) {
-      RenameWithRetry(backup, live);
-    }
-    return false;
+    return had_previous && !RenameWithRetry(backup, live) ? SwapResult::kStranded : SwapResult::kUnchanged;
   }
-  return true;
+  return SwapResult::kActivated;
 }
 
-// Removes the activated folder, then restores the previous one. False when the folder was not removed.
+// Removes the activated folder, then restores the previous one. False when the previous copy is not back in place.
 bool RevertSwap(const std::filesystem::path& live, const std::filesystem::path& backup, bool had_previous) {
   if (!IsAbsentOrPlainFolder(live)) {
     return false;
@@ -461,10 +462,7 @@ bool RevertSwap(const std::filesystem::path& live, const std::filesystem::path& 
   if (ec || std::filesystem::exists(live, ec)) {
     return false;
   }
-  if (had_previous) {
-    RenameWithRetry(backup, live);
-  }
-  return true;
+  return !had_previous || RenameWithRetry(backup, live);
 }
 
 }  // namespace
@@ -651,7 +649,7 @@ InstallResult InstallDlcFromPackage(const std::filesystem::path& package, const 
     return Failure(InstallStatus::kWriteFailed, "cannot create " + root.string() + ": " + ec.message());
   }
   const std::filesystem::path work = root / kDlcWorkFolder;
-  if (!IsSafeDlcWorkFolder(root, work)) {
+  if (!IsSafeWorkFolder(root, work)) {
     return Failure(InstallStatus::kUnsafeTarget, "unsafe DLC work folder " + work.string());
   }
   std::filesystem::remove_all(work, ec);
@@ -663,7 +661,7 @@ InstallResult InstallDlcFromPackage(const std::filesystem::path& package, const 
     return Failure(InstallStatus::kNoSpace, "needs " + std::to_string(pkg.total_bytes()) + " bytes, " +
                                                 std::to_string(space.available) + " available");
   }
-  DlcWorkGuard guard(root, work);
+  WorkGuard guard(root, work);
   const std::filesystem::path staged = work / "staged";
   const std::filesystem::path backup = work / "backup";
   const std::filesystem::path files = staged / "files";
@@ -699,23 +697,33 @@ InstallResult InstallDlcFromPackage(const std::filesystem::path& package, const 
   phase("Finishing...");
   const std::filesystem::path folder = DlcFolder(root) / content_id;
   const std::filesystem::path header = DlcHeaderPath(root, content_id);
-  if (!IsSafeDlcWorkFolder(root, work)) {
+  if (!IsSafeWorkFolder(root, work)) {
     return Failure(InstallStatus::kUnsafeTarget, "unsafe DLC work folder " + work.string());
   }
   if (!IsAbsentOrPlainFolder(folder) || !IsAbsentOrPlainFile(header)) {
     return Failure(InstallStatus::kUnsafeTarget, "unsafe installed DLC " + folder.string());
   }
-  bool folder_had_previous = false;
-  if (!SwapIn(files, folder, backup / "folder", folder_had_previous)) {
-    return Failure(InstallStatus::kWriteFailed, "cannot activate " + folder.string());
-  }
-  bool header_had_previous = false;
-  if (!SwapIn(staged_header, header, backup / "header", header_had_previous)) {
-    if (!RevertSwap(folder, backup / "folder", folder_had_previous)) {
-      // The previous copy may still be in the work folder, so the folder is kept.
+  // A previous copy that could not be put back stays in the work folder, so that folder is kept.
+  const auto activation_failed = [&](const std::filesystem::path& target, bool keep_work_folder) {
+    if (keep_work_folder) {
       guard.Release();
     }
-    return Failure(InstallStatus::kWriteFailed, "cannot activate " + header.string());
+    std::string detail = "cannot activate " + target.string();
+    if (keep_work_folder) {
+      detail += "; previous copy kept in " + backup.string();
+    }
+    return Failure(InstallStatus::kWriteFailed, std::move(detail));
+  };
+  bool folder_had_previous = false;
+  const SwapResult folder_swap = SwapIn(files, folder, backup / "folder", folder_had_previous);
+  if (folder_swap != SwapResult::kActivated) {
+    return activation_failed(folder, folder_swap == SwapResult::kStranded);
+  }
+  bool header_had_previous = false;
+  const SwapResult header_swap = SwapIn(staged_header, header, backup / "header", header_had_previous);
+  if (header_swap != SwapResult::kActivated) {
+    const bool reverted = RevertSwap(folder, backup / "folder", folder_had_previous);
+    return activation_failed(header, !reverted || header_swap == SwapResult::kStranded);
   }
 
   if (installed) {
@@ -809,7 +817,7 @@ RemoveResult RemoveInstalledDlc(const std::filesystem::path& user_data_root, con
   }
 
   const std::filesystem::path work = root / kDlcRemoveFolder;
-  if (!IsAbsentOrPlainFolder(work)) {
+  if (!IsSafeWorkFolder(root, work)) {
     return {RemoveStatus::kUnsafeTarget, "unsafe removal folder " + work.string()};
   }
   std::filesystem::remove_all(work, ec);
@@ -820,7 +828,7 @@ RemoveResult RemoveInstalledDlc(const std::filesystem::path& user_data_root, con
   if (ec) {
     return {RemoveStatus::kWriteFailed, "cannot create " + work.string() + ": " + ec.message()};
   }
-  StagingGuard guard(work);
+  WorkGuard guard(root, work);
   const std::filesystem::path moved = work / "folder";
   if (!RenameWithRetry(folder, moved)) {
     return {RemoveStatus::kWriteFailed, "cannot move " + folder.string()};
@@ -832,7 +840,6 @@ RemoveResult RemoveInstalledDlc(const std::filesystem::path& user_data_root, con
     }
     return {RemoveStatus::kWriteFailed, "cannot remove " + header.string()};
   }
-  std::filesystem::remove_all(work, ec);
 
   for (const DlcInfo& left : ListInstalledDlc(root)) {
     if (left.content_id == content_id) {

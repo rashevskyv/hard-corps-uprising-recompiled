@@ -95,7 +95,8 @@ struct DlcInfo {
 };
 
 // Installs a DLC package for this title as marketplace content under `user_data_root`, keyed by its content ID.
-// Other DLC, the game folder and the user's saves are not touched. A failed or cancelled install changes nothing.
+// Other DLC, the game folder and the user's saves are not touched. A failed or cancelled install leaves the installed
+// copy as it was; one that cannot be put back is kept in the work folder and named in `detail`.
 InstallResult InstallDlcFromPackage(const std::filesystem::path& package, const std::filesystem::path& user_data_root,
                                     const InstallHooks& hooks = {}, DlcInfo* installed = nullptr);
 
