@@ -42,6 +42,8 @@ const std::vector<std::string> kGameSettingKeys = {
     "anisotropic_override",
     "hcu_show_fps",
     "mnk_mode",
+    "hcu_cheat_health",
+    "hcu_cheat_lives",
 };
 
 const std::vector<std::string> kWindowKeys = {

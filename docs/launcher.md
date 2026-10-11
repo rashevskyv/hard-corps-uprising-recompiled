@@ -97,6 +97,8 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 | | Multisampling | `native_2x_msaa` |
 | | Texture filtering | `anisotropic_override` |
 | Gameplay | Frame rate in title | `hcu_show_fps` |
+| Cheats | Infinite Health | `hcu_cheat_health` |
+| | Infinite Lives | `hcu_cheat_lives` |
 | Controls | Keyboard | `mnk_mode` |
 
 ### Graphics
@@ -120,6 +122,16 @@ Shader compilation is not a launcher setting; the game uses ReXGlue's default, `
 - An Xbox controller drives the launcher through XInput: Start plays; A, B, the D-pad and the left stick navigate. ReXGlue's input system only starts with the game.
 - The accent is a neon green (`kAccent`) with a dark emerald for the ready card, both in `src/launcher.cpp` with the header gradient. Amber is kept only for the "game files" warning, which is a status colour.
 
+### Cheats
+
+The sidebar order is Play, DLC, Display, Graphics, Gameplay, Cheats, Controls, About. Both cheats default to off and are ordinary launcher settings: saved with Save or Play, and put back to off by Reset all settings.
+
+- The hooks are in `src/cheats.cpp` and read the cvars when they run, so turning a cheat off restores the game's own behaviour with no other state to undo. Nothing is written to the game files or the save data.
+- A hook acts only on an object whose vtable is the game's player class (`hcu::cheats::kPlayerVtable`), which is every character, DLC included, in both player slots. Enemies use other classes.
+- **Infinite Health** turns a negative life delta into zero in the player's two add-life methods, which is how hits arrive. Healing and the death commands that set life to zero directly (`SetLife(0)`) are untouched.
+- **Infinite Lives** skips the player's stock decrement on respawn and refuses a set-stock call that would lower the stock. The stock can still go up.
+- `hcu_cheats_tests` (`cmake --build build --target hcu_cheats_tests`) checks the player test, the life delta and the stock rule without game memory.
+
 ## Not offered yet
 
 | Option | Reason |
@@ -130,4 +142,5 @@ Shader compilation is not a launcher setting; the game uses ReXGlue's default, `
 | Deadzone, vibration, stick inversion, button remap | Earthworm-specific guest hooks. |
 | Render presets | Earthworm-specific logic over `resolution_scale`. |
 | Present effect (FSR/CAS) | Not exposed by Earthworm either. Needs a restart. |
-| Cheats, achievements, updates, drag and drop of the package | Out of scope. |
+| Infinite Ammo | The player has no consumable ammunition: a weapon has only a type and a level, and the HUD shows nothing else. |
+| Achievements, updates, drag and drop of the package | Out of scope. |

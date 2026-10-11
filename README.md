@@ -95,6 +95,13 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 ### Gameplay
 - **Frame rate in title**: shows the frame rate in the window title, for example `Hard Corps: Uprising | FPS: 60.00`
 
+### Cheats
+- **Infinite Health**: normal damage no longer lowers a player's health
+- **Infinite Lives**: the number of remaining lives no longer goes down
+- Both apply to every character and to both players in local two-player
+
+All cheats are off by default and can be enabled from the Cheats page before Play.
+
 ### Controls
 - Xbox 360 controllers work without setup
 - **Keyboard**: enabled or disabled. The keys are listed on the page; [docs/input.md](docs/input.md) has the full layout.

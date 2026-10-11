@@ -260,6 +260,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
         {"Graphics", "Render resolution, anti-aliasing and texture filtering.",
          [](trg::Ui& ui) { PageGraphics(ui); }},
         {"Gameplay", "What the window shows while you play.", [](trg::Ui& ui) { PageGameplay(ui); }},
+        {"Cheats", "Gameplay assistance", [](trg::Ui& ui) { PageCheats(ui); }},
         {"Controls", "Controller and keyboard.", [](trg::Ui& ui) { PageControls(ui); }},
         {"About", "About this port, and where your files and settings live.",
          [this](trg::Ui& ui) { PageAbout(ui); }},
@@ -797,6 +798,15 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   static void PageGameplay(trg::Ui& ui) {
     ui.Toggle("Frame rate in title", "Shows the game's frame rate in the window title: Hard Corps: Uprising | FPS: 60.00",
               "hcu_show_fps", true, "Off", "On");
+  }
+
+  static void PageCheats(trg::Ui& ui) {
+    ui.Paragraph("Optional gameplay assists. All cheats are off by default.");
+    ui.Spacer(8);
+    ui.Toggle("Infinite Health", "Prevent normal damage from reducing player health", "hcu_cheat_health", false,
+              "Off", "On");
+    ui.Toggle("Infinite Lives", "Prevent the number of remaining lives from decreasing", "hcu_cheat_lives", false,
+              "Off", "On");
   }
 
   static void PageControls(trg::Ui& ui) {
