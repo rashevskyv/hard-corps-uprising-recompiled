@@ -42,6 +42,10 @@ inline bool LauncherWanted(bool game_ready, bool skip_once, bool shift_held, boo
 // player turned it off. Not shown on the relaunch that follows a window change.
 bool ShouldShowLauncher(const std::filesystem::path& game_dir);
 
+// Linux: SDL sees Shift only once the window has focus, so it is checked again then.
+// Always false on Windows, where ShouldShowLauncher already saw it.
+bool ShiftHeldAfterWindowOpened();
+
 // Call before the window is created when the launcher is shown: the window
 // is Windowed, at the launcher's size, on the primary display.
 void PrepareLauncherWindow();

@@ -121,6 +121,11 @@ Result Package::Open(const std::filesystem::path& path) {
   total_bytes_ = 0;
   file_count_ = 0;
   title_id_ = 0;
+  // Linux opens a folder or a pipe as a stream.
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(path, ec)) {
+    return {Status::kOpenFailed, "not a file"};
+  }
   in_.open(path, std::ios::binary);
   if (!in_) {
     return {Status::kOpenFailed, "cannot open the file"};

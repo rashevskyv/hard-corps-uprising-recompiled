@@ -6,8 +6,12 @@ project(hard_corps_uprising VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Where tools/codegen.ps1 unpacks the pinned SDK.
-list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/win-amd64")
+# Where tools/codegen.ps1 and tools/package-linux.sh unpack the pinned SDK.
+if(WIN32)
+    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/win-amd64")
+else()
+    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/linux-amd64")
+endif()
 
 # Release binaries must not carry the build machine's folders (__FILE__ in log calls).
 add_compile_options("$<$<CONFIG:Release>:-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=.>")
@@ -41,7 +45,7 @@ set_target_properties(trg_launcher PROPERTIES CXX_STANDARD 17)
 target_compile_definitions(trg_launcher PRIVATE _CRT_SECURE_NO_WARNINGS)
 get_directory_property(HCU_TRG_VERSION DIRECTORY "${_trg_dir}" DEFINITION PROJECT_VERSION)
 
-add_executable(hard_corps_uprising WIN32
+set(HCU_SOURCES
     src/main.cpp
     src/game_files.cpp
     src/launcher.cpp
@@ -51,9 +55,25 @@ add_executable(hard_corps_uprising WIN32
     src/stfs.cpp
     src/window_host.cpp
 )
+if(WIN32)
+    add_executable(hard_corps_uprising WIN32 ${HCU_SOURCES})
+else()
+    add_executable(hard_corps_uprising ${HCU_SOURCES})
+endif()
 
 rexglue_setup_target(hard_corps_uprising GPU_PLUGINS xenos)
-target_link_libraries(hard_corps_uprising PRIVATE trg::launcher shcore)
+target_link_libraries(hard_corps_uprising PRIVATE trg::launcher)
+if(WIN32)
+    target_link_libraries(hard_corps_uprising PRIVATE shcore)
+else()
+    # The SDK stages the runtime beside the program only on Windows and macOS; the RPATH is $ORIGIN.
+    add_custom_command(TARGET hard_corps_uprising POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:rex::runtime>"
+            "$<TARGET_FILE_DIR:hard_corps_uprising>"
+        VERBATIM
+    )
+endif()
 target_compile_definitions(hard_corps_uprising PRIVATE
     HCU_PORT_VERSION="${PROJECT_VERSION}"
     HCU_TRG_VERSION="${HCU_TRG_VERSION}")

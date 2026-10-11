@@ -16,6 +16,13 @@ REXCVAR_DECLARE(bool, hcu_show_fps);
 
 namespace hcu {
 
+// Allowing tearing is VSync Off. Each platform's presenter has its own setting for it.
+#if defined(_WIN32)
+inline constexpr char kTearingSetting[] = "d3d12_allow_variable_refresh_rate_and_tearing";
+#else
+inline constexpr char kTearingSetting[] = "vulkan_allow_present_mode_immediate";
+#endif
+
 // The player's settings file, loaded over the shipped hard_corps_uprising.toml.
 std::filesystem::path PlayerSettingsPath(const std::filesystem::path& user_data_root);
 void LoadPlayerSettings(const std::filesystem::path& path);

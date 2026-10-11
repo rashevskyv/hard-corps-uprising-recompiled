@@ -9,7 +9,7 @@ mnk_mode = true
 # Empty skips the optional gamecontrollerdb.txt load; SDL's built-in mappings still apply.
 hid_mappings_file = ""
 
-# Default game window: 853x480 logical, centered on the primary display. Logical pixels are scaled by Windows DPI.
+# Default game window: 853x480 logical, centered on the primary display. Logical pixels are scaled by the display scale.
 fullscreen = false
 monitor = 1
 window_width = 853

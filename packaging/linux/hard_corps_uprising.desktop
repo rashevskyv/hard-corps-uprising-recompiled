@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Hard Corps: Uprising
+Comment=Hard Corps: Uprising for Xbox Live Arcade, native PC port
+Exec=hard_corps_uprising
+Icon=hard_corps_uprising
+Categories=Game;
+Terminal=false
