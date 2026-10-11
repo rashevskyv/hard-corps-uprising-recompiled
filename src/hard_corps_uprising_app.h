@@ -9,10 +9,18 @@
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
+#include <rex/runtime.h>
+#include <rex/system/kernel_state.h>
 #include <rex/ui/flags.h>
+#include <rex/ui/windowed_app_context.h>
 
+#include "achievements_overlay.h"
 #include "cheat_menu.h"
 #include "launcher.h"
+#include "live_fix.h"
+#include "local_stats.h"
+#include "modal_dialog.h"
+#include "notice_dialog.h"
 #include "platform.h"
 #include "settings.h"
 #include "window_host.h"
@@ -94,7 +102,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     callbacks.quit = [this] { app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); }); };
     hcu::ShowLauncher(imgui_drawer(),
                       {defaults.game_data_root, defaults.user_data_root,
-                       hcu::PlayerSettingsPath(defaults.user_data_root)},
+                       hcu::PlayerSettingsPath(defaults.user_data_root), immediate_drawer()},
                       game_settings_, std::move(callbacks));
     return std::nullopt;
   }
@@ -110,17 +118,72 @@ class HardCorpsUprisingApp : public rex::ReXApp {
       if (auto* input = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
         input->SetActiveCallback([this] { return cheat_menu_.GameInputActive(); });
       }
+      hcu::ModalDialog::AttachEscapeKey(window());
     }
+    InstallLiveServices();
   }
 
   void OnShutdown() override {
+    hcu::ModalDialog::DetachEscapeKey();
+    delete achievements_;
+    delete notice_;
     cheat_menu_.Detach();
     DetachWindowHost();
   }
 
+  // F7 toggles the same overlay as the game's Achievements item. The overlay is owned here, not by ReXApp.
+  std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override {
+    if (achievements_) {
+      achievements_->RequestClose();
+    } else {
+      OpenAchievements();
+    }
+    return nullptr;
+  }
+
  private:
+  void InstallLiveServices() {
+    auto* kernel = runtime()->kernel_state();
+    const auto* profile = kernel ? kernel->user_profile() : nullptr;
+    if (!profile) {
+      return;
+    }
+    hcu::live::Install({
+        .stats_file = hcu::StatsFilePath(std::filesystem::absolute(user_data_root()), kernel->title_id()),
+        .user = {profile->xuid(), profile->name()},
+        .bridge =
+            {.open_achievements = [this] { app_context().CallInUIThreadDeferred([this] { OpenAchievements(); }); },
+             .open_download_content =
+                 [this] { app_context().CallInUIThreadDeferred([this] { OpenDownloadContent(); }); }},
+        .kernel = kernel,
+    });
+  }
+
+  void OpenAchievements() {
+    if (achievements_ || hcu::ModalDialog::AnyOpen() || !runtime() || !runtime()->kernel_state() || !imgui_drawer() ||
+        !immediate_drawer()) {
+      return;
+    }
+    achievements_ = new hcu::AchievementsOverlay(imgui_drawer(), immediate_drawer(), runtime(), &achievements(),
+                                                 [this] { achievements_ = nullptr; });
+  }
+
+  void OpenDownloadContent() {
+    if (notice_ || hcu::ModalDialog::AnyOpen() || !imgui_drawer()) {
+      return;
+    }
+    notice_ = new hcu::NoticeDialog(
+        imgui_drawer(), "DOWNLOAD CONTENT",
+        {"The Xbox Live Marketplace is not part of the PC version.",
+         "Additional characters are installed from the PC launcher: start the game again (hold Shift if the "
+         "launcher does not open) and use its DLC page."},
+        [this] { notice_ = nullptr; });
+  }
+
   hcu::GameSettings game_settings_;
   hcu::CheatMenu cheat_menu_;
+  hcu::AchievementsOverlay* achievements_ = nullptr;
+  hcu::NoticeDialog* notice_ = nullptr;
   std::filesystem::path shipped_config_;
   bool show_launcher_ = false;
 };

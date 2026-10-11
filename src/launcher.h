@@ -8,6 +8,7 @@ struct ImFontAtlas;
 
 namespace rex::ui {
 class ImGuiDrawer;
+class ImmediateDrawer;
 }  // namespace rex::ui
 
 namespace hcu {
@@ -18,6 +19,7 @@ struct LauncherPaths {
   std::filesystem::path game_dir;
   std::filesystem::path user_dir;
   std::filesystem::path settings_file;
+  rex::ui::ImmediateDrawer* immediate_drawer = nullptr;  // for the achievement icons
 };
 
 struct LauncherCallbacks {

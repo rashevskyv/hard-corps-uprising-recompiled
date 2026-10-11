@@ -129,7 +129,7 @@ Shader compilation is not a launcher setting; the game uses ReXGlue's default, `
 
 ### Cheats
 
-The sidebar order is Play, DLC, Display, Graphics, Gameplay, Cheats, Controls, About. All seven cheats default to off and are ordinary launcher settings: saved with Save or Play, and put back to off by Reset all settings. The launcher value is the start of every game session; the F10 menu (below) changes the cheats for the running session only.
+The sidebar order is Play, DLC, Display, Graphics, Gameplay, Cheats, Achievements, Controls, About. Achievements is read-only: it lists the game's 12 achievements and which are unlocked (see [offline-live.md](offline-live.md)). All seven cheats default to off and are ordinary launcher settings: saved with Save or Play, and put back to off by Reset all settings. The launcher value is the start of every game session; the F10 menu (below) changes the cheats for the running session only.
 
 - The hooks are in `src/cheats.cpp` and ask `hcu::cheats::Enabled` when they run, so turning a cheat off restores the game's own behaviour with no other state to undo. Nothing is written to the game files or the save data.
 - A hook acts only on an object whose vtable is the game's player class (`hcu::cheats::kPlayerVtable`), which is every character, DLC included, in both player slots. Enemies use other classes.

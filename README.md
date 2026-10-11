@@ -108,6 +108,14 @@ All cheats are off by default and configured on the Cheats page before Play. The
 
 Press **F10** while playing to open the cheat menu and change the cheats for the current session. Up and Down (or the D-pad) select, Enter (or A) toggles, F10, Escape or B closes. Changes made in the game are not saved: the launcher's settings are the same the next time you start.
 
+### Achievements, leaderboards and download content
+Everything stays offline: there is no Xbox Live connection, Microsoft sign-in or online player.
+- **Achievements**: the menu items and **F7** open a list of the game's 12 achievements (200G) with their icons and gamerscore. B, Escape or F7 closes it. Unlocks show the usual notification and are kept between runs. The launcher's **Achievements** page shows the same list.
+- **Leaderboards**: the main menu and pause menu items open the game's own Leaderboards screen with your own scores only. Finished games are kept in a local file on this PC. There are no Xbox Live rankings, online players or friends: the boards show your row, or nothing if you have not finished a game on that board. Arcade Mode single player is the board tested so far.
+- **Download Content**: shows a short note instead of the Xbox Marketplace. Extra characters are installed from the launcher's DLC page.
+
+[docs/offline-live.md](docs/offline-live.md) has the details.
+
 ### Controls
 - Xbox 360 controllers work without setup
 - **Keyboard**: enabled or disabled. The keys are listed on the page; [docs/input.md](docs/input.md) has the full layout.

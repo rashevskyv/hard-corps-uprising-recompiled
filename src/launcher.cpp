@@ -22,6 +22,7 @@
 #include "trg/platform.h"
 
 #include "game_files.h"
+#include "launcher_achievements.h"
 #include "platform.h"
 #include "settings.h"
 
@@ -200,6 +201,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   }
 
   void StartGame() {
+    // The game builds its own runtime next; the one that read the achievements must be gone.
+    achievements_.reset();
+    achievements_tried_ = false;
     if (cb_.window_changed && cb_.window_changed()) {
       if (cb_.restart && cb_.restart()) {
         Finish(nullptr);
@@ -261,6 +265,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
          [](trg::Ui& ui) { PageGraphics(ui); }},
         {"Gameplay", "What the window shows while you play.", [](trg::Ui& ui) { PageGameplay(ui); }},
         {"Cheats", "Gameplay assistance", [](trg::Ui& ui) { PageCheats(ui); }},
+        {"Achievements", "Your achievements on this PC.", [this](trg::Ui& ui) { PageAchievements(ui); }},
         {"Controls", "Controller and keyboard.", [](trg::Ui& ui) { PageControls(ui); }},
         {"About", "About this port, and where your files and settings live.",
          [this](trg::Ui& ui) { PageAbout(ui); }},
@@ -339,6 +344,8 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     }
     install_failure_.clear();
     install_failure_text_.clear();
+    achievements_.reset();
+    achievements_tried_ = false;
     outcome_ = std::make_shared<InstallOutcome>();
     const bool started = install_.Start(
         "Reading package...",
@@ -821,6 +828,46 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
               false, "Off", "On");
   }
 
+  void PageAchievements(trg::Ui& ui) {
+    if (game_files_ != GameFiles::kReady) {
+      ui.Paragraph("Install the game to see its achievements.");
+      return;
+    }
+    if (!achievements_ && !achievements_tried_) {
+      achievements_tried_ = true;
+      achievements_ = std::make_unique<LauncherAchievements>(paths_.game_dir, paths_.user_dir, paths_.immediate_drawer);
+    }
+    if (!achievements_ || !achievements_->ok()) {
+      ui.Paragraph("The achievements could not be read from the game files.");
+      return;
+    }
+    DrawAchievementSummary(ui, Summarize(achievements_->entries()));
+    std::vector<trg::AchievementCard> cards;
+    for (const AchievementEntry& entry : achievements_->entries()) {
+      trg::AchievementCard card;
+      card.icon = achievements_->Icon(entry.info);
+      card.title = entry.info.label;
+      card.description = EntryDescription(entry);
+      card.points = static_cast<int>(entry.info.gamerscore);
+      card.unlocked = entry.unlocked;
+      cards.push_back(std::move(card));
+    }
+    ui.AchievementGrid(cards, 1);
+  }
+
+  static void DrawAchievementSummary(trg::Ui& ui, const AchievementSummary& summary) {
+    ImGui::PushFont(ui.fonts().semibold, 0.0f);
+    ImGui::Text("%d / %d unlocked", summary.unlocked, summary.total);
+    ImGui::SameLine();
+    ImGui::TextColored(kAccent, "%dG / %dG", summary.earned_gamerscore, summary.total_gamerscore);
+    ImGui::PopFont();
+    const float fraction = summary.total > 0 ? float(summary.unlocked) / float(summary.total) : 0.0f;
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccent);
+    ImGui::ProgressBar(fraction, ImVec2(-FLT_MIN, 6.0f * ui.scale()), "");
+    ImGui::PopStyleColor();
+    ui.Spacer(8);
+  }
+
   static void PageControls(trg::Ui& ui) {
     ui.Info("Controller", "Automatic: Xbox controllers work without setup.");
     ui.Toggle("Keyboard", "Plays as an Xbox 360 controller, together with any connected controller.", "mnk_mode",
@@ -882,6 +929,8 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   std::string dlc_removing_name_;
   std::shared_ptr<DlcOutcome> dlc_outcome_;
   trg::Task dlc_task_;
+  std::unique_ptr<LauncherAchievements> achievements_;
+  bool achievements_tried_ = false;
   std::optional<DlcInfo> dlc_remove_target_;
   bool dlc_remove_open_ = false;
   bool dlc_remove_close_ = false;

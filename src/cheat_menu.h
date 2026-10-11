@@ -20,8 +20,8 @@ class CheatMenu final : public rex::ui::WindowInputListener {
   void Attach(rex::ui::Window* window, rex::ui::ImGuiDrawer* drawer);
   void Detach();
 
-  // Whether the game may read the keyboard and controller. It may not while the menu is open or the keys
-  // and buttons that were pressed in it are still held.
+  // Whether the game may read the keyboard and controller. It may not while an in-game overlay is open or the
+  // keys and buttons that were pressed in it are still held.
   bool GameInputActive() const;
 
  private:
@@ -33,7 +33,6 @@ class CheatMenu final : public rex::ui::WindowInputListener {
   rex::ui::Window* window_ = nullptr;
   std::atomic<rex::ui::ImGuiDrawer*> drawer_{nullptr};
   CheatMenuDialog* dialog_ = nullptr;
-  std::atomic<bool> captures_input_{false};
 };
 
 }  // namespace hcu
