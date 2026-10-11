@@ -98,9 +98,11 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 ### Cheats
 - **Infinite Health**: normal damage no longer lowers a player's health
 - **Infinite Lives**: the number of remaining lives no longer goes down
-- Both apply to every character and to both players in local two-player
+- **Rapid Fire**: weapons fire about twice as fast
+- **Jump Height 2x**: jumps reach about twice the normal height
+- **Keep Weapons on Hit**: taking normal damage no longer costs the current weapon
 
-All cheats are off by default and can be enabled from the Cheats page before Play.
+All cheats are off by default and configured on the Cheats page before Play. They apply to every character and to both players in local two-player.
 
 ### Controls
 - Xbox 360 controllers work without setup

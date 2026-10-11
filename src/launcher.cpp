@@ -807,6 +807,11 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
               "Off", "On");
     ui.Toggle("Infinite Lives", "Prevent the number of remaining lives from decreasing", "hcu_cheat_lives", false,
               "Off", "On");
+    ui.Toggle("Rapid Fire", "Fire weapons approximately twice as fast", "hcu_cheat_rapid_fire", false, "Off", "On");
+    ui.Toggle("Jump Height 2x", "Reach approximately twice the normal jump height", "hcu_cheat_jump_height", false,
+              "Off", "On");
+    ui.Toggle("Keep Weapons on Hit", "Keep the current weapon when taking normal damage", "hcu_cheat_keep_weapons",
+              false, "Off", "On");
   }
 
   static void PageControls(trg::Ui& ui) {

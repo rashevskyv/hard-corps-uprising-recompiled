@@ -99,6 +99,9 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 | Gameplay | Frame rate in title | `hcu_show_fps` |
 | Cheats | Infinite Health | `hcu_cheat_health` |
 | | Infinite Lives | `hcu_cheat_lives` |
+| | Rapid Fire | `hcu_cheat_rapid_fire` |
+| | Jump Height 2x | `hcu_cheat_jump_height` |
+| | Keep Weapons on Hit | `hcu_cheat_keep_weapons` |
 | Controls | Keyboard | `mnk_mode` |
 
 ### Graphics
@@ -124,13 +127,16 @@ Shader compilation is not a launcher setting; the game uses ReXGlue's default, `
 
 ### Cheats
 
-The sidebar order is Play, DLC, Display, Graphics, Gameplay, Cheats, Controls, About. Both cheats default to off and are ordinary launcher settings: saved with Save or Play, and put back to off by Reset all settings.
+The sidebar order is Play, DLC, Display, Graphics, Gameplay, Cheats, Controls, About. All five cheats default to off and are ordinary launcher settings: saved with Save or Play, and put back to off by Reset all settings.
 
 - The hooks are in `src/cheats.cpp` and read the cvars when they run, so turning a cheat off restores the game's own behaviour with no other state to undo. Nothing is written to the game files or the save data.
 - A hook acts only on an object whose vtable is the game's player class (`hcu::cheats::kPlayerVtable`), which is every character, DLC included, in both player slots. Enemies use other classes.
 - **Infinite Health** turns a negative life delta into zero in the player's two add-life methods, which is how hits arrive. Healing and the death commands that set life to zero directly (`SetLife(0)`) are untouched.
 - **Infinite Lives** skips the player's stock decrement on respawn and refuses a set-stock call that would lower the stock. The stock can still go up.
-- `hcu_cheats_tests` (`cmake --build build --target hcu_cheats_tests`) checks the player test, the life delta and the stock rule without game memory.
+- **Rapid Fire** halves the shot cooldown, in frames, that the game's own script sets after each shot, so weapons keep their relative speeds. The script command and the player's cooldown setter are hooked together, because the per-frame countdown uses the same setter. Odd values alternate between rounding down and up, so the average is exactly half. Sayuri's attacks use the same cooldown.
+- **Jump Height 2x** scales the launch speed of the game's jump (`Obj::Jump`, shared by every object class, so the hook acts on players only) by the square root of two. Gravity is constant (0.1419 per frame), so the apex grows with the square of the launch speed. Each character's own speed is scaled, including Sayuri's and Leviathan's special jumps. Horizontal speed is not touched, and moves that set a velocity directly instead of calling the jump are not scaled.
+- **Keep Weapons on Hit** disarms the weapon drop that a hit arms. The player's on-damaged script then neither resets the weapon nor spawns the dropped item. A hit that leaves the player at zero life still drops the weapon, as in the game. It does not depend on Infinite Health.
+- `hcu_cheats_tests` (`cmake --build build --target hcu_cheats_tests`) checks the player test, the life delta, the stock rule, the shot cooldown, the jump speed and the weapon-drop rule without game memory.
 
 ## Not offered yet
 
@@ -142,5 +148,4 @@ The sidebar order is Play, DLC, Display, Graphics, Gameplay, Cheats, Controls, A
 | Deadzone, vibration, stick inversion, button remap | Earthworm-specific guest hooks. |
 | Render presets | Earthworm-specific logic over `resolution_scale`. |
 | Present effect (FSR/CAS) | Not exposed by Earthworm either. Needs a restart. |
-| Infinite Ammo | The player has no consumable ammunition: a weapon has only a type and a level, and the HUD shows nothing else. |
 | Achievements, updates, drag and drop of the package | Out of scope. |

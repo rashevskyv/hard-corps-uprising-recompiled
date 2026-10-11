@@ -44,6 +44,9 @@ const std::vector<std::string> kGameSettingKeys = {
     "mnk_mode",
     "hcu_cheat_health",
     "hcu_cheat_lives",
+    "hcu_cheat_rapid_fire",
+    "hcu_cheat_jump_height",
+    "hcu_cheat_keep_weapons",
 };
 
 const std::vector<std::string> kWindowKeys = {
