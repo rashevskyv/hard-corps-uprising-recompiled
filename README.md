@@ -101,8 +101,12 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 - **Rapid Fire**: weapons fire about twice as fast
 - **Jump Height 2x**: jumps reach about twice the normal height
 - **Keep Weapons on Hit**: taking normal damage no longer costs the current weapon
+- **Movement Speed 2x**: ordinary running and air steering are twice as fast
+- **Super Armor**: take damage normally without knockback, hit stun or knockdown
 
 All cheats are off by default and configured on the Cheats page before Play. They apply to every character and to both players in local two-player.
+
+Press **F10** while playing to open the cheat menu and change the cheats for the current session. Up and Down (or the D-pad) select, Enter (or A) toggles, F10, Escape or B closes. Changes made in the game are not saved: the launcher's settings are the same the next time you start.
 
 ### Controls
 - Xbox 360 controllers work without setup

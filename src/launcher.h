@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <functional>
 
+struct ImFont;
 struct ImFontAtlas;
 
 namespace rex::ui {
@@ -28,6 +29,10 @@ struct LauncherCallbacks {
 
 // `density` is the window's display scale, so text is rasterized for its real pixel size.
 void LoadLauncherFonts(ImFontAtlas* atlas, float density);
+
+// The launcher's UI fonts, also used by the in-game cheat menu. Null when the system has none.
+ImFont* LauncherRegularFont();
+ImFont* LauncherSemiboldFont();
 
 // Game files that are not ready always show the launcher: it is the only way to install them, so neither
 // the player's "off" choice nor the relaunch flag can hide it.

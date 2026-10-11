@@ -47,6 +47,7 @@ get_directory_property(HCU_TRG_VERSION DIRECTORY "${_trg_dir}" DEFINITION PROJEC
 
 set(HCU_SOURCES
     src/main.cpp
+    src/cheat_menu.cpp
     src/cheats.cpp
     src/game_files.cpp
     src/launcher.cpp
@@ -98,3 +99,4 @@ target_include_directories(hcu_installer_tests PRIVATE src)
 # Cheat guard tests, not part of the default build: cmake --build <dir> --target hcu_cheats_tests
 add_executable(hcu_cheats_tests EXCLUDE_FROM_ALL tests/cheats_tests.cpp)
 target_include_directories(hcu_cheats_tests PRIVATE src)
+target_compile_definitions(hcu_cheats_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")

@@ -803,6 +803,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   static void PageCheats(trg::Ui& ui) {
     ui.Paragraph("Optional gameplay assists. All cheats are off by default.");
     ui.Spacer(8);
+    ui.Help("Press F10 while playing to open the Cheat Menu and change cheats instantly.");
+    ui.Help("Changes made in-game apply only to the current session and are not saved to the launcher.");
+    ui.Spacer(12);
     ui.Toggle("Infinite Health", "Prevent normal damage from reducing player health", "hcu_cheat_health", false,
               "Off", "On");
     ui.Toggle("Infinite Lives", "Prevent the number of remaining lives from decreasing", "hcu_cheat_lives", false,
@@ -811,6 +814,10 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     ui.Toggle("Jump Height 2x", "Reach approximately twice the normal jump height", "hcu_cheat_jump_height", false,
               "Off", "On");
     ui.Toggle("Keep Weapons on Hit", "Keep the current weapon when taking normal damage", "hcu_cheat_keep_weapons",
+              false, "Off", "On");
+    ui.Toggle("Movement Speed 2x", "Move at twice the normal speed", "hcu_cheat_movement_speed", false, "Off",
+              "On");
+    ui.Toggle("Super Armor", "Take damage normally without knockback, hit stun or knockdown", "hcu_cheat_super_armor",
               false, "Off", "On");
   }
 
@@ -898,6 +905,14 @@ void LoadLauncherFonts(ImFontAtlas* atlas, float density) {
   g_fonts.regular = load(fonts.regular);
   g_fonts.semibold = load(fonts.semibold);
   g_fonts.bold = load(fonts.bold);
+}
+
+ImFont* LauncherRegularFont() {
+  return g_fonts.regular;
+}
+
+ImFont* LauncherSemiboldFont() {
+  return g_fonts.semibold;
 }
 
 namespace {

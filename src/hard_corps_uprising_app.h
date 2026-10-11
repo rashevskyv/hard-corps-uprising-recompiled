@@ -6,10 +6,12 @@
 #include <optional>
 
 #include <rex/filesystem.h>
+#include <rex/input/input_system.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
 #include <rex/ui/flags.h>
 
+#include "cheat_menu.h"
 #include "launcher.h"
 #include "platform.h"
 #include "settings.h"
@@ -102,12 +104,23 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     if (window()) {
       hcu::CheckWindowDisplay(window()->GetNativeWindowHandle(), REXCVAR_GET(monitor));
     }
+    if (window() && imgui_drawer()) {
+      cheat_menu_.Attach(window(), imgui_drawer());
+      // Replaces ReXApp's own callback, which the menu's version repeats.
+      if (auto* input = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
+        input->SetActiveCallback([this] { return cheat_menu_.GameInputActive(); });
+      }
+    }
   }
 
-  void OnShutdown() override { DetachWindowHost(); }
+  void OnShutdown() override {
+    cheat_menu_.Detach();
+    DetachWindowHost();
+  }
 
  private:
   hcu::GameSettings game_settings_;
+  hcu::CheatMenu cheat_menu_;
   std::filesystem::path shipped_config_;
   bool show_launcher_ = false;
 };
