@@ -113,6 +113,8 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 
 <img width="1966" height="1172" alt="gameplay" src="https://github.com/user-attachments/assets/6029f8f7-e0a8-49af-ac51-46d6ab54926d" />
 
+<img width="1966" height="1172" alt="dlc_harley" src="https://github.com/user-attachments/assets/ad445921-1b3d-4e4d-bca6-8496c83a0afe" />
+
 
 ## Reporting problems
 
