@@ -19,6 +19,12 @@ constexpr size_t kMaxDepth = 32;
 constexpr uint16_t kRootParent = 0xFFFF;
 constexpr uint8_t kFlagConsecutive = 0x40;
 constexpr uint8_t kFlagDirectory = 0x80;
+constexpr uint64_t kContentIdOffset = 0x32C;
+constexpr uint64_t kLicenseOffset = 0x22C;
+constexpr size_t kLicenseEntries = 0x10;
+constexpr size_t kLicenseBytes = 0x10;
+constexpr uint64_t kDisplayNameOffset = 0x411;
+constexpr size_t kDisplayNameBytes = 0x100;
 
 uint32_t Be32(const uint8_t* p) {
   return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
@@ -114,6 +120,43 @@ uint64_t Package::BlockOffset(uint64_t block) const {
   return base_ + index * kBlockSize;
 }
 
+std::string Package::content_id_hex() const {
+  static constexpr char kDigits[] = "0123456789ABCDEF";
+  std::string out;
+  for (const uint8_t byte : content_id_) {
+    out.push_back(kDigits[byte >> 4]);
+    out.push_back(kDigits[byte & 0xF]);
+  }
+  return out;
+}
+
+uint32_t Package::license_mask() const {
+  uint32_t mask = 0;
+  for (size_t i = 0; i < kLicenseEntries; ++i) {
+    const uint8_t* entry = header_ + kLicenseOffset + i * kLicenseBytes;
+    if (Be32(entry + 12) != 0) {
+      mask |= Be32(entry + 8);
+    }
+  }
+  return mask;
+}
+
+std::u16string Package::ReadEnglishName() {
+  uint8_t raw[kDisplayNameBytes];
+  std::u16string name;
+  if (!ReadAt(kDisplayNameOffset, raw, sizeof(raw))) {
+    return name;
+  }
+  for (size_t i = 0; i + 1 < sizeof(raw); i += 2) {
+    const char16_t c = char16_t(raw[i] << 8 | raw[i + 1]);
+    if (c == 0) {
+      break;
+    }
+    name.push_back(c);
+  }
+  return name;
+}
+
 Result Package::Open(const std::filesystem::path& path) {
   in_.close();
   in_.clear();
@@ -121,6 +164,9 @@ Result Package::Open(const std::filesystem::path& path) {
   total_bytes_ = 0;
   file_count_ = 0;
   title_id_ = 0;
+  content_type_ = 0;
+  content_id_ = {};
+  display_name_.clear();
   // Linux opens a folder or a pipe as a stream.
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec)) {
@@ -140,6 +186,9 @@ Result Package::Open(const std::filesystem::path& path) {
     return {Status::kNotPackage, "missing STFS header"};
   }
   title_id_ = Be32(header_ + 0x360);
+  content_type_ = Be32(header_ + 0x344);
+  std::memcpy(content_id_.data(), header_ + kContentIdOffset, content_id_.size());
+  display_name_ = ReadEnglishName();
   return {};
 }
 

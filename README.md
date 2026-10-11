@@ -42,6 +42,16 @@ The launcher checks the Title ID when you pick the package, and checks `default.
 
 **Reinstall from package...** repairs the game files and keeps your settings and saves.
 
+### Optional DLC
+
+The DLC characters are Harley Daniels, Sayuri and Leviathan. DLC is optional, and the port does not include or download DLC packages: you need your own Xbox 360 DLC package for each one.
+
+1. Install the game first.
+2. Open the **DLC** page, click **Install DLC...**, and pick your DLC package. The launcher checks that it is a Hard Corps: Uprising package (Title ID `58410A18`, content type `00000002`, Marketplace). It refuses the game package and other packages.
+3. The **DLC** page shows each character as Installed or Not installed. **Remove** on an installed character removes only that package, after a confirmation. You can install the package again later from your own copy.
+
+Installed DLC is stored in your user data folder (`Documents\hard_corps_uprising`, or the `--user_data_root` folder), not in the game folder. Reinstalling the game does not remove it.
+
 ### Linux and Steam Deck
 
 **Experimental, not yet tested on real hardware.** This is a native Linux build (ReXGlue's Linux runtime with Vulkan), not Proton.

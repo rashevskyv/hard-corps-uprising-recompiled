@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -70,6 +71,33 @@ struct InstallOutcome {
   GameFiles files = GameFiles::kMissing;
 };
 
+struct DlcOutcome {
+  bool removal = false;
+  std::string name;  // the package's display name, for the status line
+  InstallResult install;
+  RemoveResult removal_result;
+  DlcInfo dlc;
+};
+
+std::string DlcDisplayName(const DlcInfo& dlc) {
+  return dlc.character != DlcCharacter::kUnknown ? DlcCharacterName(dlc.character) : dlc.display_name;
+}
+
+std::string InstalledDlcMessage(const DlcInfo& dlc) {
+  if (dlc.character != DlcCharacter::kUnknown) {
+    return DlcDisplayName(dlc) + " installed.";
+  }
+  return dlc.display_name + " installed. It is not one of the supported characters.";
+}
+
+// The theme's only alert colours; destructive actions use them instead of the accent.
+void PushDangerButton(const trg::Theme& t) {
+  ImGui::PushStyleColor(ImGuiCol_Button, t.warn);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(t.warn.x + 0.12f, t.warn.y + 0.10f, t.warn.z + 0.05f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(t.warn.x - 0.05f, t.warn.y - 0.04f, t.warn.z - 0.02f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_Text, t.text);
+}
+
 std::string Size(int width, int height) {
   return std::to_string(width) + " \xC3\x97 " + std::to_string(height);
 }
@@ -111,6 +139,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
         settings_(settings),
         game_files_(CheckAndLogGameFiles(paths_.game_dir)),
         monitors_(ListMonitors()) {
+    dlc_ = ListInstalledDlc(paths_.user_dir);
     launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
   }
 
@@ -120,6 +149,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       return;
     }
     PollInstall();
+    PollDlcTask();
     if (!nav_taken_) {
       saved_nav_flags_ = io.ConfigFlags & kNavFlags;
       saved_has_gamepad_ = io.BackendFlags & ImGuiBackendFlags_HasGamepad;
@@ -158,7 +188,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
 
   // Every PLAY (mouse, Enter, Xbox Start) ends here. The one save happens here; StartGame never saves.
   void RequestPlay() {
-    if (starting_ || install_.running() || game_files_ != GameFiles::kReady) {
+    if (starting_ || install_.running() || dlc_task_.running() || game_files_ != GameFiles::kReady) {
       return;
     }
     if (!launcher_->Save()) {
@@ -224,6 +254,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     c.pages = {
         {"Play", "Check the game files and start playing.", [this](trg::Ui& ui) { PagePlay(ui); },
          [this] { return game_files_ != GameFiles::kReady; }},
+        {"DLC", "Optional character downloadable content", [this](trg::Ui& ui) { PageDlc(ui); }},
         {"Display", "Window, monitor and how the picture fits your screen.",
          [this](trg::Ui& ui) { PageDisplay(ui); }},
         {"Graphics", "Render resolution, anti-aliasing and texture filtering.",
@@ -234,7 +265,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
          [this](trg::Ui& ui) { PageAbout(ui); }},
     };
     c.can_play = [this] {
-      if (install_.running()) {
+      if (install_.running() || dlc_task_.running()) {
         return trg::PlayCheck{false, "Wait for the install to finish.", 0};
       }
       if (game_files_ == GameFiles::kReady) {
@@ -265,7 +296,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       }
     }
     if (!install_failure_.empty()) {
-      DrawInstallFailure(ui);
+      DrawFailure(ui, install_failure_, install_failure_text_);
     }
     if (paths_.game_dir.empty()) {
       ui.Help("No game folder was given: start the game with --game_data_root.");
@@ -286,12 +317,12 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     ui.EndRows();
   }
 
-  void DrawInstallFailure(trg::Ui& ui) {
+  static void DrawFailure(trg::Ui& ui, const std::string& title, const std::string& text) {
     ui.Spacer(4);
     ImGui::PushStyleColor(ImGuiCol_Text, ui.theme().warn_dot);
-    ImGui::TextUnformatted(install_failure_.c_str());
+    ImGui::TextUnformatted(title.c_str());
     ImGui::PopStyleColor();
-    ui.Help(install_failure_text_.c_str());
+    ui.Help(text.c_str());
     ui.Spacer(4);
   }
 
@@ -357,6 +388,299 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     install_failure_ = message.title;
     install_failure_text_ = message.text;
     launcher_->SetStatus("Install failed: " + install_failure_, 8.0);
+  }
+
+  void PageDlc(trg::Ui& ui) {
+    ui.Paragraph(
+        "Install optional character DLC from your own Xbox 360 packages.\n"
+        "No DLC files are included with this port.\n"
+        "Installed packages are stored separately from the game files.");
+    ui.Spacer(8);
+    const bool busy = dlc_task_.running();
+    for (const DlcCharacter character : kDlcCharacters) {
+      const DlcInfo* installed = FindInstalledDlc(character);
+      if (DrawDlcCard(ui, DlcCharacterName(character), installed, busy)) {
+        RequestDlcRemoval(*installed);
+      }
+    }
+    ui.Spacer(6);
+    if (!dlc_removing_name_.empty()) {
+      ui.Help(("Removing " + dlc_removing_name_ + "...").c_str());
+    } else if (!ui.TaskProgress(dlc_task_) && ui.AccentButton("Install DLC...")) {
+      BrowseAndInstallDlc();
+    }
+    if (!dlc_failure_.empty()) {
+      DrawFailure(ui, dlc_failure_, dlc_failure_text_);
+    }
+    const std::vector<const DlcInfo*> others = UnassignedInstalledDlc();
+    if (!others.empty() && ui.Section("Other installed content", true)) {
+      for (const DlcInfo* dlc : others) {
+        if (DrawDlcCard(ui, DlcDisplayName(*dlc), dlc, busy)) {
+          RequestDlcRemoval(*dlc);
+        }
+      }
+    }
+    DrawRemoveDialog(ui);
+  }
+
+  const DlcInfo* FindInstalledDlc(DlcCharacter character) const {
+    for (const DlcInfo& dlc : dlc_) {
+      if (dlc.verified && dlc.character == character) {
+        return &dlc;
+      }
+    }
+    return nullptr;
+  }
+
+  // Verified packages that no character row shows: other content, and a second package for a character.
+  std::vector<const DlcInfo*> UnassignedInstalledDlc() const {
+    std::vector<const DlcInfo*> others;
+    for (const DlcInfo& dlc : dlc_) {
+      bool shown = false;
+      for (const DlcCharacter character : kDlcCharacters) {
+        shown |= FindInstalledDlc(character) == &dlc;
+      }
+      if (dlc.verified && !shown) {
+        others.push_back(&dlc);
+      }
+    }
+    return others;
+  }
+
+  // Returns true when Remove was clicked.
+  bool DrawDlcCard(trg::Ui& ui, const std::string& title, const DlcInfo* installed, bool busy) {
+    const trg::Theme& t = ui.theme();
+    const float s = ui.scale();
+    const float height = 66 * s;
+    const float pad = 18 * s;
+    const float width = ImGui::GetContentRegionAvail().x;
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImGui::Dummy(ImVec2(width, height));
+    const ImVec2 next = ImGui::GetCursorScreenPos();
+    dl->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height),
+                      ImGui::GetColorU32(ImVec4(t.frame.x, t.frame.y, t.frame.z, 0.5f)), 10 * s);
+
+    ImGui::PushFont(ui.fonts().semibold, 0.0f);
+    const float title_h = ImGui::GetTextLineHeight();
+    dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(origin.x + pad, origin.y + 12 * s),
+                ImGui::GetColorU32(t.text), title.c_str());
+    ImGui::PopFont();
+
+    ImGui::PushFont(ui.fonts().regular, ui.fonts().size * 0.84f);
+    const float status_y = origin.y + 12 * s + title_h + 2 * s;
+    if (installed) {
+      const ImU32 green = ImGui::GetColorU32(t.good_dot);
+      dl->AddCircleFilled(ImVec2(origin.x + pad + 4 * s, status_y + ImGui::GetFontSize() * 0.5f), 4 * s, green);
+      dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(origin.x + pad + 14 * s, status_y), green,
+                  "Installed");
+    } else {
+      dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(origin.x + pad, status_y),
+                  ImGui::GetColorU32(t.dim), "Not installed");
+    }
+    ImGui::PopFont();
+
+    bool remove_clicked = false;
+    if (installed) {
+      const float button_w = 120 * s;
+      const float button_h = ImGui::GetFrameHeight();
+      ImGui::SetCursorScreenPos(ImVec2(origin.x + width - pad - button_w, origin.y + (height - button_h) * 0.5f));
+      ImGui::PushID(installed->content_id.c_str());
+      ImGui::BeginDisabled(busy);
+      PushDangerButton(t);
+      remove_clicked = ImGui::Button("Remove", ImVec2(button_w, button_h));
+      ImGui::PopStyleColor(4);
+      ImGui::EndDisabled();
+      ImGui::PopID();
+    }
+    ImGui::SetCursorScreenPos(next);
+    return remove_clicked;
+  }
+
+  void RequestDlcRemoval(const DlcInfo& dlc) {
+    dlc_remove_target_ = dlc;
+    dlc_remove_open_ = true;
+  }
+
+  // Escape closes on the next frame: trg quits on Escape only when no pop-up is open, so closing here would quit.
+  void DrawRemoveDialog(trg::Ui& ui) {
+    if (!dlc_remove_target_) {
+      return;
+    }
+    constexpr const char* kId = "##dlc_remove";
+    if (dlc_remove_open_) {
+      ImGui::OpenPopup(kId);
+      dlc_remove_open_ = false;
+    }
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float s = ui.scale();
+    const trg::Theme& t = ui.theme();
+    ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(std::min(520 * s, vp->Size.x - 40 * s), 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24 * s, 20 * s));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, t.panel);
+    ImGui::PushStyleColor(ImGuiCol_Border, t.warn);
+    const bool open = ImGui::BeginPopupModal(kId, nullptr,
+                                             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+    if (!open) {
+      dlc_remove_target_.reset();
+      return;
+    }
+    if (dlc_remove_close_) {
+      dlc_remove_close_ = false;
+      dlc_remove_target_.reset();
+      ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+      return;
+    }
+
+    const DlcInfo target = *dlc_remove_target_;
+    ImGui::PushFont(ui.fonts().semibold, ui.fonts().size * 1.1f);
+    ImGui::TextUnformatted(("Remove " + DlcDisplayName(target) + " DLC").c_str());
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, 6 * s));
+    ImGui::PushStyleColor(ImGuiCol_Text, t.dim);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(
+        "This removes the installed DLC files from this PC.\nYou can install the package again later.");
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 14 * s));
+
+    bool cancel = ImGui::Button("Cancel", ImVec2(150 * s, 0));
+    ImGui::SetItemDefaultFocus();
+    ImGui::SameLine();
+    PushDangerButton(t);
+    const bool remove = ImGui::Button("Remove", ImVec2(150 * s, 0));
+    ImGui::PopStyleColor(4);
+
+    cancel |= ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      dlc_remove_close_ = true;
+    }
+    if (remove) {
+      dlc_remove_target_.reset();
+      ImGui::CloseCurrentPopup();
+      StartDlcRemoval(target);
+    } else if (cancel) {
+      dlc_remove_target_.reset();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
+  void BrowseAndInstallDlc() {
+    PollDlcTask();
+    if (dlc_task_.running()) {
+      return;
+    }
+    const std::string picked = trg::BrowseForFile("Select a Hard Corps: Uprising DLC package",
+                                                  {{"Xbox 360 package", "*"}});
+    if (picked.empty()) {
+      return;
+    }
+    dlc_failure_.clear();
+    dlc_failure_text_.clear();
+    dlc_outcome_ = std::make_shared<DlcOutcome>();
+    const bool started = dlc_task_.Start(
+        "Reading package...",
+        [outcome = dlc_outcome_, package = PathFromUtf8(picked), user_dir = paths_.user_dir](trg::Task& task) {
+          InstallHooks hooks;
+          hooks.phase = [&task](const char* text) {
+            task.SetLabel(text);
+            task.Progress(0, 0);
+          };
+          hooks.progress = [&task](uint64_t done, uint64_t total) {
+            task.Progress(static_cast<long long>(done), static_cast<long long>(total));
+            return !task.cancelled();
+          };
+          outcome->install = InstallDlcFromPackage(package, user_dir, hooks, &outcome->dlc);
+          return outcome->install.ok() ? std::string() : std::string(DescribeInstall(outcome->install.status).title);
+        });
+    if (started) {
+      REXLOG_INFO("Installing DLC from {}", picked);
+    }
+  }
+
+  void StartDlcRemoval(const DlcInfo& dlc) {
+    PollDlcTask();
+    if (dlc_task_.running()) {
+      return;
+    }
+    dlc_failure_.clear();
+    dlc_failure_text_.clear();
+    dlc_outcome_ = std::make_shared<DlcOutcome>();
+    dlc_outcome_->removal = true;
+    dlc_outcome_->name = DlcDisplayName(dlc);
+    const bool started = dlc_task_.Start(
+        "Removing DLC...",
+        [outcome = dlc_outcome_, user_dir = paths_.user_dir, game_dir = paths_.game_dir,
+         content_id = dlc.content_id](trg::Task&) {
+          outcome->removal_result = RemoveInstalledDlc(user_dir, game_dir, content_id);
+          return outcome->removal_result.ok() ? std::string()
+                                              : std::string(DescribeRemove(outcome->removal_result.status).title);
+        });
+    if (started) {
+      dlc_removing_name_ = dlc_outcome_->name;
+      REXLOG_INFO("Removing DLC {}", dlc.content_id);
+    } else {
+      dlc_outcome_.reset();
+    }
+  }
+
+  // Runs every frame: finishes the DLC task and reloads the installed packages.
+  void PollDlcTask() {
+    std::string error;
+    if (dlc_task_.Finish(&error) == trg::Task::State::kIdle) {
+      return;
+    }
+    dlc_removing_name_.clear();
+    const std::shared_ptr<DlcOutcome> outcome = std::move(dlc_outcome_);
+    dlc_ = ListInstalledDlc(paths_.user_dir);
+    if (!outcome) {
+      return;
+    }
+    if (outcome->removal) {
+      FinishDlcRemoval(*outcome);
+    } else {
+      FinishDlcInstall(*outcome);
+    }
+  }
+
+  void FinishDlcInstall(const DlcOutcome& outcome) {
+    const InstallResult& result = outcome.install;
+    const InstallMessage message = DescribeInstall(result.status);
+    if (result.ok()) {
+      REXLOG_INFO("DLC installed: {} ({} files, {} bytes)", outcome.dlc.display_name, result.files, result.bytes);
+      launcher_->SetStatus(InstalledDlcMessage(outcome.dlc), 6.0);
+      return;
+    }
+    if (result.status == InstallStatus::kCancelled) {
+      REXLOG_INFO("DLC install cancelled");
+      launcher_->SetStatus(std::string(message.title) + ". " + message.text, 6.0);
+      return;
+    }
+    REXLOG_WARN("DLC install failed: {} ({})", message.title, result.detail);
+    dlc_failure_ = message.title;
+    dlc_failure_text_ = message.text;
+    launcher_->SetStatus("DLC install failed: " + dlc_failure_, 8.0);
+  }
+
+  void FinishDlcRemoval(const DlcOutcome& outcome) {
+    const RemoveResult& result = outcome.removal_result;
+    if (result.ok()) {
+      REXLOG_INFO("DLC removed: {}", outcome.name);
+      launcher_->SetStatus(outcome.name + " removed. You can install the package again later.", 6.0);
+      return;
+    }
+    const RemoveMessage message = DescribeRemove(result.status);
+    REXLOG_WARN("DLC removal failed: {} ({})", message.title, result.detail);
+    dlc_failure_ = message.title;
+    dlc_failure_text_ = message.text;
+    launcher_->SetStatus("Removal failed: " + dlc_failure_, 8.0);
   }
 
   void PageDisplay(trg::Ui& ui) {
@@ -530,6 +854,15 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   std::string install_failure_text_;
   std::shared_ptr<InstallOutcome> outcome_;
   trg::Task install_;
+  std::vector<DlcInfo> dlc_;
+  std::string dlc_failure_;
+  std::string dlc_failure_text_;
+  std::string dlc_removing_name_;
+  std::shared_ptr<DlcOutcome> dlc_outcome_;
+  trg::Task dlc_task_;
+  std::optional<DlcInfo> dlc_remove_target_;
+  bool dlc_remove_open_ = false;
+  bool dlc_remove_close_ = false;
 };
 
 }  // namespace
