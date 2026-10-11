@@ -12,6 +12,8 @@
 
 </div>
 
+<img width="1966" height="1179" alt="title_screen" src="https://github.com/user-attachments/assets/bff13f4f-3a4e-488d-8cf0-1b6cde1c0875" />
+
 ## What you need
 
 - Windows 10 or 11, 64-bit, and a DirectX 12 graphics card
@@ -108,8 +110,6 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 - **Show settings file**, and **Reset all settings**
 
 ## Screenshots
-
-<img width="1966" height="1179" alt="title_screen" src="https://github.com/user-attachments/assets/bff13f4f-3a4e-488d-8cf0-1b6cde1c0875" />
 
 <img width="1966" height="1172" alt="gameplay" src="https://github.com/user-attachments/assets/6029f8f7-e0a8-49af-ac51-46d6ab54926d" />
 
