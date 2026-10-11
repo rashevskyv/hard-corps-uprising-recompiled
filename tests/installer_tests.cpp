@@ -1303,10 +1303,11 @@ void TestUninstallOnlyVerifiedPackages() {
   const std::string third = HexOf(IdFrom(0xD0));
   WriteFile(scratch.path() / "third.bin", BuildPackage(AddOnItems(20), AddOn(IdFrom(0xD0), u"Third Party Pack")));
   CHECK(InstallDlcFromPackage(scratch.path() / "third.bin", user).ok());
-  const auto found = std::find_if(ListInstalledDlc(user).begin(), ListInstalledDlc(user).end(),
+  const std::vector<DlcInfo> installed = ListInstalledDlc(user);
+  const auto found = std::find_if(installed.begin(), installed.end(),
                                   [&](const DlcInfo& info) { return info.content_id == third; });
-  CHECK(found != ListInstalledDlc(user).end());
-  if (found != ListInstalledDlc(user).end()) {
+  CHECK(found != installed.end());
+  if (found != installed.end()) {
     CHECK(found->verified);
     CHECK(found->character == DlcCharacter::kUnknown);
   }
