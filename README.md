@@ -4,7 +4,7 @@
 
 ### Hard Corps: Uprising running natively on Windows, and experimentally on Linux and Steam Deck, through static recompilation, with the TRG launcher and modern PC options.
 
-[![Latest release](https://img.shields.io/github/v/release/saulob/hard-corps-uprising-recompiled?style=for-the-badge&label=release&color=d32f2f&labelColor=07101f&include_prereleases)](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/saulob/hard-corps-uprising-recompiled?style=for-the-badge&label=release&color=99db2e&labelColor=07101f&include_prereleases)](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/saulob/hard-corps-uprising-recompiled/total?style=for-the-badge&color=2e7d32&labelColor=07101f)](https://github.com/saulob/hard-corps-uprising-recompiled/releases)
 ![Platform](https://img.shields.io/badge/platforms-Windows%20x64%20%7C%20Linux%20x86__64%20(experimental)-00acc1?style=for-the-badge&labelColor=07101f)
 
@@ -32,7 +32,7 @@ The launcher checks the Title ID and content type when you pick the package, and
 
 ## Installing
 
-1. Download **HardCorpsUprising-v0.2.0-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
+1. Download **HardCorpsUprising-v0.3.0-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
 2. Run **hard_corps_uprising.exe**. The launcher opens.
 3. On the **Play** page click **Install from package...** and pick your package. It is one file with a long hexadecimal name and no extension. On an Xbox 360 drive it is in `Content\0000000000000000\58410A18\000D0000\`.
 4. Wait until **Ready to play** appears. The game files (about 1 GB) are copied into the `game` folder next to the program. The package file itself is not copied there.
@@ -47,7 +47,7 @@ The launcher checks the Title ID and content type when you pick the package, and
 The DLC characters are Harley Daniels, Sayuri and Leviathan. DLC is optional, and the port does not include or download DLC packages: you need your own Xbox 360 DLC package for each one.
 
 1. Install the game first.
-2. Open the **DLC** page, click **Install DLC...**, and pick your DLC package. The launcher checks that it is a Hard Corps: Uprising package (Title ID `58410A18`, content type `00000002`, Marketplace). It refuses the game package and other packages.
+2. Open the **DLC** page (directly after **Play**), click **Install DLC...**, and pick your DLC package. The launcher checks that it is a Hard Corps: Uprising package (Title ID `58410A18`, content type `00000002`, Marketplace). It refuses the game package and other packages.
 3. The **DLC** page shows each character as Installed or Not installed. **Remove** on an installed character removes only that package, after a confirmation. The game and the other DLC are not touched, and you can install the package again later from your own copy.
 
 Installed DLC is stored in your user data folder (`Documents\hard_corps_uprising` on Windows, or the `--user_data_root` folder), not in the game folder. Reinstalling the game does not remove it.
