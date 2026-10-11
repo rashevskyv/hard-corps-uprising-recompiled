@@ -1,0 +1,36 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Hard Corps: Uprising",
+  "system": "Xbox 360",
+  "type": "recomp",
+  "original": {
+    "revision": "0.0.0.3"
+  },
+  "project": "Hard Corps: Uprising PC Port",
+  "status": "released",
+  "targets": [
+    "Windows",
+    "Linux",
+    "Steam Deck"
+  ],
+  "toolchain": "Rexglue",
+  "approach": "Static recompilation of the Xbox 360 XBLA version to native PC code using ReXGlue",
+  "maintainers": [
+    {
+      "name": "saulob",
+      "link": "https://github.com/saulob"
+    }
+  ],
+  "links": [
+    {
+      "label": "Reddit announcement",
+      "url": "https://www.reddit.com/r/recomps/comments/1x2t1jo/hard_corps_uprising_recompiled_for_pc_native_port/"
+    }
+  ],
+  "tags": [
+    "XBLA",
+    "launcher",
+    "DLC"
+  ],
+  "notes": "Public native PC release with Windows and experimental Linux/Steam Deck builds, TRG launcher, rendering up to 4x resolution, local two-player support and optional DLC character support"
+}
