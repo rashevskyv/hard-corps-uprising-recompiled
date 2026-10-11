@@ -27,8 +27,18 @@ class HardCorpsUprisingApp : public rex::ReXApp {
  protected:
   void OnConfigurePaths(rex::PathConfig& paths) override {
     shipped_config_ = paths.config_path;
+    const std::filesystem::path port_folder = hcu::PortFolder();
     if (paths.game_data_root.empty()) {
-      paths.game_data_root = rex::filesystem::GetExecutableFolder() / "game";
+      paths.game_data_root = port_folder / "game";
+    }
+    // ReXGlue writes its logs beside the executable, which is read-only inside an AppImage.
+    if (port_folder != rex::filesystem::GetExecutableFolder() && rex::cvar::GetFlagByName("log_file").empty()) {
+      for (const auto& logs : {port_folder / "logs", paths.user_data_root / "logs"}) {
+        if (const std::filesystem::path file = hcu::NextLogFile(logs, "hard_corps_uprising"); !file.empty()) {
+          rex::cvar::SetFlagByName("log_file", hcu::Utf8(file));
+          break;
+        }
+      }
     }
   }
 
@@ -53,6 +63,9 @@ class HardCorpsUprisingApp : public rex::ReXApp {
       window()->SetTitle(kWindowTitle);
     }
     game_settings_.CaptureLateRegistered();
+    if (!show_launcher_ && hcu::ShiftHeldAfterWindowOpened()) {
+      show_launcher_ = true;
+    }
     if (!show_launcher_) {
       return defaults;
     }

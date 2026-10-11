@@ -34,7 +34,7 @@ const std::vector<std::string> kGameSettingKeys = {
     "window_width",
     "window_height",
     "monitor",
-    "d3d12_allow_variable_refresh_rate_and_tearing",
+    kTearingSetting,
     "present_letterbox",
     "resolution_scale",
     "swap_post_effect",
@@ -48,7 +48,7 @@ const std::vector<std::string> kWindowKeys = {
     "window_width",
     "window_height",
     "monitor",
-    "d3d12_allow_variable_refresh_rate_and_tearing",
+    kTearingSetting,
 };
 
 bool IsWindowKey(std::string_view key) {

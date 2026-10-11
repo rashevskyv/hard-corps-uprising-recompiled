@@ -369,9 +369,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     MonitorCombo();
     ui.Row("VSync", "On prevents tearing. Off allows it, for the lowest latency and G-Sync/FreeSync.");
     {
-      const bool tearing = settings_.GetBool("d3d12_allow_variable_refresh_rate_and_tearing", true);
+      const bool tearing = settings_.GetBool(kTearingSetting, true);
       if (int i = ui.Segmented("vsync", {"Off", "On"}, tearing ? 0 : 1); i >= 0) {
-        settings_.SetBool("d3d12_allow_variable_refresh_rate_and_tearing", i == 0);
+        settings_.SetBool(kTearingSetting, i == 0);
       }
     }
     ui.Row("Aspect ratio", "Letterbox keeps the game's 16:9 picture on any window shape; Stretch fills the window.");
@@ -396,7 +396,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     return monitors_.empty() ? nullptr : &monitors_.front();
   }
 
-  // window_width/height are logical pixels; Windows display scaling enlarges them.
+  // window_width/height are logical pixels; display scaling enlarges them.
   void WindowSizeCombo() {
     const int width = settings_.GetInt("window_width", 0);
     const int height = settings_.GetInt("window_height", 0);
@@ -539,25 +539,36 @@ void LoadLauncherFonts(ImFontAtlas* atlas, float density) {
   static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2010, 0x205E, 0};
   ImFontConfig config;
   config.RasterizerDensity = density;
-  const std::filesystem::path fonts = SystemFontsFolder();
-  auto load = [&](const char* file) -> ImFont* {
-    const std::filesystem::path path = fonts / file;
+  auto load = [&](const std::filesystem::path& path) -> ImFont* {
     std::error_code ec;
-    if (!std::filesystem::exists(path, ec)) {
+    if (path.empty() || !std::filesystem::exists(path, ec)) {
       return nullptr;
     }
     return atlas->AddFontFromFileTTF(Utf8(path).c_str(), g_fonts.size, &config, kRanges);
   };
-  g_fonts.regular = load("segoeui.ttf");
-  g_fonts.semibold = load("seguisb.ttf");
-  g_fonts.bold = load("segoeuib.ttf");
+  const UiFontFiles fonts = FindUiFonts();
+  g_fonts.regular = load(fonts.regular);
+  g_fonts.semibold = load(fonts.semibold);
+  g_fonts.bold = load(fonts.bold);
 }
 
+namespace {
+bool g_skipped_once = false;
+}  // namespace
+
 bool ShouldShowLauncher(const std::filesystem::path& game_dir) {
-  const bool skip_once = REXCVAR_GET(hcu_skip_launcher);
+  g_skipped_once = REXCVAR_GET(hcu_skip_launcher);
   rex::cvar::ResetToDefault("hcu_skip_launcher");
-  return LauncherWanted(CheckAndLogGameFiles(game_dir) == GameFiles::kReady, skip_once, trg::ShiftHeld(),
+  return LauncherWanted(CheckAndLogGameFiles(game_dir) == GameFiles::kReady, g_skipped_once, ShiftHeld(),
                         REXCVAR_GET(hcu_launcher));
+}
+
+bool ShiftHeldAfterWindowOpened() {
+#if defined(_WIN32)
+  return false;
+#else
+  return !g_skipped_once && ShiftHeld();
+#endif
 }
 
 namespace {

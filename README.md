@@ -2,11 +2,11 @@
 
 # Hard Corps: Uprising — PC Port
 
-### Hard Corps: Uprising running natively on Windows through static recompilation, with the TRG launcher and modern PC options.
+### Hard Corps: Uprising running natively on Windows, and experimentally on Linux and Steam Deck, through static recompilation, with the TRG launcher and modern PC options.
 
 [![Latest release](https://img.shields.io/github/v/release/saulob/hard-corps-uprising-recompiled?style=for-the-badge&label=release&color=d32f2f&labelColor=07101f&include_prereleases)](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/saulob/hard-corps-uprising-recompiled/total?style=for-the-badge&color=2e7d32&labelColor=07101f)](https://github.com/saulob/hard-corps-uprising-recompiled/releases)
-![Platform](https://img.shields.io/badge/platform-Windows%20x64-00acc1?style=for-the-badge&labelColor=07101f)
+![Platform](https://img.shields.io/badge/platforms-Windows%20x64%20%7C%20Linux%20x86__64%20(experimental)-00acc1?style=for-the-badge&labelColor=07101f)
 
 <sub>The original Xbox 360 game code, statically recompiled to native PC code with the <a href="https://github.com/rexglue/rexglue-sdk">ReXGlue SDK</a>. <b>No game files included</b>: bring your own Hard Corps: Uprising Xbox Live Arcade package.</sub>
 
@@ -16,6 +16,7 @@
 
 - Windows 10 or 11, 64-bit, and a DirectX 12 graphics card
 - The latest Microsoft Visual C++ 2015-2022 Redistributable (x64). Most PCs already have it.
+- **Or** 64-bit Linux or a Steam Deck with a Vulkan driver (experimental, see [Linux and Steam Deck](#linux-and-steam-deck))
 - **Your own Hard Corps: Uprising Xbox Live Arcade package**, this exact game version:
 
 | | |
@@ -40,6 +41,16 @@ The launcher checks the Title ID when you pick the package, and checks `default.
 **No game files are included** in the release.
 
 **Reinstall from package...** repairs the game files and keeps your settings and saves.
+
+### Linux and Steam Deck
+
+**Experimental, not yet tested on real hardware.** This is a native Linux build (ReXGlue's Linux runtime with Vulkan), not Proton.
+
+1. Download **HardCorpsUprising-v…-linux-x86_64.AppImage** from the release and mark it executable (right-click > **Properties** > **Permissions** > **Is executable**, or `chmod +x`).
+2. Run it, then install your package from the **Play** page as above. The game files go in a `game` folder next to the AppImage.
+3. On a Steam Deck (intended flow, not yet tried on a Deck), do this in **Desktop Mode**, then add the AppImage with **Games > Add a Non-Steam Game to My Library** and play it from **Game Mode**.
+
+Settings and saves are in `~/.local/share/hard_corps_uprising`, logs in `logs` next to the AppImage. Requirements, known limits and building the AppImage are in [docs/linux.md](docs/linux.md).
 
 ### Windows SmartScreen
 
@@ -108,6 +119,8 @@ In an existing clone, run `git submodule update --init --recursive`.
 3. `.\tools\codegen.ps1` downloads the pinned ReXGlue SDK 0.10.0, checks `default.xex` and generates the C++ into `generated\`.
 4. `.\tools\build.ps1` builds `build\hard_corps_uprising.exe`. `.\tools\build.ps1 -Run` also starts it.
 5. `.\tools\package-release.ps1` makes the release ZIP in `dist\`. It publishes nothing.
+
+The Linux AppImage is built on Linux or WSL with `tools/package-linux.sh`, after the steps above have generated the C++. See [docs/linux.md](docs/linux.md).
 
 How the launcher, settings and installer work is described in [docs/launcher.md](docs/launcher.md). The other technical notes are in [docs/](docs/).
 

@@ -1,19 +1,35 @@
 #include "platform.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
+#if defined(_WIN32)
 #include <windows.h>
 #include <shellscalingapi.h>
 #include <xinput.h>
 
+#include "trg/platform.h"
+#else
+#include <fstream>
+
+#include <spawn.h>
+#include <unistd.h>
+
+#include <SDL3/SDL.h>
+#endif
+
+#include <fmt/format.h>
 #include <imgui.h>
 
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 
 namespace hcu {
 namespace {
+
+#if defined(_WIN32)
 
 BOOL CALLBACK AddMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM user) {
   MONITORINFO info{};
@@ -86,6 +102,76 @@ constexpr StickKey kStickKeys[] = {
     {ImGuiKey_GamepadLStickDown, false, -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, -32768},
 };
 
+#else
+
+struct ButtonKey {
+  ImGuiKey key;
+  SDL_GamepadButton button;
+};
+constexpr ButtonKey kButtonKeys[] = {
+    {ImGuiKey_GamepadStart, SDL_GAMEPAD_BUTTON_START},
+    {ImGuiKey_GamepadBack, SDL_GAMEPAD_BUTTON_BACK},
+    {ImGuiKey_GamepadFaceDown, SDL_GAMEPAD_BUTTON_SOUTH},
+    {ImGuiKey_GamepadFaceRight, SDL_GAMEPAD_BUTTON_EAST},
+    {ImGuiKey_GamepadFaceLeft, SDL_GAMEPAD_BUTTON_WEST},
+    {ImGuiKey_GamepadFaceUp, SDL_GAMEPAD_BUTTON_NORTH},
+    {ImGuiKey_GamepadDpadLeft, SDL_GAMEPAD_BUTTON_DPAD_LEFT},
+    {ImGuiKey_GamepadDpadRight, SDL_GAMEPAD_BUTTON_DPAD_RIGHT},
+    {ImGuiKey_GamepadDpadUp, SDL_GAMEPAD_BUTTON_DPAD_UP},
+    {ImGuiKey_GamepadDpadDown, SDL_GAMEPAD_BUTTON_DPAD_DOWN},
+};
+
+// The left stick dead zone XInput uses. SDL's Y axis points down.
+constexpr int kStickDeadZone = 7849;
+struct StickKey {
+  ImGuiKey key;
+  SDL_GamepadAxis axis;
+  int direction;
+};
+constexpr StickKey kStickKeys[] = {
+    {ImGuiKey_GamepadLStickLeft, SDL_GAMEPAD_AXIS_LEFTX, -1},
+    {ImGuiKey_GamepadLStickRight, SDL_GAMEPAD_AXIS_LEFTX, 1},
+    {ImGuiKey_GamepadLStickUp, SDL_GAMEPAD_AXIS_LEFTY, -1},
+    {ImGuiKey_GamepadLStickDown, SDL_GAMEPAD_AXIS_LEFTY, 1},
+};
+
+SDL_Gamepad* OpenFirstGamepad() {
+  int count = 0;
+  SDL_JoystickID* ids = SDL_GetGamepads(&count);
+  SDL_Gamepad* pad = ids && count > 0 ? SDL_OpenGamepad(ids[0]) : nullptr;
+  SDL_free(ids);
+  return pad;
+}
+
+struct FontFamily {
+  const char* regular;
+  const char* semibold;
+  const char* bold;
+};
+// The first family whose regular face exists wins.
+constexpr FontFamily kFontFamilies[] = {
+    {"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
+     "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"},
+    {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
+     "/usr/share/fonts/noto/NotoSans-Bold.ttf"},
+    {"/usr/share/fonts/google-noto/NotoSans-Regular.ttf", "/usr/share/fonts/google-noto/NotoSans-SemiBold.ttf",
+     "/usr/share/fonts/google-noto/NotoSans-Bold.ttf"},
+    {"/usr/share/fonts/truetype/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/NotoSans-SemiBold.ttf",
+     "/usr/share/fonts/truetype/NotoSans-Bold.ttf"},
+    {"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", nullptr, "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"},
+    {"/usr/share/fonts/TTF/DejaVuSans.ttf", nullptr, "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"},
+    {"/usr/share/fonts/dejavu/DejaVuSans.ttf", nullptr, "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"},
+    {"/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf", nullptr,
+     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf"},
+    {"/usr/share/fonts/truetype/DejaVuSans.ttf", nullptr, "/usr/share/fonts/truetype/DejaVuSans-Bold.ttf"},
+    {"/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", nullptr,
+     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"},
+    {"/usr/share/fonts/liberation/LiberationSans-Regular.ttf", nullptr,
+     "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"},
+};
+
+#endif
+
 }  // namespace
 
 std::string Utf8(const std::filesystem::path& path) {
@@ -97,11 +183,61 @@ std::filesystem::path PathFromUtf8(const std::string& utf8) {
   return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
 }
 
-std::filesystem::path SystemFontsFolder() {
+std::filesystem::path PortFolder() {
+#if !defined(_WIN32)
+  // An AppImage runs from a read-only mount that is gone once it exits.
+  if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) {
+    return std::filesystem::path(appimage).parent_path();
+  }
+#endif
+  return rex::filesystem::GetExecutableFolder();
+}
+
+std::filesystem::path NextLogFile(const std::filesystem::path& folder, std::string_view name) {
+  std::error_code ec;
+  std::filesystem::create_directories(folder, ec);
+  if (!std::filesystem::is_directory(folder, ec)) {
+    return {};
+  }
+  const std::string prefix = std::string(name) + "_";
+  int last = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
+    const std::string file = entry.path().filename().string();
+    if (file.starts_with(prefix) && file.ends_with(".log")) {
+      last = std::max(last, std::atoi(file.c_str() + prefix.size()));
+    }
+  }
+  return folder / fmt::format("{}{:03d}.log", prefix, last + 1);
+}
+
+UiFontFiles FindUiFonts() {
+#if defined(_WIN32)
   wchar_t windows[MAX_PATH];
   const UINT length = GetWindowsDirectoryW(windows, MAX_PATH);
-  return std::filesystem::path(length ? std::wstring(windows, length) : std::wstring(L"C:\\Windows")) / L"Fonts";
+  const std::filesystem::path fonts =
+      std::filesystem::path(length ? std::wstring(windows, length) : std::wstring(L"C:\\Windows")) / L"Fonts";
+  return {fonts / "segoeui.ttf", fonts / "seguisb.ttf", fonts / "segoeuib.ttf"};
+#else
+  for (const FontFamily& family : kFontFamilies) {
+    std::error_code ec;
+    if (std::filesystem::exists(family.regular, ec)) {
+      return {family.regular, family.semibold ? family.semibold : family.bold, family.bold};
+    }
+  }
+  return {};
+#endif
 }
+
+bool ShiftHeld() {
+#if defined(_WIN32)
+  return trg::ShiftHeld();
+#else
+  SDL_PumpEvents();
+  return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+#endif
+}
+
+#if defined(_WIN32)
 
 // SDL builds its display list the same way: the primary display, then EnumDisplayMonitors order.
 std::vector<MonitorInfo> ListMonitors() {
@@ -111,16 +247,53 @@ std::vector<MonitorInfo> ListMonitors() {
   return monitors;
 }
 
+#else
+
+// Sizes are SDL window coordinates, the units ReXGlue sizes its window in (logical size times the scale).
+std::vector<MonitorInfo> ListMonitors() {
+  std::vector<MonitorInfo> monitors;
+  int count = 0;
+  SDL_DisplayID* displays = SDL_GetDisplays(&count);
+  const SDL_DisplayID primary = SDL_GetPrimaryDisplay();
+  for (int i = 0; displays && i < count; ++i) {
+    MonitorInfo found;
+    SDL_Rect bounds{};
+    if (SDL_GetDisplayBounds(displays[i], &bounds)) {
+      found.left = bounds.x;
+      found.top = bounds.y;
+      found.width = found.work_width = bounds.w;
+      found.height = found.work_height = bounds.h;
+    }
+    SDL_Rect usable{};
+    if (SDL_GetDisplayUsableBounds(displays[i], &usable) && usable.w > 0 && usable.h > 0) {
+      found.work_width = usable.w;
+      found.work_height = usable.h;
+    }
+    if (const float scale = SDL_GetDisplayContentScale(displays[i]); scale > 0.0f) {
+      found.scale = scale;
+    }
+    found.primary = displays[i] == primary;
+    monitors.push_back(found);
+  }
+  SDL_free(displays);
+  return monitors;
+}
+
+#endif
+
 MonitorInfo MonitorForSetting(int monitor) {
   const std::vector<MonitorInfo> monitors = ListMonitors();
   if (monitors.empty()) {
     return {};
   }
-  if (monitor <= 1 || monitor > int(monitors.size())) {
-    return monitors.front();
+  if (monitor >= 1 && monitor <= int(monitors.size())) {
+    return monitors[size_t(monitor - 1)];
   }
-  return monitors[size_t(monitor - 1)];
+  const auto primary = std::find_if(monitors.begin(), monitors.end(), [](const MonitorInfo& m) { return m.primary; });
+  return primary != monitors.end() ? *primary : monitors.front();
 }
+
+#if defined(_WIN32)
 
 void CheckWindowDisplay(void* native_window, int monitor) {
   const HWND hwnd = static_cast<HWND>(native_window);
@@ -198,5 +371,97 @@ void LauncherGamepad::Release(ImGuiIO& io) {
   }
   pad_ = -1;
 }
+
+#else
+
+// ListMonitors is SDL's own display order here, so the monitor setting always names the right display.
+void CheckWindowDisplay(void*, int) {}
+
+bool RelaunchSelf(std::wstring_view extra_args) {
+  std::vector<std::string> args;
+  std::ifstream cmdline("/proc/self/cmdline", std::ios::binary);
+  for (std::string arg; std::getline(cmdline, arg, '\0');) {
+    args.push_back(arg);
+  }
+  std::string extra;
+  for (const wchar_t c : extra_args) {
+    extra += char(c);  // ASCII flags
+  }
+  args.push_back(extra);
+  // Inside an AppImage, start the AppImage again: this process's mount closes when it exits.
+  std::error_code ec;
+  const char* appimage = std::getenv("APPIMAGE");
+  const std::string exe =
+      appimage && *appimage ? std::string(appimage) : std::filesystem::read_symlink("/proc/self/exe", ec).string();
+  if (exe.empty() || args.size() < 2) {
+    REXLOG_ERROR("Relaunch failed: cannot read this process's command line");
+    return false;
+  }
+  args.front() = exe;
+  std::vector<char*> argv;
+  for (std::string& arg : args) {
+    argv.push_back(arg.data());
+  }
+  argv.push_back(nullptr);
+  pid_t pid = 0;
+  if (const int error = posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), environ); error != 0) {
+    REXLOG_ERROR("Relaunch failed ({})", error);
+    return false;
+  }
+  return true;
+}
+
+void LauncherGamepad::Update(ImGuiIO& io) {
+  SDL_Gamepad* pad = pad_ >= 0 ? SDL_GetGamepadFromID(SDL_JoystickID(pad_)) : nullptr;
+  if (!pad || !SDL_GamepadConnected(pad)) {
+    if (pad) {
+      SDL_CloseGamepad(pad);
+    }
+    pad_ = -1;
+    if (ImGui::GetTime() < next_scan_) {
+      return;
+    }
+    next_scan_ = ImGui::GetTime() + 1.0;
+    // Started here and quit in Release; SDL counts the starts, so the game's own input is unaffected.
+    if (!subsystem_ && !(subsystem_ = SDL_InitSubSystem(SDL_INIT_GAMEPAD))) {
+      return;
+    }
+    pad = OpenFirstGamepad();
+    if (!pad) {
+      return;
+    }
+    pad_ = int(SDL_GetGamepadID(pad));
+  }
+  io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+  for (const ButtonKey& b : kButtonKeys) {
+    io.AddKeyEvent(b.key, SDL_GetGamepadButton(pad, b.button));
+  }
+  for (const StickKey& s : kStickKeys) {
+    const int value = s.direction * int(SDL_GetGamepadAxis(pad, s.axis));
+    const float amount = std::clamp(float(value - kStickDeadZone) / float(32767 - kStickDeadZone), 0.0f, 1.0f);
+    io.AddKeyAnalogEvent(s.key, amount > 0.1f, amount);
+  }
+}
+
+void LauncherGamepad::Release(ImGuiIO& io) {
+  for (const ButtonKey& b : kButtonKeys) {
+    io.AddKeyEvent(b.key, false);
+  }
+  for (const StickKey& s : kStickKeys) {
+    io.AddKeyAnalogEvent(s.key, false, 0.0f);
+  }
+  if (pad_ >= 0) {
+    if (SDL_Gamepad* pad = SDL_GetGamepadFromID(SDL_JoystickID(pad_))) {
+      SDL_CloseGamepad(pad);
+    }
+  }
+  pad_ = -1;
+  if (subsystem_) {
+    SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+    subsystem_ = false;
+  }
+}
+
+#endif
 
 }  // namespace hcu
