@@ -104,10 +104,6 @@ std::optional<std::string> ConfigValue(const toml::table& table, std::string_vie
 
 }  // namespace
 
-std::filesystem::path PlayerSettingsPath(const std::filesystem::path& user_data_root) {
-  return user_data_root / "settings.toml";
-}
-
 // Runs before the file is parsed: ReXGlue rejects a whole TOML file that contains one bad value.
 void RepairLegacyPlayerSettings(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);

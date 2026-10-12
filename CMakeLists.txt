@@ -64,6 +64,7 @@ set(HCU_SOURCES
     src/platform.cpp
     src/settings.cpp
     src/stfs.cpp
+    src/user_data.cpp
     src/window_host.cpp
 )
 if(WIN32)
@@ -126,6 +127,16 @@ add_executable(hcu_live_tests EXCLUDE_FROM_ALL
 target_include_directories(hcu_live_tests PRIVATE src)
 target_include_directories(hcu_live_tests SYSTEM PRIVATE "${HCU_SDK_DIR}/include")
 target_compile_definitions(hcu_live_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# User data tests (portable root and migration), not part of the default build:
+# cmake --build <dir> --target hcu_user_data_tests
+add_executable(hcu_user_data_tests EXCLUDE_FROM_ALL
+    tests/user_data_tests.cpp
+    src/user_data.cpp
+    src/local_stats.cpp
+)
+target_include_directories(hcu_user_data_tests PRIVATE src)
+target_include_directories(hcu_user_data_tests SYSTEM PRIVATE "${HCU_SDK_DIR}/include" "${_trg_dir}/include")
 
 # Allocator stress test, not part of the default build: cmake --build <dir> --target hcu_physical_heap_stress
 add_executable(hcu_physical_heap_stress EXCLUDE_FROM_ALL tests/physical_heap_stress.cpp)

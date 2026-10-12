@@ -34,7 +34,7 @@ $RootFiles = @('hard_corps_uprising.exe', 'rexruntime.dll', 'rexgpu-xenos.dll', 
 $LicenseFiles = @('ReXGlue-LICENSE.txt', 'THIRD-PARTY-LICENSES.txt')
 # Names that mean game data, a package, saves, settings, caches or logs.
 $ForbiddenNames = @('default.xex', 'DataXENON', 'game', 'game-install-temp', 'game-install-backup', 'user_data',
-    'content', 'cache', 'logs', 'settings.toml', 'settings.toml.bak', 'ArcadeInfo.xml', 'nxeart', '58410A18')
+    'user_data.migrating', 'content', 'cache', 'logs', 'settings.toml', 'settings.toml.bak', 'ArcadeInfo.xml', 'nxeart', '58410A18')
 $ForbiddenPatterns = @('*.xex', '*.log', '*.dmp', '*.pdb', '*.xsh', '*.xpso', '*.bak', '*.tmp', '*.sav')
 
 # The repository folder, as text or UTF-16, in either slash style.

@@ -20,7 +20,7 @@ The pre-game launcher is [TRG Launcher](https://github.com/TekRantGaming/trg-lau
 | `<exe dir>/hard_corps_uprising.toml` | the build (copied from `config/`) | shipped defaults, never written by the launcher |
 | `<user data>/settings.toml` | the launcher | the player's choices, loaded last |
 
-- With `tools\build.ps1`, user data is `build\user_data`, which `-Clean` keeps.
+- Normally user data is the `user_data` folder next to the program ([user-data.md](user-data.md)). `tools\build.ps1 -Run` passes `--user_data_root`, which wins, so user data is `build\user_data` (kept by `-Clean`) and nothing migrates.
 - Launcher edits are pending in `hcu::GameSettings` until Save or Play. Save writes only the changed keys to `settings.toml`, through `trg::TextFileSettings`; comments and other lines are kept. A key whose cvar is not registered is refused rather than written.
 - Play is blocked, and does not save, while the game files are missing or invalid or an install is running.
 - Reset all settings puts the launcher's values back to the shipped ones, pending until Save or Play.
@@ -70,7 +70,7 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 
 ## Game files and install
 
-- **Game folder:** `--game_data_root`, else `game` next to the program (`HardCorpsUprisingApp::OnConfigurePaths`). Development builds pass `game\extracted`. The folder holds `default.xex`, `DataXENON\`, `ArcadeInfo.xml` and `nxeart`, and nothing the player makes. Settings, saves and the shader cache are in the user data folder (`Documents\hard_corps_uprising`, or `--user_data_root`); logs are in `logs` next to the program.
+- **Game folder:** `--game_data_root`, else `game` next to the program (`HardCorpsUprisingApp::OnConfigurePaths`). Development builds pass `game\extracted`. The folder holds `default.xex`, `DataXENON\`, `ArcadeInfo.xml` and `nxeart`, and nothing the player makes. Settings, saves and the shader cache are in the user data folder (`user_data` next to the program, or `--user_data_root`); logs are in `logs` next to the program.
 - **One readiness check:** `CheckGameFiles` (`src/game_files.cpp`) is used by the Play page, the install verification and the clean-start decision. Ready means `default.xex` is the supported build (12,955,648 bytes, CRC32 `3DF903B9`) and `DataXENON` exists. Missing and unsupported are separate states.
 - **Launcher visibility:** `LauncherWanted` (`src/launcher.h`) shows the launcher whenever the game files are not ready, whatever `hcu_launcher` or `--hcu_skip_launcher` say, so turning the launcher off cannot hide the only way to install the game. A relaunch after PLAY still skips it, because the files are ready then.
 - **Install from package** (`InstallFromPackage`, on a TRG `Task`, so the UI stays responsive): reads the STFS header and requires Title ID `58410A18`, reads and validates the file table, checks free space, extracts into `game-install-temp` next to the game folder, runs `CheckGameFiles` on it, and only then swaps it in (`game` becomes `game-install-backup`, the staging folder becomes `game`, the backup is deleted). A wrong package, damaged package, bad `default.xex`, write error or Cancel leaves the existing game untouched and removes the staging folder. A folder that holds other files is never replaced.

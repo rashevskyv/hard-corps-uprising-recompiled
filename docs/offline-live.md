@@ -24,7 +24,7 @@ The game has the network imports `NetDll_*` (sockets and XNet), but none of the 
 
 The game keeps no scores in its save: it submits each finished game to a leaderboard view with `XSessionWriteStats` and reads the boards back from Live. The port keeps what the game submits per user and view, and the game stays the judge: before it writes, it reads the stored result with `XUserReadStats` and compares, so only a result that beats it is submitted. A view the player never played has no row, which is what makes the first result count.
 
-A submission is the view's rating (the last 64-bit property, which ranks the player) and its columns (`col_<id>`, the low 16 bits of the property id). The rating is also a column, so a read that asks for column 1 gets it. The file is `<user_data_root>/58410A18/live/stats.toml`:
+A submission is the view's rating (the last 64-bit property, which ranks the player) and its columns (`col_<id>`, the low 16 bits of the property id). The rating is also a column, so a read that asks for column 1 gets it. The file is `<user_data_root>/58410A18/live/stats.toml` (`user_data` next to the program, see [user-data.md](user-data.md)):
 
 ```toml
 version = 1

@@ -23,6 +23,7 @@
 #include "notice_dialog.h"
 #include "platform.h"
 #include "settings.h"
+#include "user_data.h"
 #include "window_host.h"
 
 class HardCorpsUprisingApp : public rex::ReXApp {
@@ -42,6 +43,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     if (paths.game_data_root.empty()) {
       paths.game_data_root = port_folder / "game";
     }
+    ChooseUserData(paths, port_folder);
     // ReXGlue writes its logs beside the executable, which is read-only inside an AppImage.
     if (port_folder != rex::filesystem::GetExecutableFolder() && rex::cvar::GetFlagByName("log_file").empty()) {
       for (const auto& logs : {port_folder / "logs", paths.user_data_root / "logs"}) {
@@ -53,7 +55,15 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     }
   }
 
-  void OnPostInitLogging() override { hcu::LoadPlayerSettings(hcu::PlayerSettingsPath(user_data_root())); }
+  void OnPostInitLogging() override {
+    const hcu::UserDataMessage message = hcu::DescribeUserData(user_data_);
+    if (message.warning) {
+      REXLOG_WARN("{}", message.text);
+    } else {
+      REXLOG_INFO("{}", message.text);
+    }
+    hcu::LoadPlayerSettings(hcu::PlayerSettingsPath(user_data_root()));
+  }
 
   void OnConfigureFonts(ImFontAtlas* atlas) override {
     hcu::LoadLauncherFonts(atlas, window() ? float(window()->GetDpi()) / float(window()->GetMediumDpi()) : 1.0f);
@@ -104,7 +114,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     callbacks.quit = [this] { app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); }); };
     hcu::ShowLauncher(imgui_drawer(),
                       {defaults.game_data_root, defaults.user_data_root,
-                       hcu::PlayerSettingsPath(defaults.user_data_root), immediate_drawer()},
+                       hcu::PlayerSettingsPath(defaults.user_data_root), user_data_.outcome, immediate_drawer()},
                       game_settings_, std::move(callbacks));
     return std::nullopt;
   }
@@ -144,6 +154,18 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   }
 
  private:
+  // The cache folder ReXGlue derived from the system root follows the user data root unless it was set explicitly.
+  void ChooseUserData(rex::PathConfig& paths, const std::filesystem::path& port_folder) {
+    user_data_ = hcu::SelectUserData({port_folder, paths.user_data_root, !REXCVAR_GET(user_data_root).empty()});
+    if (user_data_.root == paths.user_data_root) {
+      return;
+    }
+    paths.user_data_root = user_data_.root;
+    if (REXCVAR_GET(cache_root).empty()) {
+      paths.cache_root = user_data_.root / "cache";
+    }
+  }
+
   void InstallLiveServices() {
     auto* kernel = runtime()->kernel_state();
     const auto* profile = kernel ? kernel->user_profile() : nullptr;
@@ -187,5 +209,6 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   hcu::AchievementsOverlay* achievements_ = nullptr;
   hcu::NoticeDialog* notice_ = nullptr;
   std::filesystem::path shipped_config_;
+  hcu::UserDataSelection user_data_;
   bool show_launcher_ = false;
 };

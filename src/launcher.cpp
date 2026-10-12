@@ -887,7 +887,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     if (!paths_.game_dir.empty()) {
       ui.FolderRow("Game files", "Where the game data is read from.", "Open game folder", Utf8(paths_.game_dir));
     }
-    ui.FolderRow("Saves and settings", "Your saves, the shader cache and settings.toml.", "Open data folder",
+    ui.FolderRow("Saves and settings", UserDataFolderHelp(paths_.user_data_outcome), "Open data folder",
                  Utf8(paths_.user_dir));
     if (ui.ButtonRow("Settings file", "Your launcher choices, as plain text. Loaded after hard_corps_uprising.toml.",
                      "Show settings file") &&

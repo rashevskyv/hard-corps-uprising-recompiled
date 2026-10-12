@@ -52,7 +52,7 @@ The DLC characters are Harley Daniels, Sayuri and Leviathan. DLC is optional, an
 2. Open the **DLC** page (directly after **Play**), click **Install DLC...**, and pick your DLC package. The launcher checks that it is a Hard Corps: Uprising package (Title ID `58410A18`, content type `00000002`, Marketplace). It refuses the game package and other packages.
 3. The **DLC** page shows each character as Installed or Not installed. **Remove** on an installed character removes only that package, after a confirmation. The game and the other DLC are not touched, and you can install the package again later from your own copy.
 
-Installed DLC is stored in your user data folder (`Documents\hard_corps_uprising` on Windows, or the `--user_data_root` folder), not in the game folder. Reinstalling the game does not remove it.
+Installed DLC is stored in the `user_data` folder next to the program (see [docs/user-data.md](docs/user-data.md)), not in the game folder. Reinstalling the game does not remove it.
 
 ### Linux and Steam Deck
 
@@ -70,7 +70,7 @@ Windows may warn the first time you run the program, because the release is not 
 
 ## The launcher
 
-The launcher opens before the game. Your choices are saved to `settings.toml` in `Documents\hard_corps_uprising`. To turn the launcher off, set **Show this launcher** to **Off** on the Play page. Hold **Shift** while starting to bring it back.
+The launcher opens before the game. Your choices are saved to `settings.toml` in the `user_data` folder next to the program. To turn the launcher off, set **Show this launcher** to **Off** on the Play page. Hold **Shift** while starting to bring it back.
 
 ### Play
 - **Install from package...** with the Title ID and game version checks, and **Reinstall from package...**

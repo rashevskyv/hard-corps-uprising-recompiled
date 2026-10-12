@@ -24,7 +24,9 @@ inline constexpr char kTearingSetting[] = "vulkan_allow_present_mode_immediate";
 #endif
 
 // The player's settings file, loaded over the shipped hard_corps_uprising.toml.
-std::filesystem::path PlayerSettingsPath(const std::filesystem::path& user_data_root);
+inline std::filesystem::path PlayerSettingsPath(const std::filesystem::path& user_data_root) {
+  return user_data_root / "settings.toml";
+}
 void LoadPlayerSettings(const std::filesystem::path& path);
 
 // Edits stay pending until Save() or Apply(), so nothing reaches the window while the launcher is open.
