@@ -3,6 +3,11 @@
   Builds build\hard_corps_uprising.exe with Visual Studio's clang++, lld-link,
   CMake and Ninja. Only -Run launches the game.
 
+.DESCRIPTION
+  First makes sure the patched ReXGlue runtime and GPU plugin in tools\rexglue match the baseline and
+  patches\rexglue-sdk, rebuilding them with build-patched-rexruntime.ps1 when they do not. After the build it
+  makes sure the DLLs next to the executable are the ones in tools\rexglue, and it never launches without that.
+
 .EXAMPLE
   .\tools\build.ps1              # incremental build only
   .\tools\build.ps1 -Clean       # clean configure and build
@@ -22,6 +27,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $Root = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'rexruntime-patch.ps1')
+$SdkRoot = Join-Path $Root 'tools\rexglue\win-amd64'
 $BuildDir = if (-not $BuildDir) { Join-Path $Root 'build' } elseif ([IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $Root $BuildDir }
 $GameData = Join-Path $Root 'game\extracted'
 $UserData = Join-Path $BuildDir 'user_data'
@@ -46,6 +53,22 @@ if (-not (Test-Path $Xex)) { throw "Missing $Xex (extract the XBLA package into 
 if ((Get-FileHash $Xex -Algorithm SHA256).Hash -ne $XexSha256) { throw "Unsupported $Xex (expected SHA-256 $XexSha256)" }
 if (-not (Test-Path (Join-Path $Root 'tools\rexglue\win-amd64\lib\cmake\rexglue'))) { throw 'Missing tools\rexglue (run tools\codegen.ps1 first)' }
 if (-not (Test-Path (Join-Path $Root 'generated\default\sources.cmake'))) { throw 'Missing generated\default (run tools\codegen.ps1 first)' }
+
+function Assert-RuntimeReady {
+    $problems = @(Test-StagedRuntime $SdkRoot $BuildDir $Config)
+    if ($Config -ne 'Debug') { $problems += @(Test-PatchedRuntime $SdkRoot) }
+    if (-not $problems.Count) { return }
+    Write-Host ''
+    Write-Host 'RUNTIME CHECK FAILED' -ForegroundColor Red
+    foreach ($problem in $problems) { Write-Host "  $problem" -ForegroundColor Red }
+    throw 'The files next to hard_corps_uprising.exe are not the current ReXGlue runtime and GPU plugin from tools\rexglue'
+}
+
+if ($Config -eq 'Debug') {
+    Write-Host 'ReXGlue patches: not applied to the Debug runtime (stock rexruntimed.dll and rexgpu-xenosd.dll)'
+} else {
+    Update-PatchedRuntime $SdkRoot $Jobs
+}
 
 $SavedEnv = [Environment]::GetEnvironmentVariables()
 try {
@@ -108,19 +131,22 @@ try {
     foreach ($name in $SavedEnv.Keys) { Set-Item "Env:$name" $SavedEnv[$name] }
 }
 
+Sync-StagedRuntime $SdkRoot $BuildDir $Config
 $suffix = @{ Debug = 'd'; RelWithDebInfo = 'rd'; Release = '' }[$Config]
-$required = @('hard_corps_uprising.exe', "rexruntime$suffix.dll", "rexgpu-xenos$suffix.dll", 'hard_corps_uprising.toml')
+$required = @('hard_corps_uprising.exe', 'hard_corps_uprising.toml') + (Get-RuntimeDllNames $Config)
 if ($Config -ne 'Release') { $required += "TracyClient$suffix.dll" }
 foreach ($file in $required) {
     $path = Join-Path $BuildDir $file
     if (-not (Test-Path $path)) { throw "Build output is missing $path" }
 }
+Assert-RuntimeReady
 
 Write-Host ''
 Write-Host '===================================================='
 Write-Host ' BUILD SUCCESSFUL'
 Write-Host '===================================================='
 Write-Host "  $Exe"
+Write-Host "  runtime: $((Get-RuntimeDllNames $Config) -join ', ') match tools\rexglue"
 Write-Host ''
 
 if (-not $Run -or $NoRun) { return }
@@ -131,6 +157,7 @@ if ($running) {
     return
 }
 
+Assert-RuntimeReady
 $gameArgs = @("--game_data_root=`"$GameData`"", "--user_data_root=`"$UserData`"")
 Write-Host 'Launching:'
 Write-Host "  $Exe $($gameArgs -join ' ')"

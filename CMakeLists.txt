@@ -84,6 +84,14 @@ rexglue_setup_target(hard_corps_uprising GPU_PLUGINS xenos)
 target_link_libraries(hard_corps_uprising PRIVATE trg::launcher)
 if(WIN32)
     target_link_libraries(hard_corps_uprising PRIVATE shcore)
+    # The SDK stages its DLLs only when the program links, so a rebuilt runtime or GPU plugin has to
+    # make it link again; tools/build.ps1 also checks the staged copies.
+    foreach(_sdk_dll rexruntime rexruntimed rexruntimerd rexgpu-xenos rexgpu-xenosd rexgpu-xenosrd)
+        if(EXISTS "${HCU_SDK_DIR}/bin/${_sdk_dll}.dll")
+            set_property(TARGET hard_corps_uprising APPEND PROPERTY LINK_DEPENDS
+                "${HCU_SDK_DIR}/bin/${_sdk_dll}.dll")
+        endif()
+    endforeach()
 else()
     # The SDK stages the runtime beside the program only on Windows and macOS; the RPATH is $ORIGIN.
     add_custom_command(TARGET hard_corps_uprising POST_BUILD

@@ -70,7 +70,7 @@ COMMIT="$(git -C "$SRC" rev-parse HEAD)"
 [ "$COMMIT" = "$SDK_COMMIT" ] || fail "$SRC is at $COMMIT; expected $SDK_TAG $SDK_COMMIT (delete the folder to fetch it again)"
 
 echo "== Patch"
-git -C "$SRC" checkout -- src tests
+git -C "$SRC" checkout -- src include tests
 git -C "$SRC" apply --check "$PATCH" || fail "$(basename "$PATCH") no longer applies to ReXGlue $SDK_TAG"
 git -C "$SRC" apply "$PATCH"
 

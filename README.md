@@ -165,9 +165,8 @@ In an existing clone, run `git submodule update --init --recursive`.
 1. Install Visual Studio with the C++ and LLVM/Clang components. `tools\build.ps1` expects Visual Studio 18 Community at its default location.
 2. Extract your package's files into `game\extracted` with an Xbox 360 STFS extractor, so that `game\extracted\default.xex` exists.
 3. `.\tools\codegen.ps1` downloads the pinned ReXGlue SDK 0.10.0, checks `default.xex` and generates the C++ into `generated\`.
-4. `.\tools\build-patched-rexruntime.ps1` builds ReXGlue's runtime from its v0.10.0 source with this project's one patch and installs it into `tools\rexglue`. It needs network access the first time. See [docs/rexglue-runtime-patch.md](docs/rexglue-runtime-patch.md).
-5. `.\tools\build.ps1` builds `build\hard_corps_uprising.exe`. `.\tools\build.ps1 -Run` also starts it.
-6. `.\tools\package-release.ps1` makes the release ZIP in `dist\`. It refuses to run without the patched runtime, and publishes nothing.
+4. `.\tools\build.ps1` builds `build\hard_corps_uprising.exe`. `.\tools\build.ps1 -Run` also starts it. It first checks that ReXGlue's runtime and Xenos GPU plugin in `tools\rexglue` were built from this project's patches (`patches\rexglue-sdk`) and rebuilds them from the v0.10.0 source when they were not (network access the first time), and afterwards that the DLLs next to the program are those files; it does not start the game otherwise. See [docs/rexglue-runtime-patch.md](docs/rexglue-runtime-patch.md).
+5. `.\tools\package-release.ps1` makes the release ZIP in `dist\`. It builds the same way, refuses to package a runtime that does not match the patches, and publishes nothing.
 
 The Linux AppImage is built on Linux or WSL with `tools/package-linux.sh`, after the steps above have generated the C++. See [docs/linux.md](docs/linux.md).
 

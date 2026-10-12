@@ -24,6 +24,7 @@
 #include "notice_dialog.h"
 #include "platform.h"
 #include "settings.h"
+#include "trg/game_helpers.h"
 #include "user_data.h"
 #include "window_host.h"
 
@@ -128,6 +129,9 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+#if defined(_WIN32)
+    REXLOG_INFO("Scheduling: {}", trg::TuneProcessScheduling());
+#endif
     AttachWindowHost(window(), app_context(), [] { return !hcu::ModalDialog::AnyOpen(); });
     if (window()) {
       hcu::CheckWindowDisplay(window()->GetNativeWindowHandle(), REXCVAR_GET(monitor));

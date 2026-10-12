@@ -1,0 +1,927 @@
+diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
+index af79b56..be98a7f 100644
+--- a/include/rex/graphics/d3d12/command_processor.h
++++ b/include/rex/graphics/d3d12/command_processor.h
+@@ -14,6 +14,7 @@
+ #include <algorithm>
+ #include <array>
+ #include <atomic>
++#include <chrono>
+ #include <deque>
+ #include <memory>
+ #include <optional>
+@@ -195,6 +196,27 @@ class D3D12CommandProcessor : public CommandProcessor {
+   // Returns the text to display in the GPU backend name in the window title.
+   std::string GetWindowTitleText() const;
+ 
++  // DEBUG_SAULO: GPU time spent in a section of the frame, measured with timestamp queries.
++  enum DebugSauloGpuCategory : uint8_t {
++    kDebugSauloResolve,
++    kDebugSauloTransfer,
++    kDebugSauloClear,
++    kDebugSauloDump,
++    kDebugSauloCategoryCount,
++  };
++  uint32_t DebugSauloGpuBegin(DebugSauloGpuCategory category);
++  void DebugSauloGpuEnd(uint32_t token);
++  class DebugSauloGpuScope {
++   public:
++    DebugSauloGpuScope(D3D12CommandProcessor& processor, DebugSauloGpuCategory category)
++        : processor_(processor), token_(processor.DebugSauloGpuBegin(category)) {}
++    ~DebugSauloGpuScope() { processor_.DebugSauloGpuEnd(token_); }
++
++   private:
++    D3D12CommandProcessor& processor_;
++    uint32_t token_;
++  };
++
+  protected:
+   bool SetupContext() override;
+   void ShutdownContext() override;
+@@ -213,6 +235,10 @@ class D3D12CommandProcessor : public CommandProcessor {
+   void OnPrimaryBufferEnd() override;
+   bool PollBackgroundWork() override;
+ 
++  // DEBUG_SAULO
++  void PrepareForWait() override;
++  void ReturnFromWait() override;
++
+   Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
+                      const uint32_t* host_address, uint32_t dword_count) override;
+ 
+@@ -467,6 +493,57 @@ class D3D12CommandProcessor : public CommandProcessor {
+ 
+   bool debug_markers_enabled_ = false;
+ 
++  // DEBUG_SAULO: GPU thread statistics, logged every kDebugSauloIntervalFrames swaps.
++  static constexpr uint64_t kDebugSauloIntervalFrames = 300;
++  struct DebugSauloStats {
++    std::chrono::steady_clock::time_point interval_start;
++    std::chrono::steady_clock::time_point wait_start;
++    uint64_t frames = 0;
++    uint64_t draws = 0;
++    uint64_t copies = 0;
++    uint64_t submissions = 0;
++    uint64_t primary_buffers = 0;
++    // Idle waits of the command thread and fence waits, the latter inside the former subtracted.
++    bool in_idle_wait = false;
++    uint64_t idle_ns = 0;
++    uint64_t idle_fence_wait_ns = 0;
++    uint64_t fence_wait_ns = 0;
++    uint64_t* IdleFenceWaitTotal() { return in_idle_wait ? &idle_fence_wait_ns : nullptr; }
++    uint64_t swap_ns = 0;
++    uint64_t occlusion_queries = 0;
++    uint64_t occlusion_syncs = 0;
++    uint64_t memexport_draws = 0;
++    uint64_t memexport_syncs = 0;
++    uint64_t gpu_frames = 0;
++    uint64_t gpu_frame_ticks = 0;
++    uint64_t gpu_section_ticks[kDebugSauloCategoryCount] = {};
++  } debug_saulo_;
++  void DebugSauloOnSwap();
++  void DebugSauloLogSetup();
++
++  // DEBUG_SAULO: per frame, timestamps are written into the slots of one ring entry and resolved at
++  // the swap; the results are read once the frame's last submission has completed.
++  static constexpr uint32_t kDebugSauloTimestampSlots = 1024;
++  static constexpr uint32_t kDebugSauloTimestampFrames = 4;
++  struct DebugSauloTimestampFrame {
++    uint32_t count = 0;
++    uint32_t end_mark = 0;
++    uint64_t submission = 0;
++    bool has_start = false;
++    uint8_t category[kDebugSauloTimestampSlots] = {};
++    uint16_t end_slot[kDebugSauloTimestampSlots] = {};
++  };
++  bool DebugSauloTimestampsInitialize();
++  void DebugSauloTimestampsShutdown();
++  void DebugSauloGpuFrameEnd();
++  void DebugSauloCollectTimestamps();
++  DebugSauloTimestampFrame debug_saulo_ts_frames_[kDebugSauloTimestampFrames];
++  uint32_t debug_saulo_ts_current_ = 0;
++  Microsoft::WRL::ComPtr<ID3D12QueryHeap> debug_saulo_ts_heap_;
++  Microsoft::WRL::ComPtr<ID3D12Resource> debug_saulo_ts_readback_;
++  const uint64_t* debug_saulo_ts_mapping_ = nullptr;
++  uint64_t debug_saulo_ts_frequency_ = 0;
++
+   // Viewport info caching - avoids redundant GetHostViewportInfo recalculation
+   // when viewport-affecting register state hasn't changed between draws.
+   struct ViewportCacheKey {
+diff --git a/include/rex/graphics/d3d12/render_target_cache.h b/include/rex/graphics/d3d12/render_target_cache.h
+index c9a9cf6..3dd51f7 100644
+--- a/include/rex/graphics/d3d12/render_target_cache.h
++++ b/include/rex/graphics/d3d12/render_target_cache.h
+@@ -104,6 +104,47 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   static DXGI_FORMAT GetDepthSRVDepthDXGIFormat(xenos::DepthRenderTargetFormat format);
+   static DXGI_FORMAT GetDepthSRVStencilDXGIFormat(xenos::DepthRenderTargetFormat format);
+ 
++  // DEBUG_SAULO: GPU passes issued since the command processor last cleared this. Pixels are host
++  // pixels, with the resolution scale applied.
++  struct DebugSauloStats {
++    uint64_t dump_dispatches = 0;
++    uint64_t depth_stores = 0;
++    uint64_t resolve_copies = 0;
++    // Ownership transfer draws, stencil bit draws included.
++    uint64_t transfer_draws = 0;
++    uint64_t transfer_draws_color = 0;
++    uint64_t transfer_draws_depth = 0;
++    uint64_t transfer_draws_stencil_bit = 0;
++    uint64_t transfer_pixels = 0;
++    uint64_t transfer_max_width = 0;
++    uint64_t transfer_max_height = 0;
++    // Draws by source kind -> destination kind: color->color, color->depth, depth->color,
++    // depth->depth.
++    uint64_t transfer_kind_draws[4] = {};
++    uint64_t transfer_same_base_draws = 0;
++    uint64_t transfer_draws_resolve_clear = 0;
++    // Draws that needed transfers, by primitive: rectangle list, quad list, triangle strip,
++    // triangle list, other.
++    uint64_t transfer_update_primitives[5] = {};
++    // Resolve clears and stencil clears before stencil bit transfers.
++    uint64_t clear_ops = 0;
++    uint64_t clear_pixels = 0;
++    uint64_t stencil_clear_pixels = 0;
++    // What the stencil tracking and the draw overwrite proofs save.
++    uint64_t stencil_draws_skipped = 0;
++    uint64_t stencil_pixels_skipped = 0;
++    uint64_t overwrite_checks = 0;
++    uint64_t overwrite_proofs = 0;
++    uint64_t overwrite_transfers_dropped = 0;
++    uint64_t overwrite_transfers_cut = 0;
++    uint64_t overwrite_pixels_saved = 0;
++  };
++  DebugSauloStats& debug_saulo_stats() { return debug_saulo_stats_; }
++  bool DebugSauloUsesStencilReferenceOutput() const { return use_stencil_reference_output_; }
++  DrawExtentEstimator::DebugSauloStats DebugSauloTakeEstimatorStats() {
++    return draw_extent_estimator().DebugSauloTakeStats();
++  }
++
+  protected:
+   uint32_t GetMaxRenderTargetWidth() const override { return D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION; }
+   uint32_t GetMaxRenderTargetHeight() const override {
+@@ -119,6 +160,11 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   void RequestPixelShaderInterlockBarrier() override;
+ 
+  private:
++  DebugSauloStats debug_saulo_stats_;  // DEBUG_SAULO
++  // DEBUG_SAULO: host pixels in the rectangles of a transfer into dest_key.
++  uint64_t DebugSauloGetTransferPixels(const Transfer& transfer, RenderTargetKey dest_key,
++                                       const Transfer::Rectangle* cutout) const;
++
+   enum class EdramBufferModificationStatus {
+     // The values are ordered by how strong the barrier conditions are.
+     // No uncommitted ROV/UAV writes.
+diff --git a/include/rex/graphics/d3d12/shared_memory.h b/include/rex/graphics/d3d12/shared_memory.h
+index 5100818..411fe15 100644
+--- a/include/rex/graphics/d3d12/shared_memory.h
++++ b/include/rex/graphics/d3d12/shared_memory.h
+@@ -81,7 +81,17 @@ class D3D12SharedMemory : public SharedMemory {
+ 
+   bool UploadRanges(const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) override;
+ 
++ public:
++  // DEBUG_SAULO: uploads done since the command processor last cleared this.
++  struct DebugSauloStats {
++    uint64_t upload_batches = 0;
++    uint64_t upload_bytes = 0;
++  };
++  DebugSauloStats& debug_saulo_stats() { return debug_saulo_stats_; }
++
+  private:
++  DebugSauloStats debug_saulo_stats_;  // DEBUG_SAULO
++
+   D3D12CommandProcessor& command_processor_;
+ 
+   // The 512 MB tiled buffer.
+diff --git a/include/rex/graphics/util/draw_extent_estimator.h b/include/rex/graphics/util/draw_extent_estimator.h
+index 1e99f36..8a686cd 100644
+--- a/include/rex/graphics/util/draw_extent_estimator.h
++++ b/include/rex/graphics/util/draw_extent_estimator.h
+@@ -12,6 +12,7 @@
+ 
+ #include <cstdint>
+ #include <optional>
++#include <utility>
+ 
+ #include <rex/graphics/pipeline/shader/interpreter.h>
+ #include <rex/graphics/pipeline/shader/shader.h>
+@@ -37,7 +38,17 @@ class DrawExtentEstimator {
+   bool GetAutoIndexedVertexPositions(const Shader& vertex_shader, uint32_t vertex_count,
+                                      float (*positions_out)[4]);
+ 
++  // DEBUG_SAULO: CPU vertex shader runs since the last call.
++  struct DebugSauloStats {
++    uint64_t max_y_estimates = 0;
++    uint64_t max_y_vertices = 0;
++    uint64_t position_runs = 0;
++  };
++  DebugSauloStats DebugSauloTakeStats() { return std::exchange(debug_saulo_stats_, {}); }
++
+  private:
++  DebugSauloStats debug_saulo_stats_;  // DEBUG_SAULO
++
+   class PositionExportSink : public ShaderInterpreter::ExportSink {
+    public:
+     void Export(ucode::ExportRegister export_register, const float* value,
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index 7bcf980..f791e4a 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -47,8 +47,40 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
+                     "Submit command list when PM4 primary buffer ends")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DECLARE(bool, execute_unclipped_draw_vs_on_cpu);  // DEBUG_SAULO
++
+ namespace rex::graphics::d3d12 {
+ 
++namespace {
++
++// DEBUG_SAULO
++uint64_t DebugSauloNsSince(std::chrono::steady_clock::time_point start) {
++  return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                      std::chrono::steady_clock::now() - start)
++                      .count());
++}
++
++// DEBUG_SAULO
++class DebugSauloScopedNs {
++ public:
++  explicit DebugSauloScopedNs(uint64_t& total, uint64_t* also_total = nullptr)
++      : total_(total), also_total_(also_total), start_(std::chrono::steady_clock::now()) {}
++  ~DebugSauloScopedNs() {
++    uint64_t ns = DebugSauloNsSince(start_);
++    total_ += ns;
++    if (also_total_) {
++      *also_total_ += ns;
++    }
++  }
++
++ private:
++  uint64_t& total_;
++  uint64_t* also_total_;
++  std::chrono::steady_clock::time_point start_;
++};
++
++}  // namespace
++
+ // Generated with `xb buildshaders`.
+ namespace shaders {
+ #include "../shaders/bytecode/d3d12_5_1/apply_gamma_pwl_cs.h"
+@@ -1619,6 +1651,8 @@ bool D3D12CommandProcessor::SetupContext() {
+   }
+ 
+   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
++  DebugSauloTimestampsInitialize();  // DEBUG_SAULO
++  DebugSauloLogSetup();              // DEBUG_SAULO
+ 
+   // Just not to expose uninitialized memory.
+   std::memset(&system_constants_, 0, sizeof(system_constants_));
+@@ -1629,6 +1663,7 @@ bool D3D12CommandProcessor::SetupContext() {
+ void D3D12CommandProcessor::ShutdownContext() {
+   AwaitAllQueueOperationsCompletion();
+   InvalidateAllVertexBufferResidency();
++  DebugSauloTimestampsShutdown();  // DEBUG_SAULO
+   ShutdownOcclusionQueryResources();
+ 
+   ui::d3d12::util::ReleaseAndNull(readback_buffer_);
+@@ -1894,6 +1929,8 @@ void D3D12CommandProcessor::OnGammaRampPWLValueWritten() {
+ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
+                                       uint32_t frontbuffer_height) {
+   SCOPE_profile_cpu_f("gpu");
++  DebugSauloOnSwap();  // DEBUG_SAULO
++  DebugSauloScopedNs debug_saulo_swap_timer(debug_saulo_.swap_ns);  // DEBUG_SAULO
+   vertex_buffers_in_sync_[0] = 0;
+   vertex_buffers_in_sync_[1] = 0;
+ 
+@@ -1910,6 +1947,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+     REXGPU_ERROR("IssueSwap: BeginSubmission failed");
+     return;
+   }
++  DebugSauloGpuFrameEnd();  // DEBUG_SAULO
+ 
+   // Obtain the actual swap source texture size (resolution-scaled if it's a
+   // resolve destination, or not otherwise).
+@@ -2257,6 +2295,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+ }
+ 
+ void D3D12CommandProcessor::OnPrimaryBufferEnd() {
++  ++debug_saulo_.primary_buffers;  // DEBUG_SAULO
+   if (ShouldEndSubmissionEarly()) {
+     EndSubmission(false);
+   }
+@@ -2295,6 +2334,274 @@ bool D3D12CommandProcessor::PollBackgroundWork() {
+          (submission_open_ && REXCVAR_GET(d3d12_submit_on_primary_buffer_end));
+ }
+ 
++// DEBUG_SAULO
++void D3D12CommandProcessor::PrepareForWait() {
++  debug_saulo_.in_idle_wait = true;
++  debug_saulo_.wait_start = std::chrono::steady_clock::now();
++}
++
++// DEBUG_SAULO
++void D3D12CommandProcessor::ReturnFromWait() {
++  debug_saulo_.in_idle_wait = false;
++  debug_saulo_.idle_ns += DebugSauloNsSince(debug_saulo_.wait_start);
++}
++
++// DEBUG_SAULO
++bool D3D12CommandProcessor::DebugSauloTimestampsInitialize() {
++  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
++  ID3D12Device* device = provider.GetDevice();
++  ID3D12CommandQueue* queue = provider.GetDirectQueue();
++  constexpr uint32_t kTotalSlots = kDebugSauloTimestampSlots * kDebugSauloTimestampFrames;
++  if (!device || !queue || FAILED(queue->GetTimestampFrequency(&debug_saulo_ts_frequency_)) ||
++      !debug_saulo_ts_frequency_) {
++    return false;
++  }
++  D3D12_QUERY_HEAP_DESC heap_desc = {};
++  heap_desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
++  heap_desc.Count = kTotalSlots;
++  D3D12_RESOURCE_DESC buffer_desc;
++  ui::d3d12::util::FillBufferResourceDesc(buffer_desc, sizeof(uint64_t) * kTotalSlots,
++                                          D3D12_RESOURCE_FLAG_NONE);
++  void* mapping = nullptr;
++  D3D12_RANGE read_range = {0, sizeof(uint64_t) * kTotalSlots};
++  if (FAILED(device->CreateQueryHeap(&heap_desc, IID_PPV_ARGS(&debug_saulo_ts_heap_))) ||
++      FAILED(device->CreateCommittedResource(
++          &ui::d3d12::util::kHeapPropertiesReadback, provider.GetHeapFlagCreateNotZeroed(),
++          &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
++          IID_PPV_ARGS(&debug_saulo_ts_readback_))) ||
++      FAILED(debug_saulo_ts_readback_->Map(0, &read_range, &mapping))) {
++    DebugSauloTimestampsShutdown();
++    return false;
++  }
++  debug_saulo_ts_mapping_ = reinterpret_cast<const uint64_t*>(mapping);
++  for (DebugSauloTimestampFrame& frame : debug_saulo_ts_frames_) {
++    frame = DebugSauloTimestampFrame{};
++  }
++  debug_saulo_ts_current_ = 0;
++  return true;
++}
++
++// DEBUG_SAULO
++void D3D12CommandProcessor::DebugSauloTimestampsShutdown() {
++  if (debug_saulo_ts_readback_ && debug_saulo_ts_mapping_) {
++    debug_saulo_ts_readback_->Unmap(0, nullptr);
++  }
++  debug_saulo_ts_mapping_ = nullptr;
++  debug_saulo_ts_readback_.Reset();
++  debug_saulo_ts_heap_.Reset();
++}
++
++// DEBUG_SAULO
++uint32_t D3D12CommandProcessor::DebugSauloGpuBegin(DebugSauloGpuCategory category) {
++  DebugSauloTimestampFrame& frame = debug_saulo_ts_frames_[debug_saulo_ts_current_];
++  if (!debug_saulo_ts_heap_ || !submission_open_ || frame.count + 4 > kDebugSauloTimestampSlots) {
++    return UINT32_MAX;
++  }
++  uint32_t slot = frame.count++;
++  frame.category[slot] = uint8_t(category);
++  frame.end_slot[slot] = 0;
++  deferred_command_list_.D3DEndQuery(debug_saulo_ts_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
++                                     debug_saulo_ts_current_ * kDebugSauloTimestampSlots + slot);
++  return slot;
++}
++
++// DEBUG_SAULO
++void D3D12CommandProcessor::DebugSauloGpuEnd(uint32_t token) {
++  DebugSauloTimestampFrame& frame = debug_saulo_ts_frames_[debug_saulo_ts_current_];
++  if (token == UINT32_MAX || !debug_saulo_ts_heap_ || !submission_open_ ||
++      frame.count + 2 > kDebugSauloTimestampSlots) {
++    return;
++  }
++  uint32_t slot = frame.count++;
++  frame.category[slot] = UINT8_MAX;
++  frame.end_slot[token] = uint16_t(slot);
++  deferred_command_list_.D3DEndQuery(debug_saulo_ts_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
++                                     debug_saulo_ts_current_ * kDebugSauloTimestampSlots + slot);
++}
++
++// DEBUG_SAULO: closes the frame being recorded and opens the next one, in the submission the swap
++// is recorded into.
++void D3D12CommandProcessor::DebugSauloGpuFrameEnd() {
++  if (!debug_saulo_ts_heap_ || !submission_open_) {
++    return;
++  }
++  DebugSauloTimestampFrame& frame = debug_saulo_ts_frames_[debug_saulo_ts_current_];
++  uint32_t frame_base = debug_saulo_ts_current_ * kDebugSauloTimestampSlots;
++  frame.end_mark = frame.count++;
++  frame.category[frame.end_mark] = UINT8_MAX;
++  deferred_command_list_.D3DEndQuery(debug_saulo_ts_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
++                                     frame_base + frame.end_mark);
++  deferred_command_list_.D3DResolveQueryData(
++      debug_saulo_ts_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, frame_base, frame.count,
++      debug_saulo_ts_readback_.Get(), sizeof(uint64_t) * frame_base);
++  frame.submission = submission_current_;
++
++  debug_saulo_ts_current_ = (debug_saulo_ts_current_ + 1) % kDebugSauloTimestampFrames;
++  DebugSauloTimestampFrame& next = debug_saulo_ts_frames_[debug_saulo_ts_current_];
++  next = DebugSauloTimestampFrame{};
++  next.has_start = true;
++  next.category[0] = UINT8_MAX;
++  next.count = 1;
++  deferred_command_list_.D3DEndQuery(debug_saulo_ts_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
++                                     debug_saulo_ts_current_ * kDebugSauloTimestampSlots);
++}
++
++// DEBUG_SAULO
++void D3D12CommandProcessor::DebugSauloCollectTimestamps() {
++  if (!debug_saulo_ts_mapping_) {
++    return;
++  }
++  for (uint32_t i = 0; i < kDebugSauloTimestampFrames; ++i) {
++    DebugSauloTimestampFrame& frame = debug_saulo_ts_frames_[i];
++    if (!frame.submission || submission_completed_ < frame.submission) {
++      continue;
++    }
++    const uint64_t* ticks = debug_saulo_ts_mapping_ + i * kDebugSauloTimestampSlots;
++    frame.submission = 0;
++    if (!frame.has_start || ticks[frame.end_mark] < ticks[0]) {
++      continue;
++    }
++    ++debug_saulo_.gpu_frames;
++    debug_saulo_.gpu_frame_ticks += ticks[frame.end_mark] - ticks[0];
++    for (uint32_t slot = 0; slot < frame.end_mark; ++slot) {
++      if (frame.category[slot] >= kDebugSauloCategoryCount || !frame.end_slot[slot] ||
++          ticks[frame.end_slot[slot]] < ticks[slot]) {
++        continue;
++      }
++      debug_saulo_.gpu_section_ticks[frame.category[slot]] +=
++          ticks[frame.end_slot[slot]] - ticks[slot];
++    }
++  }
++}
++
++// DEBUG_SAULO
++void D3D12CommandProcessor::DebugSauloLogSetup() {
++  REXGPU_INFO(
++      "[DEBUG_SAULO][GPU] diagnostics of patch 0006, one set of lines every {} frames | draw "
++      "resolution scale {}x{}, stencil reference output {}, native 2x MSAA {}, gamma render "
++      "targets as unorm16 {}, unclipped draw vertex shader on CPU {}, clear memory page state {}, "
++      "submit on primary buffer end {}",
++      kDebugSauloIntervalFrames, render_target_cache_->draw_resolution_scale_x(),
++      render_target_cache_->draw_resolution_scale_y(),
++      render_target_cache_->DebugSauloUsesStencilReferenceOutput(),
++      render_target_cache_->msaa_2x_supported(),
++      render_target_cache_->gamma_render_target_as_unorm16(),
++      REXCVAR_GET(execute_unclipped_draw_vs_on_cpu), REXCVAR_GET(clear_memory_page_state),
++      REXCVAR_GET(d3d12_submit_on_primary_buffer_end));
++}
++
++// DEBUG_SAULO
++void D3D12CommandProcessor::DebugSauloOnSwap() {
++  DebugSauloCollectTimestamps();
++  DebugSauloStats& stats = debug_saulo_;
++  auto now = std::chrono::steady_clock::now();
++  D3D12RenderTargetCache::DebugSauloStats rt_stats;
++  D3D12SharedMemory::DebugSauloStats shared_memory_stats;
++  DrawExtentEstimator::DebugSauloStats estimator_stats;
++  auto take_subsystem_stats = [&]() {
++    if (render_target_cache_) {
++      rt_stats = std::exchange(render_target_cache_->debug_saulo_stats(),
++                               D3D12RenderTargetCache::DebugSauloStats{});
++      estimator_stats = render_target_cache_->DebugSauloTakeEstimatorStats();
++    }
++    if (shared_memory_) {
++      shared_memory_stats = std::exchange(shared_memory_->debug_saulo_stats(),
++                                          D3D12SharedMemory::DebugSauloStats{});
++    }
++  };
++  if (stats.interval_start == std::chrono::steady_clock::time_point{}) {
++    // Everything before the first frame (the startup) belongs to no interval.
++    stats = DebugSauloStats{};
++    stats.interval_start = now;
++    take_subsystem_stats();
++    return;
++  }
++  if (++stats.frames < kDebugSauloIntervalFrames) {
++    return;
++  }
++  take_subsystem_stats();
++  double wall_ns = double(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                              now - stats.interval_start)
++                              .count());
++  double frames = double(stats.frames);
++  double idle_ns = double(stats.idle_ns - std::min(stats.idle_ns, stats.idle_fence_wait_ns));
++  double wait_ns = double(stats.fence_wait_ns);
++  double busy_ns = std::max(0.0, wall_ns - idle_ns - wait_ns);
++  double transfer_draws = double(rt_stats.transfer_draws);
++  REXGPU_INFO(
++      "[DEBUG_SAULO][GPU] {} frames, {:.1f} fps | per frame: {:.0f} draws, {:.1f} resolves, {:.1f} "
++      "submissions from {:.1f} primary buffers, swap {:.2f} ms | GPU thread: {:.0f}% idle, {:.0f}% "
++      "waiting for the GPU, {:.0f}% busy",
++      stats.frames, frames * 1e9 / wall_ns, double(stats.draws) / frames,
++      double(stats.copies) / frames, double(stats.submissions) / frames,
++      double(stats.primary_buffers) / frames, double(stats.swap_ns) / frames * 1e-6,
++      100.0 * idle_ns / wall_ns, 100.0 * wait_ns / wall_ns, 100.0 * busy_ns / wall_ns);
++  REXGPU_INFO(
++      "[DEBUG_SAULO][GPU] per frame: {:.1f} occlusion queries ({:.1f} blocking syncs), {:.1f} "
++      "memexport draws ({:.1f} blocking syncs), {:.1f} shared memory uploads ({:.2f} MB) | "
++      "extent estimator: {:.1f} vertex shader max Y runs ({:.0f} vertices), {:.1f} overwrite "
++      "position runs",
++      double(stats.occlusion_queries) / frames, double(stats.occlusion_syncs) / frames,
++      double(stats.memexport_draws) / frames, double(stats.memexport_syncs) / frames,
++      double(shared_memory_stats.upload_batches) / frames,
++      double(shared_memory_stats.upload_bytes) / frames / (1024.0 * 1024.0),
++      double(estimator_stats.max_y_estimates) / frames,
++      double(estimator_stats.max_y_vertices) / frames,
++      double(estimator_stats.position_runs) / frames);
++  REXGPU_INFO(
++      "[DEBUG_SAULO][GPU] ownership transfers per frame: {:.1f} draws ({:.1f} color, {:.1f} depth, "
++      "{:.1f} stencil bit), {:.2f} MP, {:.0f} KP per draw, largest rectangle {}x{} | {:.1f} "
++      "color->color, {:.1f} color->depth, {:.1f} depth->color, {:.1f} depth->depth, {:.1f} from "
++      "the same EDRAM base, {:.1f} for resolve clears | draws needing transfers: {:.1f} rectangle "
++      "list, {:.1f} quad list, {:.1f} triangle strip, {:.1f} triangle list, {:.1f} other",
++      double(rt_stats.transfer_draws) / frames, double(rt_stats.transfer_draws_color) / frames,
++      double(rt_stats.transfer_draws_depth) / frames,
++      double(rt_stats.transfer_draws_stencil_bit) / frames,
++      double(rt_stats.transfer_pixels) / frames * 1e-6,
++      transfer_draws ? double(rt_stats.transfer_pixels) / transfer_draws * 1e-3 : 0.0,
++      rt_stats.transfer_max_width, rt_stats.transfer_max_height,
++      double(rt_stats.transfer_kind_draws[0]) / frames,
++      double(rt_stats.transfer_kind_draws[1]) / frames,
++      double(rt_stats.transfer_kind_draws[2]) / frames,
++      double(rt_stats.transfer_kind_draws[3]) / frames,
++      double(rt_stats.transfer_same_base_draws) / frames,
++      double(rt_stats.transfer_draws_resolve_clear) / frames,
++      double(rt_stats.transfer_update_primitives[0]) / frames,
++      double(rt_stats.transfer_update_primitives[1]) / frames,
++      double(rt_stats.transfer_update_primitives[2]) / frames,
++      double(rt_stats.transfer_update_primitives[3]) / frames,
++      double(rt_stats.transfer_update_primitives[4]) / frames);
++  REXGPU_INFO(
++      "[DEBUG_SAULO][GPU] per frame: {:.1f} EDRAM dumps, {:.1f} depth stores, {:.1f} resolve "
++      "copies | {:.1f} resolve clears ({:.2f} MP), stencil clears {:.2f} MP | stencil bit draws "
++      "skipped {:.1f} ({:.2f} MP) | draw overwrite proofs: {:.1f} checked, {:.1f} proven, {:.1f} "
++      "transfers dropped, {:.1f} cut, {:.2f} MP saved",
++      double(rt_stats.dump_dispatches) / frames, double(rt_stats.depth_stores) / frames,
++      double(rt_stats.resolve_copies) / frames, double(rt_stats.clear_ops) / frames,
++      double(rt_stats.clear_pixels) / frames * 1e-6,
++      double(rt_stats.stencil_clear_pixels) / frames * 1e-6,
++      double(rt_stats.stencil_draws_skipped) / frames,
++      double(rt_stats.stencil_pixels_skipped) / frames * 1e-6,
++      double(rt_stats.overwrite_checks) / frames, double(rt_stats.overwrite_proofs) / frames,
++      double(rt_stats.overwrite_transfers_dropped) / frames,
++      double(rt_stats.overwrite_transfers_cut) / frames,
++      double(rt_stats.overwrite_pixels_saved) / frames * 1e-6);
++  if (stats.gpu_frames) {
++    double gpu_ms_per_tick = 1000.0 / double(debug_saulo_ts_frequency_) / double(stats.gpu_frames);
++    REXGPU_INFO(
++        "[DEBUG_SAULO][GPU] timeline over {} frames, per frame: {:.2f} ms total | resolves "
++        "(including their dumps and clears) {:.2f} ms, ownership transfers {:.2f} ms, ownership "
++        "clears {:.2f} ms, EDRAM dumps {:.2f} ms",
++        stats.gpu_frames, double(stats.gpu_frame_ticks) * gpu_ms_per_tick,
++        double(stats.gpu_section_ticks[kDebugSauloResolve]) * gpu_ms_per_tick,
++        double(stats.gpu_section_ticks[kDebugSauloTransfer]) * gpu_ms_per_tick,
++        double(stats.gpu_section_ticks[kDebugSauloClear]) * gpu_ms_per_tick,
++        double(stats.gpu_section_ticks[kDebugSauloDump]) * gpu_ms_per_tick);
++  }
++  stats = DebugSauloStats{};
++  stats.interval_start = now;
++}
++
+ Shader* D3D12CommandProcessor::LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
+                                           const uint32_t* host_address, uint32_t dword_count) {
+   return pipeline_cache_->LoadShader(shader_type, host_address, dword_count);
+@@ -2307,6 +2614,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+ 
++  ++debug_saulo_.draws;  // DEBUG_SAULO
+   ID3D12Device* device = GetD3D12Provider().GetDevice();
+   const RegisterFile& regs = *register_file_;
+ 
+@@ -2727,6 +3035,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+   }
+ 
+   if (memexport_used) {
++    ++debug_saulo_.memexport_draws;  // DEBUG_SAULO
+     // Make sure this memexporting draw is ordered with other work using shared
+     // memory as a UAV.
+     // TODO(Triang3l): Find some PM4 command that can be used for indication of
+@@ -2783,6 +3092,7 @@ bool D3D12CommandProcessor::IssueDraw_MemexportReadbackFullPath(uint32_t total_s
+     readback_buffer_offset += memexport_range.size_bytes;
+   }
+ 
++  ++debug_saulo_.memexport_syncs;  // DEBUG_SAULO
+   if (!AwaitAllQueueOperationsCompletion()) {
+     return true;
+   }
+@@ -2906,9 +3216,11 @@ bool D3D12CommandProcessor::IssueCopy() {
+ #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
++  ++debug_saulo_.copies;  // DEBUG_SAULO
+   if (!BeginSubmission(true)) {
+     return false;
+   }
++  DebugSauloGpuScope debug_saulo_gpu_scope(*this, kDebugSauloResolve);  // DEBUG_SAULO
+   ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
+   if (readback_mode == ReadbackResolveMode::kDisabled) {
+     uint32_t written_address, written_length;
+@@ -3150,7 +3462,11 @@ void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
+                     SUCCEEDED(queue_operations_since_submission_fence_->SetEventOnCompletion(
+                         fence_value, fence_completion_event_)))) {
+         PROFILE_CMD_BUFFER_STALL();
+-        WaitForSingleObject(fence_completion_event_, INFINITE);
++        {
++          DebugSauloScopedNs debug_saulo_wait_timer(
++              debug_saulo_.fence_wait_ns, debug_saulo_.IdleFenceWaitTotal());  // DEBUG_SAULO
++          WaitForSingleObject(fence_completion_event_, INFINITE);
++        }
+         queue_operations_done_since_submission_signal_ = false;
+       } else {
+         REXGPU_ERROR(
+@@ -3169,7 +3485,11 @@ void D3D12CommandProcessor::CheckSubmissionFence(uint64_t await_submission) {
+     if (SUCCEEDED(
+             submission_fence_->SetEventOnCompletion(await_submission, fence_completion_event_))) {
+       PROFILE_CMD_BUFFER_STALL();
+-      WaitForSingleObject(fence_completion_event_, INFINITE);
++      {
++        DebugSauloScopedNs debug_saulo_wait_timer(
++            debug_saulo_.fence_wait_ns, debug_saulo_.IdleFenceWaitTotal());  // DEBUG_SAULO
++        WaitForSingleObject(fence_completion_event_, INFINITE);
++      }
+       submission_completed_ = submission_fence_->GetCompletedValue();
+     }
+   }
+@@ -3463,6 +3783,7 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
+     command_list_->Close();
+     ID3D12CommandList* execute_command_lists[] = {command_list_};
+     direct_queue->ExecuteCommandLists(1, execute_command_lists);
++    ++debug_saulo_.submissions;  // DEBUG_SAULO
+     command_allocator_writable_first_->last_usage_submission = submission_current_;
+     if (command_allocator_submitted_last_) {
+       command_allocator_submitted_last_->next = command_allocator_writable_first_;
+@@ -4986,6 +5307,7 @@ bool D3D12CommandProcessor::EndGuestOcclusionQuery(uint32_t sample_count_address
+                      }),
+       pending_occlusion_queries_.end());
+   pending_occlusion_queries_.push_back({submission_current_, host_index, sample_count_address});
++  ++debug_saulo_.occlusion_queries;  // DEBUG_SAULO
+   return true;
+ }
+ 
+@@ -4996,6 +5318,7 @@ void D3D12CommandProcessor::CompleteOcclusionQueries(bool wait) {
+       if (!wait) {
+         return;
+       }
++      ++debug_saulo_.occlusion_syncs;  // DEBUG_SAULO
+       CheckSubmissionFence(submission);
+       if (submission_completed_ < submission) {
+         return;
+diff --git a/src/graphics/d3d12/render_target_cache.cpp b/src/graphics/d3d12/render_target_cache.cpp
+index 01f9d1c..025cfe0 100644
+--- a/src/graphics/d3d12/render_target_cache.cpp
++++ b/src/graphics/d3d12/render_target_cache.cpp
+@@ -1087,8 +1087,28 @@ bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
+             overwrite_rectangle, overwritten_depth_only);
+         // With the stencil written by the transfer shader, the depth can't be skipped alone.
+         overwritten_depth_only &= !use_stencil_reference_output_;
++        ++debug_saulo_stats_.overwrite_checks;  // DEBUG_SAULO
++        // DEBUG_SAULO
++        switch (register_file().Get<reg::VGT_DRAW_INITIATOR>().prim_type) {
++          case xenos::PrimitiveType::kRectangleList:
++            ++debug_saulo_stats_.transfer_update_primitives[0];
++            break;
++          case xenos::PrimitiveType::kQuadList:
++            ++debug_saulo_stats_.transfer_update_primitives[1];
++            break;
++          case xenos::PrimitiveType::kTriangleStrip:
++            ++debug_saulo_stats_.transfer_update_primitives[2];
++            break;
++          case xenos::PrimitiveType::kTriangleList:
++            ++debug_saulo_stats_.transfer_update_primitives[3];
++            break;
++          default:
++            ++debug_saulo_stats_.transfer_update_primitives[4];
++            break;
++        }
+       }
+       if (overwritten || overwritten_depth_only) {
++        ++debug_saulo_stats_.overwrite_proofs;  // DEBUG_SAULO
+         uint32_t cutout_render_targets = overwritten | uint32_t(overwritten_depth_only);
+         for (uint32_t i = 0; i < kRenderTargetCount; ++i) {
+           std::vector<Transfer>& kept_transfers = draw_overwrite_transfers_[i];
+@@ -1113,6 +1133,16 @@ bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
+                   GetTransferSourceStencilBits(transfer)))) {
+               kept_transfers.push_back(transfer);
+             }
++            // DEBUG_SAULO
++            uint64_t debug_saulo_full = DebugSauloGetTransferPixels(transfer, key, nullptr);
++            uint64_t debug_saulo_left =
++                DebugSauloGetTransferPixels(transfer, key, &overwrite_rectangle);
++            debug_saulo_stats_.overwrite_pixels_saved += debug_saulo_full - debug_saulo_left;
++            if (!debug_saulo_left) {
++              ++debug_saulo_stats_.overwrite_transfers_dropped;
++            } else if (debug_saulo_left < debug_saulo_full) {
++              ++debug_saulo_stats_.overwrite_transfers_cut;
++            }
+           }
+         }
+         PerformTransfersAndResolveClears(kRenderTargetCount, depth_and_color_render_targets,
+@@ -1345,6 +1375,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+           }
+           command_processor_.SetExternalPipeline(resolve_copy_pipelines_[size_t(copy_shader)]);
+           command_processor_.SubmitBarriers();
++          ++debug_saulo_stats_.resolve_copies;  // DEBUG_SAULO
+           command_list.D3DDispatch(copy_group_count_x, copy_group_count_y, 1);
+ 
+           // Order the resolve with other work using the destination as a UAV.
+@@ -3838,6 +3869,21 @@ ID3D12PipelineState* const* D3D12RenderTargetCache::GetOrCreateTransferPipelines
+   return pipelines;
+ }
+ 
++// DEBUG_SAULO
++uint64_t D3D12RenderTargetCache::DebugSauloGetTransferPixels(
++    const Transfer& transfer, RenderTargetKey dest_key, const Transfer::Rectangle* cutout) const {
++  Transfer::Rectangle rectangles[Transfer::kMaxRectanglesWithCutout];
++  uint32_t rectangle_count =
++      transfer.GetRectangles(dest_key.base_tiles, dest_key.GetPitchTiles(), dest_key.msaa_samples,
++                             dest_key.Is64bpp(), rectangles, cutout);
++  uint64_t pixels = 0;
++  for (uint32_t i = 0; i < rectangle_count; ++i) {
++    pixels += uint64_t(rectangles[i].width_pixels) * draw_resolution_scale_x() *
++              rectangles[i].height_pixels * draw_resolution_scale_y();
++  }
++  return pixels;
++}
++
+ uint32_t D3D12RenderTargetCache::GetDrawStencilBits(
+     reg::RB_DEPTHCONTROL normalized_depth_control) const {
+   if (!normalized_depth_control.stencil_enable) {
+@@ -3992,6 +4038,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+             &host_depth_store_rectangle_constant,
+             offsetof(HostDepthStoreConstants, rectangle) / sizeof(uint32_t));
+         command_processor_.SubmitBarriers();
++        ++debug_saulo_stats_.depth_stores;  // DEBUG_SAULO
+         command_list.D3DDispatch(group_count_x, group_count_y, 1);
+         MarkEdramBufferModified();
+       }
+@@ -4192,6 +4239,8 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+         dest_d3d12_rt.resource(), dest_d3d12_rt.SetResourceState(dest_state), dest_state);
+ 
+     if (!current_transfers.empty()) {
++      D3D12CommandProcessor::DebugSauloGpuScope debug_saulo_transfer_scope(
++          command_processor_, D3D12CommandProcessor::kDebugSauloTransfer);  // DEBUG_SAULO
+       are_current_command_list_render_targets_valid_ = false;
+       if (dest_rt_key.is_depth) {
+         D3D12_CPU_DESCRIPTOR_HANDLE dsv_handle = dest_d3d12_rt.descriptor_draw().GetHandle();
+@@ -4278,6 +4327,14 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+           uint32_t stencil_bits = 0;
+           if (j) {
+             stencil_bits = GetTransferSourceStencilBits(transfer);
++            // DEBUG_SAULO
++            if (stencil_bits != UINT8_MAX) {
++              uint32_t debug_saulo_skipped_bits = 8 - uint32_t(rex::bit_count(stencil_bits));
++              debug_saulo_stats_.stencil_draws_skipped += debug_saulo_skipped_bits;
++              debug_saulo_stats_.stencil_pixels_skipped +=
++                  DebugSauloGetTransferPixels(transfer, dest_rt_key, get_cutout(i, true)) *
++                  debug_saulo_skipped_bits;
++            }
+             if (!stencil_bits) {
+               continue;
+             }
+@@ -4336,6 +4393,10 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+             stencil_clear_rect_write_ptr->bottom =
+                 LONG((stencil_clear_rectangle.y_pixels + stencil_clear_rectangle.height_pixels) *
+                      draw_resolution_scale_y());
++            debug_saulo_stats_.stencil_clear_pixels +=
++                uint64_t(stencil_clear_rect_write_ptr->right - stencil_clear_rect_write_ptr->left) *
++                uint64_t(stencil_clear_rect_write_ptr->bottom -
++                         stencil_clear_rect_write_ptr->top);  // DEBUG_SAULO
+             ++stencil_clear_rect_write_ptr;
+           }
+         }
+@@ -4441,6 +4502,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+         if (!transfer_rectangle_write_ptr) {
+           continue;
+         }
++        uint64_t debug_saulo_invocation_pixels = 0;  // DEBUG_SAULO
+         for (auto it_merged = it_merged_first; it_merged <= it_merged_last; ++it_merged) {
+           Transfer::Rectangle transfer_invocation_rectangles[Transfer::kMaxRectanglesWithCutout];
+           uint32_t transfer_invocation_rectangle_count = it_merged->transfer.GetRectangles(
+@@ -4448,6 +4510,16 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+               transfer_invocation_rectangles, invocation_cutout);
+           for (uint32_t j = 0; j < transfer_invocation_rectangle_count; ++j) {
+             const Transfer::Rectangle& transfer_rectangle = transfer_invocation_rectangles[j];
++            // DEBUG_SAULO
++            uint64_t debug_saulo_width =
++                uint64_t(transfer_rectangle.width_pixels) * draw_resolution_scale_x();
++            uint64_t debug_saulo_height =
++                uint64_t(transfer_rectangle.height_pixels) * draw_resolution_scale_y();
++            debug_saulo_invocation_pixels += debug_saulo_width * debug_saulo_height;
++            debug_saulo_stats_.transfer_max_width =
++                std::max(debug_saulo_stats_.transfer_max_width, debug_saulo_width);
++            debug_saulo_stats_.transfer_max_height =
++                std::max(debug_saulo_stats_.transfer_max_height, debug_saulo_height);
+             float transfer_rectangle_x0 = -1.0f + transfer_rectangle.x_pixels * pixels_to_ndc_x;
+             float transfer_rectangle_y0 = 1.0f - transfer_rectangle.y_pixels * pixels_to_ndc_y;
+             float transfer_rectangle_x1 =
+@@ -4644,6 +4716,27 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+ 
+         // Draw the transfer rectangles.
+         command_processor_.SubmitBarriers();
++        {
++          // DEBUG_SAULO
++          uint32_t debug_saulo_draws =
++              is_stencil_bit ? uint32_t(rex::bit_count(transfer_invocation_first.stencil_bits)) : 1;
++          RenderTargetKey debug_saulo_source_key = source_d3d12_rt.key();
++          debug_saulo_stats_.transfer_draws += debug_saulo_draws;
++          uint64_t& debug_saulo_type_draws =
++              is_stencil_bit ? debug_saulo_stats_.transfer_draws_stencil_bit
++              : dest_rt_key.is_depth ? debug_saulo_stats_.transfer_draws_depth
++                                     : debug_saulo_stats_.transfer_draws_color;
++          debug_saulo_type_draws += debug_saulo_draws;
++          debug_saulo_stats_.transfer_pixels += debug_saulo_invocation_pixels * debug_saulo_draws;
++          if (resolve_clear_needed) {
++            debug_saulo_stats_.transfer_draws_resolve_clear += debug_saulo_draws;
++          }
++          debug_saulo_stats_.transfer_kind_draws[debug_saulo_source_key.is_depth * 2 +
++                                                 dest_rt_key.is_depth] += debug_saulo_draws;
++          if (debug_saulo_source_key.base_tiles == dest_rt_key.base_tiles) {
++            debug_saulo_stats_.transfer_same_base_draws += debug_saulo_draws;
++          }
++        }
+         if (is_stencil_bit) {
+           uint32_t stencil_bits_remaining = transfer_invocation_first.stencil_bits;
+           uint32_t j;
+@@ -4666,6 +4759,12 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
+ 
+     // Perform the clear.
+     if (resolve_clear_needed) {
++      D3D12CommandProcessor::DebugSauloGpuScope debug_saulo_clear_scope(
++          command_processor_, D3D12CommandProcessor::kDebugSauloClear);  // DEBUG_SAULO
++      ++debug_saulo_stats_.clear_ops;  // DEBUG_SAULO
++      // DEBUG_SAULO
++      debug_saulo_stats_.clear_pixels += uint64_t(clear_rect.right - clear_rect.left) *
++                                         uint64_t(clear_rect.bottom - clear_rect.top);
+       uint64_t clear_value = render_target_resolve_clear_values[i];
+       if (dest_rt_key.is_depth) {
+         uint32_t depth_guest_clear_value = (uint32_t(clear_value) >> 8) & 0xFFFFFF;
+@@ -5703,6 +5802,8 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
+   if (dump_rectangles_.empty()) {
+     return true;
+   }
++  D3D12CommandProcessor::DebugSauloGpuScope debug_saulo_gpu_scope(
++      command_processor_, D3D12CommandProcessor::kDebugSauloDump);  // DEBUG_SAULO
+ 
+   // Clear previously set temporary indices.
+   for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {
+@@ -5899,6 +6000,7 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
+         root_parameters_set |= kDumpRootParameterOffsetsBit;
+       }
+       command_processor_.SubmitBarriers();
++      ++debug_saulo_stats_.dump_dispatches;  // DEBUG_SAULO
+       // Processing 40 x 16 x scale samples per dispatch (a 32bpp tile in two
+       // dispatches at 1x1 scale, 64bpp in one dispatch).
+       command_list.D3DDispatch((dispatch.width_tiles * draw_resolution_scale_x())
+diff --git a/src/graphics/d3d12/shared_memory.cpp b/src/graphics/d3d12/shared_memory.cpp
+index a5c97a0..73ef174 100644
+--- a/src/graphics/d3d12/shared_memory.cpp
++++ b/src/graphics/d3d12/shared_memory.cpp
+@@ -308,6 +308,7 @@ bool D3D12SharedMemory::UploadRanges(
+   }
+   CommitUAVWritesAndTransitionBuffer(D3D12_RESOURCE_STATE_COPY_DEST);
+   command_processor_.SubmitBarriers();
++  ++debug_saulo_stats_.upload_batches;  // DEBUG_SAULO
+   auto& command_list = command_processor_.GetDeferredCommandList();
+   for (auto upload_range : upload_page_ranges) {
+     uint32_t upload_range_start = upload_range.first;
+@@ -324,6 +325,7 @@ bool D3D12SharedMemory::UploadRanges(
+         return false;
+       }
+       MakeRangeValid(upload_range_start << page_size_log2(), uint32_t(upload_buffer_size), false);
++      debug_saulo_stats_.upload_bytes += upload_buffer_size;  // DEBUG_SAULO
+       std::memcpy(upload_buffer_mapping,
+                   memory().TranslatePhysical(upload_range_start << page_size_log2()),
+                   upload_buffer_size);
+diff --git a/src/graphics/util/draw_extent_estimator.cpp b/src/graphics/util/draw_extent_estimator.cpp
+index fc6b8b3..61e88dd 100644
+--- a/src/graphics/util/draw_extent_estimator.cpp
++++ b/src/graphics/util/draw_extent_estimator.cpp
+@@ -122,6 +122,7 @@ bool DrawExtentEstimator::GetAutoIndexedVertexPositions(const Shader& vertex_sha
+   uint32_t min_index = regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx;
+   uint32_t max_index = regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx;
+ 
++  ++debug_saulo_stats_.position_runs;  // DEBUG_SAULO
+   shader_interpreter_.SetShader(vertex_shader);
+   PositionExportSink position_export_sink;
+   shader_interpreter_.SetExportSink(&position_export_sink);
+@@ -222,6 +223,7 @@ uint32_t DrawExtentEstimator::EstimateVertexMaxY(const Shader& vertex_shader) {
+ 
+   float max_y = -FLT_MAX;
+ 
++  ++debug_saulo_stats_.max_y_estimates;  // DEBUG_SAULO
+   shader_interpreter_.SetShader(vertex_shader);
+ 
+   PositionYExportSink position_y_export_sink;
+@@ -252,6 +254,7 @@ uint32_t DrawExtentEstimator::EstimateVertexMaxY(const Shader& vertex_shader) {
+ 
+     position_y_export_sink.Reset();
+ 
++    ++debug_saulo_stats_.max_y_vertices;  // DEBUG_SAULO
+     shader_interpreter_.temp_registers()[0] = float(vertex_index);
+     shader_interpreter_.Execute();
+ 
