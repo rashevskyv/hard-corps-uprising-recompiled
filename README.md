@@ -14,6 +14,16 @@
 
 <img width="1966" height="1179" alt="title_screen" src="https://github.com/user-attachments/assets/bff13f4f-3a4e-488d-8cf0-1b6cde1c0875" />
 
+## Features
+
+- **Native static recompilation**: the game's own code, not an emulator. Windows 10/11 x64, and an experimental Linux / Steam Deck AppImage.
+- **TRG launcher** with a game package installer, optional **DLC characters** (Harley Daniels, Sayuri, Leviathan) and graphics and display options.
+- **Cheats**: press **F10** in game for a cheat menu with Infinite Health, Infinite Lives, Rapid Fire, Jump Height 2x, Keep Weapons on Hit, Movement Speed 2x and Super Armor. Changes made in the menu last for the session.
+- **In-game FPS counter**: frame rate and frame time in the corner, enabled from the launcher and toggled with **F2**. The frame rate can also be shown in the window title, as a separate option.
+- **Offline achievements and local leaderboards**, with no Xbox Live connection.
+- **Portable user data**: saves, settings and player data are in a `user_data` folder beside the program.
+- **Window handling**: the launcher remembers its position, size, maximized and borderless-fullscreen state. **F11** toggles borderless fullscreen for the launcher and for the game, each independently. The mouse cursor hides after inactivity during focused fullscreen gameplay.
+
 ## What you need
 
 - Windows 10 or 11, 64-bit, and a DirectX 12 graphics card
@@ -34,7 +44,7 @@ The launcher checks the Title ID and content type when you pick the package, and
 
 ## Installing
 
-1. Download **HardCorpsUprising-v0.3.1-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
+1. Download **HardCorpsUprising-v0.3.2-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
 2. Run **hard_corps_uprising.exe**. The launcher opens.
 3. On the **Play** page click **Install from package...** and pick your package. It is one file with a long hexadecimal name and no extension. On an Xbox 360 drive it is in `Content\0000000000000000\58410A18\000D0000\`.
 4. Wait until **Ready to play** appears. The game files (about 1 GB) are copied into the `game` folder next to the program. The package file itself is not copied there.
@@ -56,13 +66,13 @@ Installed DLC is stored in the `user_data` folder next to the program (see [docs
 
 ### Linux and Steam Deck
 
-**Experimental, not yet tested on real hardware.** This is a native Linux build (ReXGlue's Linux runtime with Vulkan), not Proton.
+**Experimental.** This is a native Linux build (ReXGlue's Linux runtime with Vulkan), not Proton. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware.
 
 1. Download **HardCorpsUprising-v…-linux-x86_64.AppImage** from the release and mark it executable (right-click > **Properties** > **Permissions** > **Is executable**, or `chmod +x`).
 2. Run it, then install your package from the **Play** page as above. The game files go in a `game` folder next to the AppImage.
-3. On a Steam Deck (intended flow, not yet tried on a Deck), do this in **Desktop Mode**, then add the AppImage with **Games > Add a Non-Steam Game to My Library** and play it from **Game Mode**.
+3. On a Steam Deck, do this in **Desktop Mode**, then add the AppImage with **Games > Add a Non-Steam Game to My Library** and play it from **Game Mode**.
 
-Settings and saves are in `~/.local/share/hard_corps_uprising`, logs in `logs` next to the AppImage. Requirements, known limits and building the AppImage are in [docs/linux.md](docs/linux.md).
+Settings and saves are in the `user_data` folder, and logs in `logs`, both next to the AppImage. Requirements, known limits and building the AppImage are in [docs/linux.md](docs/linux.md).
 
 ### Windows SmartScreen
 
