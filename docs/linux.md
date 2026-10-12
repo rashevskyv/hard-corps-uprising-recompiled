@@ -1,7 +1,8 @@
 # Linux and Steam Deck
 
 > **Experimental.** The Linux build is a native x86_64 program, not a Windows build under Proton or Wine. It is
-> compiled and packaged, but it has not yet been played on a real Linux PC or Steam Deck. Reports are welcome.
+> compiled and packaged. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck
+> hardware. Reports are welcome.
 
 The Linux build uses the same code as the Windows build: ReXGlue SDK 0.10.0's Linux runtime, the Xenos GPU
 plugin's Vulkan backend, and the same TRG launcher. It ships as one AppImage, which is also the Steam Deck build.
@@ -57,7 +58,7 @@ Earlier versions used ReXGlue's own Linux location, `$XDG_DATA_HOME/hard_corps_u
 
 ## Known limits
 
-- Not tested on real hardware yet: rendering, audio, controllers and performance are unconfirmed.
+- Not broadly tested on real hardware: rendering, audio, controllers and performance are largely unconfirmed.
 - Holding **Shift** to bring the launcher back works only if the window gets keyboard focus while Shift is still
   held, because SDL cannot read the keyboard before the window has focus. Keep Shift held until the launcher appears.
 - The VSync setting maps to Vulkan's present mode: **Off** allows immediate presentation (tearing), **On** uses

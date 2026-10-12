@@ -71,6 +71,7 @@ release from the project's GitHub releases page, choose "More info", then
 PLAYING
 -------
 - F11 switches between Windowed and Borderless Fullscreen.
+- F10 opens the cheat menu. F2 shows or hides the frame counter.
 - Xbox controllers work without setup. Connect two for local 2-player.
 - The keyboard works too; the Controls page lists the keys.
 - Online multiplayer is not supported.
