@@ -13,6 +13,7 @@
 REXCVAR_DECLARE(bool, hcu_launcher);
 REXCVAR_DECLARE(bool, hcu_skip_launcher);
 REXCVAR_DECLARE(bool, hcu_show_fps);
+REXCVAR_DECLARE(bool, hcu_show_frame_counter);
 
 namespace hcu {
 

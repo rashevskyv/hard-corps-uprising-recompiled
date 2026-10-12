@@ -52,6 +52,7 @@ set(HCU_SOURCES
     src/achievements_overlay.cpp
     src/cheat_menu.cpp
     src/cheats.cpp
+    src/frame_counter.cpp
     src/game_files.cpp
     src/launcher.cpp
     src/launcher_achievements.cpp
@@ -116,6 +117,11 @@ target_include_directories(hcu_installer_tests PRIVATE src)
 add_executable(hcu_cheats_tests EXCLUDE_FROM_ALL tests/cheats_tests.cpp)
 target_include_directories(hcu_cheats_tests PRIVATE src)
 target_compile_definitions(hcu_cheats_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Frame counter tests, not part of the default build: cmake --build <dir> --target hcu_frame_counter_tests
+add_executable(hcu_frame_counter_tests EXCLUDE_FROM_ALL tests/frame_counter_tests.cpp)
+target_include_directories(hcu_frame_counter_tests PRIVATE src)
+target_compile_definitions(hcu_frame_counter_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 # Offline Live tests (stats store, leaderboard answers, guest buffers, overlay rules), not part of the default
 # build: cmake --build <dir> --target hcu_live_tests

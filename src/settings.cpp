@@ -24,6 +24,8 @@ REXCVAR_DEFINE_BOOL(hcu_launcher, true, "Hard Corps",
 REXCVAR_DEFINE_BOOL(hcu_skip_launcher, false, "Hard Corps",
                     "Skip the launcher once (set when the launcher restarts the game)");
 REXCVAR_DEFINE_BOOL(hcu_show_fps, true, "Hard Corps", "Show the frame rate in the window title");
+REXCVAR_DEFINE_BOOL(hcu_show_frame_counter, false, "Hard Corps",
+                    "Show the frame counter in the corner (F2 toggles it)");
 
 namespace hcu {
 namespace {
@@ -41,6 +43,7 @@ const std::vector<std::string> kGameSettingKeys = {
     "native_2x_msaa",
     "anisotropic_override",
     "hcu_show_fps",
+    "hcu_show_frame_counter",
     "mnk_mode",
     "hcu_cheat_health",
     "hcu_cheat_lives",

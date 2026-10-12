@@ -16,6 +16,7 @@
 
 #include "achievements_overlay.h"
 #include "cheat_menu.h"
+#include "frame_counter.h"
 #include "launcher.h"
 #include "live_fix.h"
 #include "local_stats.h"
@@ -126,6 +127,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     }
     if (window() && imgui_drawer()) {
       cheat_menu_.Attach(window(), imgui_drawer());
+      hcu::CreateFrameCounter(imgui_drawer());
       // Replaces ReXApp's own callback, which the menu's version repeats.
       if (auto* input = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
         input->SetActiveCallback([this] { return cheat_menu_.GameInputActive(); });

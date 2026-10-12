@@ -34,6 +34,8 @@ rex::ui::WindowedAppContext* g_app_context = nullptr;
 std::mutex g_sample_mutex;
 std::optional<Clock::time_point> g_sample_start;
 uint64_t g_sample_frames = 0;
+uint64_t g_total_frames = 0;
+GuestFrameStats g_stats;
 
 void ShowFps(double fps) {
   if (g_active.load(std::memory_order_relaxed)) {
@@ -53,11 +55,13 @@ void CountGuestFrame() {
     return;
   }
   ++g_sample_frames;
+  ++g_total_frames;
   const double elapsed = std::chrono::duration<double>(now - *g_sample_start).count();
   if (elapsed < kSampleSeconds) {
     return;
   }
   const double fps = g_sample_frames / elapsed;
+  g_stats = {fps, elapsed * 1000.0 / g_sample_frames, g_total_frames};
   g_sample_start = now;
   g_sample_frames = 0;
   g_app_context->CallInUIThread([fps] { ShowFps(fps); });
@@ -98,6 +102,11 @@ void AttachWindowHost(rex::ui::Window* window, rex::ui::WindowedAppContext& app_
 // The guest can end without the window receiving OnClosing.
 void DetachWindowHost() {
   g_active.store(false, std::memory_order_relaxed);
+}
+
+GuestFrameStats GetGuestFrameStats() {
+  std::lock_guard lock(g_sample_mutex);
+  return g_stats;
 }
 
 REX_EXTERN(__imp__sub_825520F8);

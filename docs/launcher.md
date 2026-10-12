@@ -97,6 +97,7 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 | | Multisampling | `native_2x_msaa` |
 | | Texture filtering | `anisotropic_override` |
 | Gameplay | Frame rate in title | `hcu_show_fps` |
+|  | Frame counter | `hcu_show_frame_counter` |
 | Cheats | Infinite Health | `hcu_cheat_health` |
 | | Infinite Lives | `hcu_cheat_lives` |
 | | Rapid Fire | `hcu_cheat_rapid_fire` |

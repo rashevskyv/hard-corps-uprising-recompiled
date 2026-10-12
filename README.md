@@ -96,6 +96,7 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 
 ### Gameplay
 - **Frame rate in title**: shows the frame rate in the window title, for example `Hard Corps: Uprising | FPS: 60.00`
+- **Frame counter**: shows the frame rate and frame time (`60 FPS  16.7 ms`) in the top-right corner, above the cheat menu. Hidden by default. Press **F2** while playing to show or hide it for the session; the saved setting is not changed.
 
 ### Cheats
 - **Infinite Health**: normal damage no longer lowers a player's health
@@ -112,7 +113,7 @@ Press **F10** while playing to open the cheat menu and change the cheats for the
 
 ### Achievements, leaderboards and download content
 Everything stays offline: there is no Xbox Live connection, Microsoft sign-in or online player.
-- **Achievements**: the menu items and **F7** open a list of the game's 12 achievements (200G) with their icons and gamerscore. B, Escape or F7 closes it. Unlocks show the usual notification and are kept between runs. The launcher's **Achievements** page shows the same list.
+- **Achievements**: the menu items and **F7** open a list of the game's 12 achievements (200G) with their icons and gamerscore. B, Escape, F7 or the X button closes it. Unlocks show the usual notification and are kept between runs. The launcher's **Achievements** page shows the same list.
 - **Leaderboards**: the main menu and pause menu items open the game's own Leaderboards screen with your own scores only. Finished games are kept in a local file on this PC. There are no Xbox Live rankings, online players or friends: the boards show your row, or nothing if you have not finished a game on that board. Arcade Mode single player is the board tested so far.
 - **Download Content**: shows a short note instead of the Xbox Marketplace. Extra characters are installed from the launcher's DLC page.
 
