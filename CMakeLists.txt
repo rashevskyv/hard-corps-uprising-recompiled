@@ -1,7 +1,7 @@
 # SDK boilerplate lives in generated/rexglue.cmake.
 
 cmake_minimum_required(VERSION 3.25)
-project(hard_corps_uprising VERSION 0.3.0 LANGUAGES C CXX)
+project(hard_corps_uprising VERSION 0.3.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -126,3 +126,16 @@ add_executable(hcu_live_tests EXCLUDE_FROM_ALL
 target_include_directories(hcu_live_tests PRIVATE src)
 target_include_directories(hcu_live_tests SYSTEM PRIVATE "${HCU_SDK_DIR}/include")
 target_compile_definitions(hcu_live_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Allocator stress test, not part of the default build: cmake --build <dir> --target hcu_physical_heap_stress
+add_executable(hcu_physical_heap_stress EXCLUDE_FROM_ALL tests/physical_heap_stress.cpp)
+target_link_libraries(hcu_physical_heap_stress PRIVATE rex::runtime)
+add_custom_command(TARGET hcu_physical_heap_stress POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:rex::runtime>"
+        "$<TARGET_FILE_DIR:hcu_physical_heap_stress>"
+    VERBATIM
+)
+if(NOT WIN32)
+    set_target_properties(hcu_physical_heap_stress PROPERTIES BUILD_RPATH "$ORIGIN")
+endif()

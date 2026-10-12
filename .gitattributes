@@ -5,3 +5,6 @@ hard_corps_uprising_manifest.toml text eol=lf
 *.sh text eol=lf
 packaging/linux/AppRun text eol=lf
 packaging/linux/*.desktop text eol=lf
+
+# The runtime patch is applied with git apply on both platforms.
+patches/rexglue-sdk/* text eol=lf
