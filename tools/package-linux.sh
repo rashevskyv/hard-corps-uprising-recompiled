@@ -5,8 +5,10 @@
 #   tools/package-linux.sh            incremental Release build, then package
 #   tools/package-linux.sh --clean    clean Release build first
 #
-# Needs clang-20, clang++-20, cmake 3.25+, ninja, rsync, wget or curl, unzip or python3, binutils and the
+# Needs clang-20, clang++-20, cmake 3.25+, ninja, rsync, git, wget or curl, unzip or python3, binutils and the
 # GCC 13+ C++ runtime. Release builds are made on Ubuntu 22.04: the AppImage needs the build machine's glibc.
+# The ReXGlue runtime is built from source with the project's patch (tools/build-patched-rexruntime.sh) the
+# first time, which also needs network access and the packages in docs/rexglue-runtime-patch.md.
 # Needs generated/default (tools/codegen.ps1) and game/extracted/default.xex: the build re-runs codegen
 # when its inputs look changed, and it never packages either of them.
 set -euo pipefail
@@ -95,6 +97,12 @@ if [ ! -x "$SDK/bin/rexglue" ]; then
 fi
 [ "$("$SDK/bin/rexglue" --version | tr -d '[:space:]')" = "$SDK_VERSION" ] || fail "tools/rexglue/linux-amd64 is not ReXGlue $SDK_VERSION"
 
+echo "== Patched ReXGlue runtime"
+if ! bash "$ROOT/tools/build-patched-rexruntime.sh" --check "$SDK" >/dev/null 2>&1; then
+  bash "$ROOT/tools/build-patched-rexruntime.sh" "$SDK" "$WORK/rexglue-sdk-src"
+fi
+bash "$ROOT/tools/build-patched-rexruntime.sh" --check "$SDK"
+
 echo "== Build ($PRESET)"
 BIN="$WORK/out/build/$PRESET"
 [ "$CLEAN" = 1 ] && rm -rf "$BIN"
@@ -102,9 +110,8 @@ BIN="$WORK/out/build/$PRESET"
 for f in hard_corps_uprising librexruntime.so librexgpu-xenos.so hard_corps_uprising.toml; do
   [ -f "$BIN/$f" ] || fail "build output is missing $f"
 done
-for f in librexruntime.so librexgpu-xenos.so; do
-  cmp -s "$BIN/$f" "$SDK/lib/$f" || fail "$f is not the ReXGlue SDK release file"
-done
+cmp -s "$BIN/librexruntime.so" "$SDK/lib/librexruntime.so" || fail "librexruntime.so is not the patched runtime"
+cmp -s "$BIN/librexgpu-xenos.so" "$SDK/lib/librexgpu-xenos.so" || fail "librexgpu-xenos.so is not the ReXGlue SDK release file"
 
 echo "== AppDir"
 APPDIR="$WORK/AppDir"
