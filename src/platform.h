@@ -1,9 +1,12 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "window_placement.h"
 
 struct ImGuiIO;
 
@@ -51,6 +54,27 @@ MonitorInfo MonitorForSetting(int monitor);
 
 // Logs when the window did not open on the display the monitor setting names.
 void CheckWindowDisplay(void* native_window, int monitor);
+
+// Display work areas in screen pixels.
+std::vector<Rect> WorkAreas();
+
+// The native window's state, or nothing when the handle is not a window.
+std::optional<WindowState> QueryWindowState(void* native_handle);
+
+// Puts the window at the placement: the restored rectangle first, then maximized when asked.
+void ApplyWindowPlacement(void* native_handle, const WindowPlacement& placement);
+
+struct PreShowResult {
+  WindowPlacement startup;  // where the window was created
+  WindowPlacement applied;
+};
+
+// Applies the plan to the next top-level window of this thread before it is first shown. Windows only: elsewhere
+// the launcher places the window once it exists.
+void InstallPreShowPlacement(const PreShowPlan& plan, const WindowPlacement& saved);
+
+// Set once the window has been shown; empty when no window was placed.
+std::optional<PreShowResult> TakePreShowResult();
 
 // Starts a new instance with this run's command line plus `extra_args`.
 bool RelaunchSelf(std::wstring_view extra_args);

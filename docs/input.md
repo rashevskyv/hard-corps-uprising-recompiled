@@ -53,7 +53,8 @@ Quick menu check: Enter, WASD, Shift + Arrow, Space, Backspace.
 ## Host shortcuts
 
 - **F10** opens and closes the cheat menu ([launcher.md](launcher.md#in-game-cheat-menu)). It is handled by a window input listener (`src/cheat_menu.cpp`) above the ImGui drawer, so a press of F10 (and of Escape while the menu is open) is consumed there. While the menu is open the game reads no keyboard or controller input. Auto-repeat is ignored.
-- **F11** toggles Windowed and Borderless Fullscreen. It is handled by a window input listener (`src/window_host.cpp`) above the app's listener, so it is not passed to the game or to the keyboard device. Auto-repeat is ignored. Details are in [display.md](display.md).
+- **F11** toggles Windowed and Borderless Fullscreen of the game window. In the launcher it toggles the launcher's own fullscreen. It is handled by a window input listener (`src/window_host.cpp`) above the app's listener, so it is not passed to the game or to the keyboard device. Auto-repeat is ignored. Details are in [display.md](display.md).
+- The mouse cursor hides after 5 seconds without movement in Borderless Fullscreen and returns when the mouse moves. It is handled in `src/window_host.cpp` and stays visible while an overlay (F10 menu, Achievements, notice) is open.
 
 ## Configuration
 

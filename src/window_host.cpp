@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -11,6 +12,7 @@
 
 #include <rex/hook.h>
 #include <rex/logging.h>
+#include <rex/ui/imgui_dialog.h>
 #include <rex/ui/ui_event.h>
 #include <rex/ui/virtual_key.h>
 #include <rex/ui/window.h>
@@ -30,6 +32,9 @@ using Clock = std::chrono::steady_clock;
 std::atomic<bool> g_active{false};
 rex::ui::Window* g_window = nullptr;
 rex::ui::WindowedAppContext* g_app_context = nullptr;
+std::function<bool()> g_gameplay_active;
+// UI thread only.
+CursorHider g_cursor;
 
 std::mutex g_sample_mutex;
 std::optional<Clock::time_point> g_sample_start;
@@ -67,9 +72,43 @@ void CountGuestFrame() {
   g_app_context->CallInUIThread([fps] { ShowFps(fps); });
 }
 
+void ApplyCursor(rex::ui::Window* window, bool gameplay) {
+  if (const auto visible = g_cursor.Update(gameplay, window->IsFullscreen(), window->HasFocus(),
+                                           CursorHider::Clock::now())) {
+    window->SetCursorVisibility(*visible ? rex::ui::Window::CursorVisibility::kVisible
+                                         : rex::ui::Window::CursorVisibility::kHidden);
+  }
+}
+
+void UpdateCursor() {
+  if (g_window && g_active.load(std::memory_order_relaxed)) {
+    ApplyCursor(g_window, g_gameplay_active && g_gameplay_active());
+  }
+}
+
+void RestoreCursor() {
+  if (g_window && g_active.load(std::memory_order_relaxed)) {
+    ApplyCursor(g_window, false);
+  }
+}
+
 class WindowHost final : public rex::ui::WindowListener, public rex::ui::WindowInputListener {
  public:
-  void OnClosing(rex::ui::UIEvent&) override { g_active.store(false, std::memory_order_relaxed); }
+  void OnClosing(rex::ui::UIEvent&) override {
+    RestoreCursor();
+    g_active.store(false, std::memory_order_relaxed);
+  }
+
+  void OnGotFocus(rex::ui::UISetupEvent&) override { UpdateCursor(); }
+  void OnLostFocus(rex::ui::UISetupEvent&) override { UpdateCursor(); }
+
+  void OnMouseMove(rex::ui::MouseEvent& e) override {
+    if (e.target() != g_window) {
+      return;
+    }
+    g_cursor.MouseMoved(CursorHider::Clock::now());
+    UpdateCursor();
+  }
 
   void OnKeyDown(rex::ui::KeyEvent& e) override {
     if (e.virtual_key() != rex::ui::VirtualKey::kF11 || e.target() != g_window) {
@@ -83,25 +122,43 @@ class WindowHost final : public rex::ui::WindowListener, public rex::ui::WindowI
     const bool fullscreen = !g_window->IsFullscreen();
     g_window->SetFullscreen(fullscreen);
     REXLOG_INFO("Window mode: {}", fullscreen ? "borderless fullscreen" : "windowed");
+    UpdateCursor();
   }
 };
 
 WindowHost window_host;
 
+// Dialogs are drawn on the UI thread every frame, which gives the idle timer a periodic check.
+class CursorTick final : public rex::ui::ImGuiDialog {
+ public:
+  explicit CursorTick(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
+
+ protected:
+  void OnDraw(ImGuiIO&) override { UpdateCursor(); }
+};
+
 }  // namespace
 
-void AttachWindowHost(rex::ui::Window* window, rex::ui::WindowedAppContext& app_context) {
+void AttachWindowHost(rex::ui::Window* window, rex::ui::WindowedAppContext& app_context,
+                      std::function<bool()> gameplay_active) {
   g_window = window;
   g_app_context = &app_context;
+  g_gameplay_active = std::move(gameplay_active);
   g_active.store(true, std::memory_order_relaxed);
   window->SetTitle(kWindowTitle);
   window->AddListener(&window_host);
   window->AddInputListener(&window_host, kWindowHostZOrder);
 }
 
+void CreateCursorTick(rex::ui::ImGuiDrawer* drawer) {
+  new CursorTick(drawer);  // retained by the drawer for the session
+}
+
 // The guest can end without the window receiving OnClosing.
 void DetachWindowHost() {
+  RestoreCursor();
   g_active.store(false, std::memory_order_relaxed);
+  g_gameplay_active = nullptr;
 }
 
 GuestFrameStats GetGuestFrameStats() {

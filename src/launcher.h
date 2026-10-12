@@ -30,6 +30,9 @@ struct LauncherCallbacks {
   std::function<bool()> window_changed;     // the saved window size, monitor or VSync needs a new window
   std::function<bool()> restart;            // starts a new process with the saved settings; false if it could not
   std::function<void()> quit;
+  std::function<void*()> window_handle;     // the native window the launcher is shown in
+  std::function<bool()> window_fullscreen;
+  std::function<void(bool)> set_window_fullscreen;  // the launcher's own temporary fullscreen
 };
 
 // `density` is the window's display scale, so text is rasterized for its real pixel size.

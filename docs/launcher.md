@@ -40,6 +40,12 @@ The launcher window and the game window are separate.
 | Display mode | Play. In the launcher's window when the window already matches, otherwise in the new window. |
 | Aspect ratio, graphics, frame counter, keyboard | Play, in the same window |
 
+### Window position
+
+The launcher reopens at the position and size it was closed with, and maximized if it was maximized. A maximized launcher keeps its previous normal size for when it is restored. The values are saved a moment after the window settles and again when the launcher closes, as `hcu_launcher_x`, `hcu_launcher_y`, `hcu_launcher_width`, `hcu_launcher_height` and `hcu_launcher_maximized` in `settings.toml` ([user-data.md](user-data.md)). Reset to defaults leaves them alone.
+
+If less than a small corner of the saved window lies on a connected display (for example a monitor was unplugged), the launcher opens in its default place instead; a saved maximized state is still applied. Displays left of or above the primary one are handled. On Windows the window is placed before it is first shown; on Linux right after it opens, and the desktop may ignore the position. **F11** in the launcher switches the launcher itself to borderless fullscreen and back, to the same window or maximized state. If the launcher is closed while in that fullscreen it reopens in it (`hcu_launcher_fullscreen`), and F11 returns to the saved window or maximized state. Playing leaves it for the game without changing that choice; only F11 does. The game window is not affected: it opens as the Window size and Monitor settings say, and Display mode is not part of the saved position.
+
 Why a restart: ReXGlue 0.10.0 has no API to resize or move an open window (its `window.h` lists resize as not implemented). The window's size and display are fixed when it is created. A window created with the game's size and display keeps the right Windowed size and position for F11.
 
 - Default game window: 853×480 logical, from `config/hard_corps_uprising.toml`. A value in `settings.toml` replaces it.

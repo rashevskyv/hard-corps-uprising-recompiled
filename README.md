@@ -82,7 +82,7 @@ The launcher opens before the game. Your choices are saved to `settings.toml` in
 
 ### Display
 - **Display mode**: Windowed or Borderless Fullscreen. Press **F11** while playing to switch between them.
-- **Window size** and **Monitor**
+- **Window size** and **Monitor**. The launcher reopens at its last position and size, maximized or in its own F11 fullscreen if it was. This is separate from the game's Display mode.
 - **VSync** on or off
 - **Aspect ratio**: Letterbox 16:9 keeps the game's picture on any window shape; Stretch fills the window
 

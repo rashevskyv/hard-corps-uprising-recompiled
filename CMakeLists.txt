@@ -123,6 +123,15 @@ add_executable(hcu_frame_counter_tests EXCLUDE_FROM_ALL tests/frame_counter_test
 target_include_directories(hcu_frame_counter_tests PRIVATE src)
 target_compile_definitions(hcu_frame_counter_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+# Cursor auto-hide tests, not part of the default build: cmake --build <dir> --target hcu_window_host_tests
+add_executable(hcu_window_host_tests EXCLUDE_FROM_ALL tests/window_host_tests.cpp)
+target_include_directories(hcu_window_host_tests PRIVATE src)
+
+# Launcher window placement tests, not part of the default build:
+# cmake --build <dir> --target hcu_window_placement_tests
+add_executable(hcu_window_placement_tests EXCLUDE_FROM_ALL tests/window_placement_tests.cpp)
+target_include_directories(hcu_window_placement_tests PRIVATE src)
+
 # Offline Live tests (stats store, leaderboard answers, guest buffers, overlay rules), not part of the default
 # build: cmake --build <dir> --target hcu_live_tests
 add_executable(hcu_live_tests EXCLUDE_FROM_ALL

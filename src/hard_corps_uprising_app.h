@@ -113,6 +113,13 @@ class HardCorpsUprisingApp : public rex::ReXApp {
       return true;
     };
     callbacks.quit = [this] { app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); }); };
+    callbacks.window_handle = [this] { return window() ? window()->GetNativeWindowHandle() : nullptr; };
+    callbacks.window_fullscreen = [this] { return window() && window()->IsFullscreen(); };
+    callbacks.set_window_fullscreen = [this](bool fullscreen) {
+      if (window()) {
+        window()->SetFullscreen(fullscreen);
+      }
+    };
     hcu::ShowLauncher(imgui_drawer(),
                       {defaults.game_data_root, defaults.user_data_root,
                        hcu::PlayerSettingsPath(defaults.user_data_root), user_data_.outcome, immediate_drawer()},
@@ -121,13 +128,14 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
-    AttachWindowHost(window(), app_context());
+    AttachWindowHost(window(), app_context(), [] { return !hcu::ModalDialog::AnyOpen(); });
     if (window()) {
       hcu::CheckWindowDisplay(window()->GetNativeWindowHandle(), REXCVAR_GET(monitor));
     }
     if (window() && imgui_drawer()) {
       cheat_menu_.Attach(window(), imgui_drawer());
       hcu::CreateFrameCounter(imgui_drawer());
+      CreateCursorTick(imgui_drawer());
       // Replaces ReXApp's own callback, which the menu's version repeats.
       if (auto* input = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
         input->SetActiveCallback([this] { return cheat_menu_.GameInputActive(); });

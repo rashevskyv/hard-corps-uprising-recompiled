@@ -142,6 +142,12 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
         monitors_(ListMonitors()) {
     dlc_ = ListInstalledDlc(paths_.user_dir);
     launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
+    if (WindowFullscreen()) {
+      restore_when_windowed_ = true;
+      RequestFullscreen(false);
+    } else {
+      StartInSavedState();
+    }
   }
 
  protected:
@@ -151,6 +157,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     }
     PollInstall();
     PollDlcTask();
+    TrackPlacement();
     if (!nav_taken_) {
       saved_nav_flags_ = io.ConfigFlags & kNavFlags;
       saved_has_gamepad_ = io.BackendFlags & ImGuiBackendFlags_HasGamepad;
@@ -158,7 +165,10 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       nav_taken_ = true;
     }
     gamepad_.Update(io);
-    if (starting_ && ImGui::GetTime() - play_started_ >= kPlayFeedbackSeconds) {
+    if (!starting_ && ImGui::IsKeyPressed(ImGuiKey_F11, false) && !fullscreen_gate_.Pending()) {
+      ToggleLauncherFullscreen();
+    }
+    if (starting_ && ImGui::GetTime() - play_started_ >= kPlayFeedbackSeconds && !LeavingFullscreen()) {
       StartGame();
       return;
     }
@@ -213,6 +223,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       launcher_->SetStatus("Could not start the game in a new window. Press Play to try again.", 8);
       return;
     }
+    RestoreStartupWindow();
     Finish(cb_.play);
   }
 
@@ -239,9 +250,111 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
  private:
   void Finish(std::function<void()> action) {
     done_ = true;
+    SavePlacement(placement_.Flush());
     Close();
     if (action) {
       action();
+    }
+  }
+
+  void* WindowHandle() const { return cb_.window_handle ? cb_.window_handle() : nullptr; }
+
+  bool WindowFullscreen() const { return cb_.window_fullscreen && cb_.window_fullscreen(); }
+
+  void StartInSavedState() {
+    RestorePlacement();
+    if (fullscreen_pref_.wanted()) {
+      RequestFullscreen(true);
+    }
+  }
+
+  void ToggleLauncherFullscreen() {
+    const bool fullscreen = !WindowFullscreen();
+    RequestFullscreen(fullscreen);
+    fullscreen_pref_.UserSet(fullscreen);
+    if (!settings_.SaveNow(LauncherFullscreenValues(fullscreen))) {
+      REXLOG_WARN("Could not save the launcher fullscreen state");
+    }
+  }
+
+  void RequestFullscreen(bool fullscreen) {
+    fullscreen_gate_.Request(fullscreen);
+    if (cb_.set_window_fullscreen) {
+      cb_.set_window_fullscreen(fullscreen);
+    }
+  }
+
+  // The game gets the window out of the launcher's temporary fullscreen.
+  bool LeavingFullscreen() {
+    if (!WindowFullscreen() || leave_gave_up_) {
+      return false;
+    }
+    if (!leave_requested_) {
+      leave_requested_ = true;
+      leave_started_ = ImGui::GetTime();
+      RequestFullscreen(false);
+    }
+    leave_gave_up_ = ImGui::GetTime() - leave_started_ >= FullscreenGate::kTimeoutSeconds;
+    return !leave_gave_up_;
+  }
+
+  void RestorePlacement() {
+    if (const auto placed = TakePreShowResult()) {
+      startup_ = placed->startup;
+      placement_ = PlacementTracker(placed->applied);
+      return;
+    }
+    void* window = WindowHandle();
+    const auto state = QueryWindowState(window);
+    if (!state || WindowFullscreen()) {
+      return;
+    }
+    const WindowPlacement saved = SavedLauncherPlacement();
+    const bool restorable = PlacementIsVisible(saved, WorkAreas());
+    startup_ = WindowPlacement{state->rect, state->maximized};
+    placement_ = PlacementTracker(restorable ? std::optional<WindowPlacement>(saved) : std::nullopt);
+    if (restorable) {
+      ApplyWindowPlacement(window, saved);
+    }
+  }
+
+  void TrackPlacement() {
+    const double now = ImGui::GetTime();
+    const FullscreenGate::Step step = fullscreen_gate_.Update(WindowFullscreen(), now);
+    if (restore_when_windowed_) {
+      if (!WindowFullscreen() && !fullscreen_gate_.Pending()) {
+        restore_when_windowed_ = false;
+        StartInSavedState();
+      }
+      return;
+    }
+    if (!startup_) {
+      return;
+    }
+    if (step.restore) {
+      if (const auto current = placement_.Current()) {
+        ApplyWindowPlacement(WindowHandle(), *current);
+      }
+    }
+    if (!step.observe) {
+      return;
+    }
+    if (const auto state = QueryWindowState(WindowHandle())) {
+      placement_.Observe(*state, WindowFullscreen(), now);
+      SavePlacement(placement_.TakeSettled(now));
+    }
+  }
+
+  void SavePlacement(const std::optional<WindowPlacement>& placement) {
+    if (placement && !settings_.SaveNow(PlacementValues(*placement))) {
+      REXLOG_WARN("Could not save the launcher window placement");
+    }
+  }
+
+  // The game keeps the window it was created with, not the launcher's saved placement.
+  void RestoreStartupWindow() {
+    if (startup_ && !WindowFullscreen()) {
+      ApplyWindowPlacement(WindowHandle(), *startup_);
     }
   }
 
@@ -918,6 +1031,14 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   ImGuiConfigFlags saved_nav_flags_ = 0;
   ImGuiBackendFlags saved_has_gamepad_ = 0;
   bool done_ = false;
+  std::optional<WindowPlacement> startup_;
+  PlacementTracker placement_;
+  FullscreenGate fullscreen_gate_;
+  LauncherFullscreenPreference fullscreen_pref_{SavedLauncherFullscreen()};
+  bool restore_when_windowed_ = false;
+  bool leave_requested_ = false;
+  bool leave_gave_up_ = false;
+  double leave_started_ = 0.0;
   std::string install_failure_;
   std::string install_failure_text_;
   std::shared_ptr<InstallOutcome> outcome_;
@@ -1003,6 +1124,8 @@ void PrepareLauncherWindow() {
   rex::cvar::SetFlagByName("window_height", std::to_string(height));
   // Monitor 0 lets SDL centre the window on the primary display, whatever the display order.
   rex::cvar::SetFlagByName("monitor", "0");
+  const WindowPlacement saved = SavedLauncherPlacement();
+  InstallPreShowPlacement(PlanPreShow(saved, WorkAreas()), saved);
 }
 
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, LauncherPaths paths, GameSettings& settings,
