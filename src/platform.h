@@ -24,6 +24,14 @@ struct UiFontFiles {
 };
 UiFontFiles FindUiFonts();
 
+// Gives the window the application icon. Windows takes it from the executable's resources already; on Linux SDL
+// does not, so the AppImage's icon is loaded.
+void ApplyWindowIcon();
+
+// Names the application to the Linux desktop: SDL uses it as the Wayland app_id and the X11 WM_CLASS class. It has to
+// be set before the window is created. A no-op on Windows.
+void SetApplicationId();
+
 // True while Shift is held. On Linux SDL only knows the keyboard once a window has focus.
 bool ShiftHeld();
 

@@ -44,6 +44,10 @@ download() {  # url file sha256
 
 VERSION="$(sed -nE 's/^[[:space:]]*project\([[:space:]]*hard_corps_uprising[[:space:]]+VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' "$ROOT/CMakeLists.txt")"
 [ -n "$VERSION" ] || fail "project VERSION not found in CMakeLists.txt"
+APP_ID="$(sed -nE 's/^[[:space:]]*constexpr char kApplicationId\[\] = "([^"]+)";.*/\1/p' "$ROOT/src/platform.cpp")"
+[[ "$APP_ID" =~ ^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$ ]] ||
+  fail "src/platform.cpp must declare kApplicationId exactly once, as a dotted name on one line (found: '$APP_ID')"
+[ -f "$ROOT/packaging/linux/$APP_ID.desktop" ] || fail "packaging/linux/$APP_ID.desktop is missing: the desktop file is named after kApplicationId"
 NAME="HardCorpsUprising-v$VERSION-linux-x86_64"
 echo "Hard Corps: Uprising $VERSION - Linux AppImage (local only)"
 
@@ -127,11 +131,22 @@ cp "$WORK/LICENSE" "$WORK/packaging/licenses/ReXGlue-LICENSE.txt" "$WORK/packagi
 CXX_COPYRIGHT=/usr/share/doc/libstdc++6/copyright
 [ -f "$CXX_COPYRIGHT" ] || fail "missing $CXX_COPYRIGHT (the license of the bundled C++ runtime)"
 cp "$CXX_COPYRIGHT" "$DOC/libstdc++-copyright.txt"
-cp "$WORK/packaging/linux/AppRun" "$WORK/packaging/linux/hard_corps_uprising.desktop" \
-  "$WORK/packaging/linux/hard_corps_uprising.svg" "$APPDIR/"
+cp "$WORK/packaging/linux/AppRun" "$WORK/packaging/linux/$APP_ID.desktop" "$APPDIR/"
+# The icon is the root file the .desktop names, the .DirIcon file managers show, and the theme the desktop integrates.
+ICONS="$WORK/packaging/icons"
+THEME="$APPDIR/usr/share/icons/hicolor"
+for size in 16 24 32 48 64 128 256 512; do
+  mkdir -p "$THEME/${size}x${size}/apps"
+  cp "$ICONS/app-icon-$size.png" "$THEME/${size}x${size}/apps/hard_corps_uprising.png"
+done
+mkdir -p "$THEME/scalable/apps"
+cp "$ICONS/app-icon.svg" "$THEME/scalable/apps/hard_corps_uprising.svg"
+cp "$ICONS/app-icon-256.png" "$APPDIR/hard_corps_uprising.png"
+cp "$ICONS/app-icon-256.png" "$APPDIR/.DirIcon"
 chmod 755 "$APPDIR/AppRun" "$APPDIR/usr/bin/hard_corps_uprising"
-chmod 644 "$APPDIR/"*.desktop "$APPDIR/"*.svg "$APPDIR/usr/bin/"*.so "$APPDIR/usr/bin/hard_corps_uprising.toml" \
-  "$APPDIR/usr/lib/"* "$DOC/"*
+chmod 644 "$APPDIR/"*.desktop "$APPDIR/"*.png "$APPDIR/.DirIcon" "$APPDIR/usr/bin/"*.so \
+  "$APPDIR/usr/bin/hard_corps_uprising.toml" "$APPDIR/usr/lib/"* "$DOC/"*
+find "$THEME" -type f -exec chmod 644 {} +
 
 echo "== Release check"
 problems=0
@@ -152,9 +167,10 @@ while IFS= read -r -d '' item; do
     [ "$(head -c 2 "$item")" = MZ ] && problem "Windows binary: $rel"
   fi
 done < <(find "$APPDIR" -mindepth 1 -print0)
-EXPECTED="AppRun
-hard_corps_uprising.desktop
-hard_corps_uprising.svg
+EXPECTED=".DirIcon
+AppRun
+hard_corps_uprising.png
+$APP_ID.desktop
 usr/bin/hard_corps_uprising
 usr/bin/hard_corps_uprising.toml
 usr/bin/librexgpu-xenos.so
@@ -165,9 +181,20 @@ usr/share/doc/hard_corps_uprising/LICENSE
 usr/share/doc/hard_corps_uprising/ReXGlue-LICENSE.txt
 usr/share/doc/hard_corps_uprising/THIRD-PARTY-LICENSES-LINUX.txt
 usr/share/doc/hard_corps_uprising/THIRD-PARTY-LICENSES.txt
-usr/share/doc/hard_corps_uprising/libstdc++-copyright.txt"
+usr/share/doc/hard_corps_uprising/libstdc++-copyright.txt
+usr/share/icons/hicolor/128x128/apps/hard_corps_uprising.png
+usr/share/icons/hicolor/16x16/apps/hard_corps_uprising.png
+usr/share/icons/hicolor/24x24/apps/hard_corps_uprising.png
+usr/share/icons/hicolor/256x256/apps/hard_corps_uprising.png
+usr/share/icons/hicolor/32x32/apps/hard_corps_uprising.png
+usr/share/icons/hicolor/48x48/apps/hard_corps_uprising.png
+usr/share/icons/hicolor/512x512/apps/hard_corps_uprising.png
+usr/share/icons/hicolor/64x64/apps/hard_corps_uprising.png
+usr/share/icons/hicolor/scalable/apps/hard_corps_uprising.svg"
 ACTUAL="$(cd "$APPDIR" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
 [ "$ACTUAL" = "$EXPECTED" ] || { problem "unexpected AppDir contents:"; diff <(echo "$EXPECTED") <(echo "$ACTUAL") >&2 || true; }
+grep -qxF "StartupWMClass=$APP_ID" "$APPDIR/$APP_ID.desktop" || problem "StartupWMClass in $APP_ID.desktop is not $APP_ID"
+grep -qaF "$APP_ID" "$APPDIR/usr/bin/hard_corps_uprising" || problem "the program does not contain the application id $APP_ID"
 readelf -d "$APPDIR/usr/bin/hard_corps_uprising" | grep -q 'R.*PATH.*\[\$ORIGIN\]' || problem "the program's RPATH is not \$ORIGIN"
 missing="$(ldd "$APPDIR/usr/bin/hard_corps_uprising" | grep 'not found' || true)"
 [ -z "$missing" ] || problem "unresolved libraries: $missing"

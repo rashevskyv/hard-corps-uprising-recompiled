@@ -30,6 +30,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   using rex::ReXApp::ReXApp;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+    hcu::SetApplicationId();
     return std::unique_ptr<HardCorpsUprisingApp>(
         new HardCorpsUprisingApp(ctx, "hard_corps_uprising", PPCImageConfig));
   }
@@ -72,6 +73,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     if (window()) {
       window()->SetTitle(kWindowTitle);
     }
+    hcu::ApplyWindowIcon();
     game_settings_.CaptureLateRegistered();
     if (!show_launcher_ && hcu::ShiftHeldAfterWindowOpened()) {
       show_launcher_ = true;

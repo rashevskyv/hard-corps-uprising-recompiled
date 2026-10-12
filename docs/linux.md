@@ -49,6 +49,12 @@ left stick, A and B move through the launcher.
 The settings and save folder is ReXGlue's own Linux location. A build run outside an AppImage keeps `game` and
 `logs` next to the program instead. `--game_data_root` and `--user_data_root` override the folders, as on Windows.
 
+- **Window icon.** The program sets its window icon from the AppImage's own icon file, so it does not depend on the
+  AppImage being integrated into the desktop. A build run outside an AppImage keeps the desktop's default icon.
+- **Application ID.** The program tells the desktop it is `io.github.saulob.hard-corps-uprising` (the Wayland
+  app_id and the X11 window class). The `.desktop` file in `packaging/linux` has the same name and sets it as
+  `StartupWMClass`, and `tools/package-linux.sh` stops if they differ.
+
 ## Known limits
 
 - Not tested on real hardware yet: rendering, audio, controllers and performance are unconfirmed.

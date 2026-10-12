@@ -67,6 +67,12 @@ set(HCU_SOURCES
     src/window_host.cpp
 )
 if(WIN32)
+    # Resource 1 is the first icon in the executable: Explorer, and SDL's window class, use it.
+    enable_language(RC)
+    set(HCU_APP_RC "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/hard_corps_uprising.rc")
+    set_source_files_properties("${HCU_APP_RC}" PROPERTIES
+        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icons/app-icon.ico")
+    list(APPEND HCU_SOURCES "${HCU_APP_RC}")
     add_executable(hard_corps_uprising WIN32 ${HCU_SOURCES})
 else()
     add_executable(hard_corps_uprising ${HCU_SOURCES})

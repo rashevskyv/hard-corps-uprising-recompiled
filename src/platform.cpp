@@ -170,6 +170,18 @@ constexpr FontFamily kFontFamilies[] = {
      "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"},
 };
 
+
+constexpr char kApplicationId[] = "io.github.saulob.hard-corps-uprising";
+
+// ReXGlue's native window handle is empty here, and the launcher is its only window.
+SDL_Window* LauncherWindow() {
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  SDL_Window* window = windows && count > 0 ? windows[0] : nullptr;
+  SDL_free(windows);
+  return window;
+}
+
 #endif
 
 }  // namespace
@@ -295,6 +307,10 @@ MonitorInfo MonitorForSetting(int monitor) {
 
 #if defined(_WIN32)
 
+void ApplyWindowIcon() {}
+
+void SetApplicationId() {}
+
 void CheckWindowDisplay(void* native_window, int monitor) {
   const HWND hwnd = static_cast<HWND>(native_window);
   const MonitorInfo expected = MonitorForSetting(monitor);
@@ -373,6 +389,23 @@ void LauncherGamepad::Release(ImGuiIO& io) {
 }
 
 #else
+
+void SetApplicationId() {
+  SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, kApplicationId);
+}
+
+void ApplyWindowIcon() {
+  SDL_Window* window = LauncherWindow();
+  if (!window) {
+    return;
+  }
+  const std::filesystem::path icon_file = rex::filesystem::GetExecutableFolder() / ".." / "share" / "icons" /
+                                          "hicolor" / "256x256" / "apps" / "hard_corps_uprising.png";
+  if (SDL_Surface* icon = SDL_LoadPNG(Utf8(icon_file).c_str())) {
+    SDL_SetWindowIcon(window, icon);
+    SDL_DestroySurface(icon);
+  }
+}
 
 // ListMonitors is SDL's own display order here, so the monitor setting always names the right display.
 void CheckWindowDisplay(void*, int) {}
