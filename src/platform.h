@@ -1,9 +1,12 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "window_placement.h"
 
 struct ImGuiIO;
 
@@ -23,6 +26,14 @@ struct UiFontFiles {
   std::filesystem::path regular, semibold, bold;
 };
 UiFontFiles FindUiFonts();
+
+// Gives the window the application icon. Windows takes it from the executable's resources already; on Linux SDL
+// does not, so the AppImage's icon is loaded.
+void ApplyWindowIcon();
+
+// Names the application to the Linux desktop: SDL uses it as the Wayland app_id and the X11 WM_CLASS class. It has to
+// be set before the window is created. A no-op on Windows.
+void SetApplicationId();
 
 // True while Shift is held. On Linux SDL only knows the keyboard once a window has focus.
 bool ShiftHeld();
@@ -44,11 +55,32 @@ MonitorInfo MonitorForSetting(int monitor);
 // Logs when the window did not open on the display the monitor setting names.
 void CheckWindowDisplay(void* native_window, int monitor);
 
+// Display work areas in screen pixels.
+std::vector<Rect> WorkAreas();
+
+// The native window's state, or nothing when the handle is not a window.
+std::optional<WindowState> QueryWindowState(void* native_handle);
+
+// Puts the window at the placement: the restored rectangle first, then maximized when asked.
+void ApplyWindowPlacement(void* native_handle, const WindowPlacement& placement);
+
+struct PreShowResult {
+  WindowPlacement startup;  // where the window was created
+  WindowPlacement applied;
+};
+
+// Applies the plan to the next top-level window of this thread before it is first shown. Windows only: elsewhere
+// the launcher places the window once it exists.
+void InstallPreShowPlacement(const PreShowPlan& plan, const WindowPlacement& saved);
+
+// Set once the window has been shown; empty when no window was placed.
+std::optional<PreShowResult> TakePreShowResult();
+
 // Starts a new instance with this run's command line plus `extra_args`.
 bool RelaunchSelf(std::wstring_view extra_args);
 
-// Feeds an Xbox controller to Dear ImGui while the launcher is open: the
-// runtime's own input system only starts with the game.
+// Feeds an Xbox controller to Dear ImGui while the launcher or the in-game cheat menu is open. The runtime's
+// own input system only starts with the game, and the menu keeps the game from reading it.
 class LauncherGamepad {
  public:
   void Update(ImGuiIO& io);

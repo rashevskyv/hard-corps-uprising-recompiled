@@ -10,9 +10,18 @@
 
 #include "trg/settings.h"
 
+#include "window_placement.h"
+
 REXCVAR_DECLARE(bool, hcu_launcher);
 REXCVAR_DECLARE(bool, hcu_skip_launcher);
 REXCVAR_DECLARE(bool, hcu_show_fps);
+REXCVAR_DECLARE(bool, hcu_show_frame_counter);
+REXCVAR_DECLARE(int32_t, hcu_launcher_x);
+REXCVAR_DECLARE(int32_t, hcu_launcher_y);
+REXCVAR_DECLARE(int32_t, hcu_launcher_width);
+REXCVAR_DECLARE(int32_t, hcu_launcher_height);
+REXCVAR_DECLARE(bool, hcu_launcher_maximized);
+REXCVAR_DECLARE(bool, hcu_launcher_fullscreen);
 
 namespace hcu {
 
@@ -24,8 +33,14 @@ inline constexpr char kTearingSetting[] = "vulkan_allow_present_mode_immediate";
 #endif
 
 // The player's settings file, loaded over the shipped hard_corps_uprising.toml.
-std::filesystem::path PlayerSettingsPath(const std::filesystem::path& user_data_root);
+inline std::filesystem::path PlayerSettingsPath(const std::filesystem::path& user_data_root) {
+  return user_data_root / "settings.toml";
+}
 void LoadPlayerSettings(const std::filesystem::path& path);
+
+// The launcher window placement loaded from the player file.
+WindowPlacement SavedLauncherPlacement();
+bool SavedLauncherFullscreen();
 
 // Edits stay pending until Save() or Apply(), so nothing reaches the window while the launcher is open.
 class GameSettings final : public trg::SettingsStore {
@@ -45,6 +60,8 @@ class GameSettings final : public trg::SettingsStore {
   std::string Get(std::string_view key, std::string_view def = {}) const override;
   void Set(std::string_view key, std::string value) override;
   bool Save() override;
+  // Writes the given values at once. Pending edits stay pending, and Reset never touches them.
+  bool SaveNow(const SettingValues& values);
   void ResetToDefaults() override;
 
   // Sets the running game's cvars that differ from the pending values.

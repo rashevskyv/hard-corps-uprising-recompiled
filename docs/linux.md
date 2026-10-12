@@ -44,10 +44,16 @@ left stick, A and B move through the launcher.
 | --- | --- |
 | Game files | `game` next to the AppImage |
 | Logs | `logs` next to the AppImage (`~/.local/share/hard_corps_uprising/logs` if that folder is not writable) |
-| Settings, saves, shader cache | `$XDG_DATA_HOME/hard_corps_uprising`, normally `~/.local/share/hard_corps_uprising` |
+| Settings, saves, shader cache | `user_data` next to the AppImage ([user-data.md](user-data.md)) |
 
-The settings and save folder is ReXGlue's own Linux location. A build run outside an AppImage keeps `game` and
-`logs` next to the program instead. `--game_data_root` and `--user_data_root` override the folders, as on Windows.
+Earlier versions used ReXGlue's own Linux location, `$XDG_DATA_HOME/hard_corps_uprising`; its contents move into
+`user_data` at the first start. A build run outside an AppImage keeps `game`, `logs` and `user_data` next to the program instead. `--game_data_root` and `--user_data_root` override the folders, as on Windows.
+
+- **Window icon.** The program sets its window icon from the AppImage's own icon file, so it does not depend on the
+  AppImage being integrated into the desktop. A build run outside an AppImage keeps the desktop's default icon.
+- **Application ID.** The program tells the desktop it is `io.github.saulob.hard-corps-uprising` (the Wayland
+  app_id and the X11 window class). The `.desktop` file in `packaging/linux` has the same name and sets it as
+  `StartupWMClass`, and `tools/package-linux.sh` stops if they differ.
 
 ## Known limits
 

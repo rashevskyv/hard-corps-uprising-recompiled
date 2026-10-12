@@ -6,13 +6,25 @@
 #include <optional>
 
 #include <rex/filesystem.h>
+#include <rex/input/input_system.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
+#include <rex/runtime.h>
+#include <rex/system/kernel_state.h>
 #include <rex/ui/flags.h>
+#include <rex/ui/windowed_app_context.h>
 
+#include "achievements_overlay.h"
+#include "cheat_menu.h"
+#include "frame_counter.h"
 #include "launcher.h"
+#include "live_fix.h"
+#include "local_stats.h"
+#include "modal_dialog.h"
+#include "notice_dialog.h"
 #include "platform.h"
 #include "settings.h"
+#include "user_data.h"
 #include "window_host.h"
 
 class HardCorpsUprisingApp : public rex::ReXApp {
@@ -20,6 +32,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   using rex::ReXApp::ReXApp;
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(rex::ui::WindowedAppContext& ctx) {
+    hcu::SetApplicationId();
     return std::unique_ptr<HardCorpsUprisingApp>(
         new HardCorpsUprisingApp(ctx, "hard_corps_uprising", PPCImageConfig));
   }
@@ -31,6 +44,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     if (paths.game_data_root.empty()) {
       paths.game_data_root = port_folder / "game";
     }
+    ChooseUserData(paths, port_folder);
     // ReXGlue writes its logs beside the executable, which is read-only inside an AppImage.
     if (port_folder != rex::filesystem::GetExecutableFolder() && rex::cvar::GetFlagByName("log_file").empty()) {
       for (const auto& logs : {port_folder / "logs", paths.user_data_root / "logs"}) {
@@ -42,7 +56,15 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     }
   }
 
-  void OnPostInitLogging() override { hcu::LoadPlayerSettings(hcu::PlayerSettingsPath(user_data_root())); }
+  void OnPostInitLogging() override {
+    const hcu::UserDataMessage message = hcu::DescribeUserData(user_data_);
+    if (message.warning) {
+      REXLOG_WARN("{}", message.text);
+    } else {
+      REXLOG_INFO("{}", message.text);
+    }
+    hcu::LoadPlayerSettings(hcu::PlayerSettingsPath(user_data_root()));
+  }
 
   void OnConfigureFonts(ImFontAtlas* atlas) override {
     hcu::LoadLauncherFonts(atlas, window() ? float(window()->GetDpi()) / float(window()->GetMediumDpi()) : 1.0f);
@@ -62,6 +84,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     if (window()) {
       window()->SetTitle(kWindowTitle);
     }
+    hcu::ApplyWindowIcon();
     game_settings_.CaptureLateRegistered();
     if (!show_launcher_ && hcu::ShiftHeldAfterWindowOpened()) {
       show_launcher_ = true;
@@ -90,24 +113,112 @@ class HardCorpsUprisingApp : public rex::ReXApp {
       return true;
     };
     callbacks.quit = [this] { app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); }); };
+    callbacks.window_handle = [this] { return window() ? window()->GetNativeWindowHandle() : nullptr; };
+    callbacks.window_fullscreen = [this] { return window() && window()->IsFullscreen(); };
+    callbacks.set_window_fullscreen = [this](bool fullscreen) {
+      if (window()) {
+        window()->SetFullscreen(fullscreen);
+      }
+    };
     hcu::ShowLauncher(imgui_drawer(),
                       {defaults.game_data_root, defaults.user_data_root,
-                       hcu::PlayerSettingsPath(defaults.user_data_root)},
+                       hcu::PlayerSettingsPath(defaults.user_data_root), user_data_.outcome, immediate_drawer()},
                       game_settings_, std::move(callbacks));
     return std::nullopt;
   }
 
   void OnPostSetup() override {
-    AttachWindowHost(window(), app_context());
+    AttachWindowHost(window(), app_context(), [] { return !hcu::ModalDialog::AnyOpen(); });
     if (window()) {
       hcu::CheckWindowDisplay(window()->GetNativeWindowHandle(), REXCVAR_GET(monitor));
     }
+    if (window() && imgui_drawer()) {
+      cheat_menu_.Attach(window(), imgui_drawer());
+      hcu::CreateFrameCounter(imgui_drawer());
+      CreateCursorTick(imgui_drawer());
+      // Replaces ReXApp's own callback, which the menu's version repeats.
+      if (auto* input = static_cast<rex::input::InputSystem*>(runtime()->input_system())) {
+        input->SetActiveCallback([this] { return cheat_menu_.GameInputActive(); });
+      }
+      hcu::ModalDialog::AttachEscapeKey(window());
+    }
+    InstallLiveServices();
   }
 
-  void OnShutdown() override { DetachWindowHost(); }
+  void OnShutdown() override {
+    hcu::ModalDialog::DetachEscapeKey();
+    delete achievements_;
+    delete notice_;
+    cheat_menu_.Detach();
+    DetachWindowHost();
+  }
+
+  // F7 toggles the same overlay as the game's Achievements item. The overlay is owned here, not by ReXApp.
+  std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override {
+    if (achievements_) {
+      achievements_->RequestClose();
+    } else {
+      OpenAchievements();
+    }
+    return nullptr;
+  }
 
  private:
+  // The cache folder ReXGlue derived from the system root follows the user data root unless it was set explicitly.
+  void ChooseUserData(rex::PathConfig& paths, const std::filesystem::path& port_folder) {
+    user_data_ = hcu::SelectUserData({port_folder, paths.user_data_root, !REXCVAR_GET(user_data_root).empty()});
+    if (user_data_.root == paths.user_data_root) {
+      return;
+    }
+    paths.user_data_root = user_data_.root;
+    if (REXCVAR_GET(cache_root).empty()) {
+      paths.cache_root = user_data_.root / "cache";
+    }
+  }
+
+  void InstallLiveServices() {
+    auto* kernel = runtime()->kernel_state();
+    const auto* profile = kernel ? kernel->user_profile() : nullptr;
+    if (!profile) {
+      return;
+    }
+    hcu::live::Install({
+        .stats_file = hcu::StatsFilePath(std::filesystem::absolute(user_data_root()), kernel->title_id()),
+        .user = {profile->xuid(), profile->name()},
+        .bridge =
+            {.open_achievements = [this] { app_context().CallInUIThreadDeferred([this] { OpenAchievements(); }); },
+             .open_download_content =
+                 [this] { app_context().CallInUIThreadDeferred([this] { OpenDownloadContent(); }); }},
+        .kernel = kernel,
+    });
+  }
+
+  void OpenAchievements() {
+    if (achievements_ || hcu::ModalDialog::AnyOpen() || !runtime() || !runtime()->kernel_state() || !imgui_drawer() ||
+        !immediate_drawer()) {
+      return;
+    }
+    achievements_ = new hcu::AchievementsOverlay(imgui_drawer(), immediate_drawer(), runtime(), &achievements(),
+                                                 [this] { achievements_ = nullptr; });
+  }
+
+  void OpenDownloadContent() {
+    if (notice_ || hcu::ModalDialog::AnyOpen() || !imgui_drawer()) {
+      return;
+    }
+    notice_ = new hcu::NoticeDialog(
+        imgui_drawer(), "DOWNLOAD CONTENT",
+        {"The Xbox Live Marketplace is not part of the PC version.",
+         "Additional characters are installed from the PC launcher: start the game again (hold Shift if the "
+         "launcher does not open) and use its DLC page."},
+        [this] { notice_ = nullptr; });
+  }
+
   hcu::GameSettings game_settings_;
+  hcu::CheatMenu cheat_menu_;
+  hcu::AchievementsOverlay* achievements_ = nullptr;
+  hcu::NoticeDialog* notice_ = nullptr;
   std::filesystem::path shipped_config_;
+  hcu::UserDataSelection user_data_;
   bool show_launcher_ = false;
 };

@@ -6,3 +6,4 @@ Exec=hard_corps_uprising
 Icon=hard_corps_uprising
 Categories=Game;
 Terminal=false
+StartupWMClass=io.github.saulob.hard-corps-uprising

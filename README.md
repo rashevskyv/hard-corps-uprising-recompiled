@@ -52,7 +52,7 @@ The DLC characters are Harley Daniels, Sayuri and Leviathan. DLC is optional, an
 2. Open the **DLC** page (directly after **Play**), click **Install DLC...**, and pick your DLC package. The launcher checks that it is a Hard Corps: Uprising package (Title ID `58410A18`, content type `00000002`, Marketplace). It refuses the game package and other packages.
 3. The **DLC** page shows each character as Installed or Not installed. **Remove** on an installed character removes only that package, after a confirmation. The game and the other DLC are not touched, and you can install the package again later from your own copy.
 
-Installed DLC is stored in your user data folder (`Documents\hard_corps_uprising` on Windows, or the `--user_data_root` folder), not in the game folder. Reinstalling the game does not remove it.
+Installed DLC is stored in the `user_data` folder next to the program (see [docs/user-data.md](docs/user-data.md)), not in the game folder. Reinstalling the game does not remove it.
 
 ### Linux and Steam Deck
 
@@ -70,7 +70,7 @@ Windows may warn the first time you run the program, because the release is not 
 
 ## The launcher
 
-The launcher opens before the game. Your choices are saved to `settings.toml` in `Documents\hard_corps_uprising`. To turn the launcher off, set **Show this launcher** to **Off** on the Play page. Hold **Shift** while starting to bring it back.
+The launcher opens before the game. Your choices are saved to `settings.toml` in the `user_data` folder next to the program. To turn the launcher off, set **Show this launcher** to **Off** on the Play page. Hold **Shift** while starting to bring it back.
 
 ### Play
 - **Install from package...** with the Title ID and game version checks, and **Reinstall from package...**
@@ -82,7 +82,7 @@ The launcher opens before the game. Your choices are saved to `settings.toml` in
 
 ### Display
 - **Display mode**: Windowed or Borderless Fullscreen. Press **F11** while playing to switch between them.
-- **Window size** and **Monitor**
+- **Window size** and **Monitor**. The launcher reopens at its last position and size, maximized or in its own F11 fullscreen if it was. This is separate from the game's Display mode.
 - **VSync** on or off
 - **Aspect ratio**: Letterbox 16:9 keeps the game's picture on any window shape; Stretch fills the window
 
@@ -96,6 +96,28 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 
 ### Gameplay
 - **Frame rate in title**: shows the frame rate in the window title, for example `Hard Corps: Uprising | FPS: 60.00`
+- **Frame counter**: shows the frame rate and frame time (`60 FPS  16.7 ms`) in the top-right corner, above the cheat menu. Hidden by default. Press **F2** while playing to show or hide it for the session; the saved setting is not changed.
+
+### Cheats
+- **Infinite Health**: normal damage no longer lowers a player's health
+- **Infinite Lives**: the number of remaining lives no longer goes down
+- **Rapid Fire**: weapons fire about twice as fast
+- **Jump Height 2x**: jumps reach about twice the normal height
+- **Keep Weapons on Hit**: taking normal damage no longer costs the current weapon
+- **Movement Speed 2x**: ordinary running and air steering are twice as fast
+- **Super Armor**: take damage normally without knockback, hit stun or knockdown
+
+All cheats are off by default and configured on the Cheats page before Play. They apply to every character and to both players in local two-player.
+
+Press **F10** while playing to open the cheat menu and change the cheats for the current session. Up and Down (or the D-pad) select, Enter (or A) toggles, F10, Escape or B closes. Changes made in the game are not saved: the launcher's settings are the same the next time you start.
+
+### Achievements, leaderboards and download content
+Everything stays offline: there is no Xbox Live connection, Microsoft sign-in or online player.
+- **Achievements**: the menu items and **F7** open a list of the game's 12 achievements (200G) with their icons and gamerscore. B, Escape, F7 or the X button closes it. Unlocks show the usual notification and are kept between runs. The launcher's **Achievements** page shows the same list.
+- **Leaderboards**: the main menu and pause menu items open the game's own Leaderboards screen with your own scores only. Finished games are kept in a local file on this PC. There are no Xbox Live rankings, online players or friends: the boards show your row, or nothing if you have not finished a game on that board. Arcade Mode single player is the board tested so far.
+- **Download Content**: shows a short note instead of the Xbox Marketplace. Extra characters are installed from the launcher's DLC page.
+
+[docs/offline-live.md](docs/offline-live.md) has the details.
 
 ### Controls
 - Xbox 360 controllers work without setup

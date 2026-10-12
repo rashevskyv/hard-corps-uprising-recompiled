@@ -57,7 +57,7 @@ Open the DLC page, click "Install DLC..." and select the package. The DLC page
 shows each character as Installed or Not installed. "Remove" on an installed
 character removes only that package, after a confirmation. You can install the
 package again later from your own copy. DLC is stored in your user data folder
-(Documents\hard_corps_uprising), not in the game folder.
+("user_data" next to hard_corps_uprising.exe), not in the game folder.
 
 
 WINDOWS SMARTSCREEN
@@ -81,8 +81,17 @@ WHERE THINGS ARE
 ----------------
 - Game files:     the "game" folder next to hard_corps_uprising.exe
 - Logs:           the "logs" folder next to hard_corps_uprising.exe
-- Settings, saves and shader cache:
-                  Documents\hard_corps_uprising
+- Settings, saves, DLC and shader cache:
+                  the "user_data" folder next to hard_corps_uprising.exe
+
+Upgrading from v0.3.1 or earlier: those versions kept this data in
+Documents\hard_corps_uprising. The first start moves that folder into
+"user_data" and removes the old one after the move is checked. If the move
+fails, the old folder stays in use for that run and the move is tried again at
+the next start. If "user_data" and the old folder both hold data, "user_data"
+is used and the old folder is left alone. If the program folder is read-only,
+the old folder is used for that run. To keep your data when updating, extract
+the new version over the old one, or move "user_data" and "game" across.
 
 If the game does not start or crashes, please attach the newest file from the
 "logs" folder to a report at

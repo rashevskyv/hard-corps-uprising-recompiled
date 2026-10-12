@@ -8,10 +8,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Where tools/codegen.ps1 and tools/package-linux.sh unpack the pinned SDK.
 if(WIN32)
-    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/win-amd64")
+    set(HCU_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/win-amd64")
 else()
-    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/linux-amd64")
+    set(HCU_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/linux-amd64")
 endif()
+list(APPEND CMAKE_PREFIX_PATH "${HCU_SDK_DIR}")
 
 # Release binaries must not carry the build machine's folders (__FILE__ in log calls).
 add_compile_options("$<$<CONFIG:Release>:-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=.>")
@@ -47,15 +48,33 @@ get_directory_property(HCU_TRG_VERSION DIRECTORY "${_trg_dir}" DEFINITION PROJEC
 
 set(HCU_SOURCES
     src/main.cpp
+    src/achievement_alias.cpp
+    src/achievements_overlay.cpp
+    src/cheat_menu.cpp
+    src/cheats.cpp
+    src/frame_counter.cpp
     src/game_files.cpp
     src/launcher.cpp
+    src/launcher_achievements.cpp
     src/legacy_settings.cpp
+    src/live_fix.cpp
+    src/live_stats.cpp
+    src/local_stats.cpp
+    src/modal_dialog.cpp
+    src/notice_dialog.cpp
     src/platform.cpp
     src/settings.cpp
     src/stfs.cpp
+    src/user_data.cpp
     src/window_host.cpp
 )
 if(WIN32)
+    # Resource 1 is the first icon in the executable: Explorer, and SDL's window class, use it.
+    enable_language(RC)
+    set(HCU_APP_RC "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/hard_corps_uprising.rc")
+    set_source_files_properties("${HCU_APP_RC}" PROPERTIES
+        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icons/app-icon.ico")
+    list(APPEND HCU_SOURCES "${HCU_APP_RC}")
     add_executable(hard_corps_uprising WIN32 ${HCU_SOURCES})
 else()
     add_executable(hard_corps_uprising ${HCU_SOURCES})
@@ -93,6 +112,46 @@ add_executable(hcu_installer_tests EXCLUDE_FROM_ALL
     src/stfs.cpp
 )
 target_include_directories(hcu_installer_tests PRIVATE src)
+
+# Cheat guard tests, not part of the default build: cmake --build <dir> --target hcu_cheats_tests
+add_executable(hcu_cheats_tests EXCLUDE_FROM_ALL tests/cheats_tests.cpp)
+target_include_directories(hcu_cheats_tests PRIVATE src)
+target_compile_definitions(hcu_cheats_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Frame counter tests, not part of the default build: cmake --build <dir> --target hcu_frame_counter_tests
+add_executable(hcu_frame_counter_tests EXCLUDE_FROM_ALL tests/frame_counter_tests.cpp)
+target_include_directories(hcu_frame_counter_tests PRIVATE src)
+target_compile_definitions(hcu_frame_counter_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Cursor auto-hide tests, not part of the default build: cmake --build <dir> --target hcu_window_host_tests
+add_executable(hcu_window_host_tests EXCLUDE_FROM_ALL tests/window_host_tests.cpp)
+target_include_directories(hcu_window_host_tests PRIVATE src)
+
+# Launcher window placement tests, not part of the default build:
+# cmake --build <dir> --target hcu_window_placement_tests
+add_executable(hcu_window_placement_tests EXCLUDE_FROM_ALL tests/window_placement_tests.cpp)
+target_include_directories(hcu_window_placement_tests PRIVATE src)
+
+# Offline Live tests (stats store, leaderboard answers, guest buffers, overlay rules), not part of the default
+# build: cmake --build <dir> --target hcu_live_tests
+add_executable(hcu_live_tests EXCLUDE_FROM_ALL
+    tests/live_tests.cpp
+    src/live_stats.cpp
+    src/local_stats.cpp
+)
+target_include_directories(hcu_live_tests PRIVATE src)
+target_include_directories(hcu_live_tests SYSTEM PRIVATE "${HCU_SDK_DIR}/include")
+target_compile_definitions(hcu_live_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# User data tests (portable root and migration), not part of the default build:
+# cmake --build <dir> --target hcu_user_data_tests
+add_executable(hcu_user_data_tests EXCLUDE_FROM_ALL
+    tests/user_data_tests.cpp
+    src/user_data.cpp
+    src/local_stats.cpp
+)
+target_include_directories(hcu_user_data_tests PRIVATE src)
+target_include_directories(hcu_user_data_tests SYSTEM PRIVATE "${HCU_SDK_DIR}/include" "${_trg_dir}/include")
 
 # Allocator stress test, not part of the default build: cmake --build <dir> --target hcu_physical_heap_stress
 add_executable(hcu_physical_heap_stress EXCLUDE_FROM_ALL tests/physical_heap_stress.cpp)

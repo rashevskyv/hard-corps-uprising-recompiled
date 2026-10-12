@@ -54,6 +54,44 @@ BOOL CALLBACK AddMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM user) {
   return TRUE;
 }
 
+BOOL CALLBACK AddWorkArea(HMONITOR monitor, HDC, LPRECT, LPARAM user) {
+  MONITORINFO info{};
+  info.cbSize = sizeof(info);
+  if (GetMonitorInfoW(monitor, &info)) {
+    reinterpret_cast<std::vector<Rect>*>(user)->push_back(
+        {info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom});
+  }
+  return TRUE;
+}
+
+PreShowPlan g_plan;
+WindowPlacement g_saved;
+HHOOK g_hook = nullptr;
+std::optional<PreShowResult> g_result;
+
+LRESULT CALLBACK PreShowProc(int code, WPARAM wparam, LPARAM lparam) {
+  const auto* message = reinterpret_cast<const CWPSTRUCT*>(lparam);
+  if (code == HC_ACTION && message->message == WM_SHOWWINDOW && message->wParam && message->lParam == 0 &&
+      !GetParent(message->hwnd) && !g_result) {
+    HHOOK hook = g_hook;
+    g_hook = nullptr;
+    const HWND window = message->hwnd;
+    RECT before;
+    GetWindowRect(window, &before);
+    g_result = PreShowResult{{{before.left, before.top, before.right, before.bottom}, false}, g_saved};
+    if (g_plan.normal) {
+      SetWindowPos(window, nullptr, g_plan.normal->left, g_plan.normal->top, g_plan.normal->width(),
+                   g_plan.normal->height(), SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    if (g_plan.maximized) {
+      ShowWindow(window, SW_MAXIMIZE);
+    }
+    UnhookWindowsHookEx(hook);
+    return 0;
+  }
+  return CallNextHookEx(g_hook, code, wparam, lparam);
+}
+
 using XInputGetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
 
 XInputGetStateFn LoadXInput() {
@@ -169,6 +207,18 @@ constexpr FontFamily kFontFamilies[] = {
     {"/usr/share/fonts/liberation/LiberationSans-Regular.ttf", nullptr,
      "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"},
 };
+
+
+constexpr char kApplicationId[] = "io.github.saulob.hard-corps-uprising";
+
+// ReXGlue's native window handle is empty here, and the launcher is its only window.
+SDL_Window* LauncherWindow() {
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  SDL_Window* window = windows && count > 0 ? windows[0] : nullptr;
+  SDL_free(windows);
+  return window;
+}
 
 #endif
 
@@ -295,6 +345,67 @@ MonitorInfo MonitorForSetting(int monitor) {
 
 #if defined(_WIN32)
 
+void ApplyWindowIcon() {}
+
+void SetApplicationId() {}
+
+std::vector<Rect> WorkAreas() {
+  std::vector<Rect> areas;
+  EnumDisplayMonitors(nullptr, nullptr, AddWorkArea, reinterpret_cast<LPARAM>(&areas));
+  return areas;
+}
+
+std::optional<WindowState> QueryWindowState(void* native_handle) {
+  const HWND window = static_cast<HWND>(native_handle);
+  RECT rect;
+  if (!window || !IsWindow(window) || !GetWindowRect(window, &rect)) {
+    return std::nullopt;
+  }
+  WindowState state;
+  state.rect = {rect.left, rect.top, rect.right, rect.bottom};
+  state.minimized = IsIconic(window) != FALSE;
+  state.maximized = IsZoomed(window) != FALSE;
+  if (state.minimized) {
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    state.maximized = GetWindowPlacement(window, &placement) && (placement.flags & WPF_RESTORETOMAXIMIZED);
+  }
+  return state;
+}
+
+void ApplyWindowPlacement(void* native_handle, const WindowPlacement& placement) {
+  const HWND window = static_cast<HWND>(native_handle);
+  if (!window || !IsWindow(window)) {
+    return;
+  }
+  ShowWindow(window, SW_RESTORE);
+  SetWindowPos(window, nullptr, placement.normal.left, placement.normal.top, placement.normal.width(),
+               placement.normal.height(), SWP_NOZORDER | SWP_NOACTIVATE);
+  if (placement.maximized) {
+    ShowWindow(window, SW_MAXIMIZE);
+  }
+}
+
+void InstallPreShowPlacement(const PreShowPlan& plan, const WindowPlacement& saved) {
+  if (g_hook || !plan.Needed()) {
+    return;
+  }
+  g_plan = plan;
+  g_saved = saved;
+  g_result.reset();
+  g_hook = SetWindowsHookExW(WH_CALLWNDPROC, PreShowProc, nullptr, GetCurrentThreadId());
+}
+
+std::optional<PreShowResult> TakePreShowResult() {
+  if (g_hook) {
+    UnhookWindowsHookEx(g_hook);
+    g_hook = nullptr;
+  }
+  std::optional<PreShowResult> result = g_result;
+  g_result.reset();
+  return result;
+}
+
 void CheckWindowDisplay(void* native_window, int monitor) {
   const HWND hwnd = static_cast<HWND>(native_window);
   const MonitorInfo expected = MonitorForSetting(monitor);
@@ -373,6 +484,76 @@ void LauncherGamepad::Release(ImGuiIO& io) {
 }
 
 #else
+
+void SetApplicationId() {
+  SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, kApplicationId);
+}
+
+void ApplyWindowIcon() {
+  SDL_Window* window = LauncherWindow();
+  if (!window) {
+    return;
+  }
+  const std::filesystem::path icon_file = rex::filesystem::GetExecutableFolder() / ".." / "share" / "icons" /
+                                          "hicolor" / "256x256" / "apps" / "hard_corps_uprising.png";
+  if (SDL_Surface* icon = SDL_LoadPNG(Utf8(icon_file).c_str())) {
+    SDL_SetWindowIcon(window, icon);
+    SDL_DestroySurface(icon);
+  }
+}
+
+std::vector<Rect> WorkAreas() {
+  std::vector<Rect> areas;
+  int count = 0;
+  SDL_DisplayID* displays = SDL_GetDisplays(&count);
+  for (int i = 0; displays && i < count; ++i) {
+    SDL_Rect usable{};
+    if (SDL_GetDisplayUsableBounds(displays[i], &usable) && usable.w > 0 && usable.h > 0) {
+      areas.push_back({usable.x, usable.y, usable.x + usable.w, usable.y + usable.h});
+    }
+  }
+  SDL_free(displays);
+  return areas;
+}
+
+std::optional<WindowState> QueryWindowState(void*) {
+  SDL_Window* window = LauncherWindow();
+  if (!window) {
+    return std::nullopt;
+  }
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+  SDL_GetWindowPosition(window, &x, &y);
+  SDL_GetWindowSize(window, &width, &height);
+  const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
+  WindowState state;
+  state.rect = {x, y, x + width, y + height};
+  state.minimized = (flags & SDL_WINDOW_MINIMIZED) != 0;
+  state.maximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+  return state;
+}
+
+void ApplyWindowPlacement(void*, const WindowPlacement& placement) {
+  SDL_Window* window = LauncherWindow();
+  if (!window) {
+    return;
+  }
+  SDL_RestoreWindow(window);
+  SDL_SyncWindow(window);
+  SDL_SetWindowSize(window, placement.normal.width(), placement.normal.height());
+  SDL_SetWindowPosition(window, placement.normal.left, placement.normal.top);
+  if (placement.maximized) {
+    SDL_MaximizeWindow(window);
+  }
+}
+
+void InstallPreShowPlacement(const PreShowPlan&, const WindowPlacement&) {}
+
+std::optional<PreShowResult> TakePreShowResult() {
+  return std::nullopt;
+}
 
 // ListMonitors is SDL's own display order here, so the monitor setting always names the right display.
 void CheckWindowDisplay(void*, int) {}

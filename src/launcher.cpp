@@ -22,6 +22,7 @@
 #include "trg/platform.h"
 
 #include "game_files.h"
+#include "launcher_achievements.h"
 #include "platform.h"
 #include "settings.h"
 
@@ -141,6 +142,12 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
         monitors_(ListMonitors()) {
     dlc_ = ListInstalledDlc(paths_.user_dir);
     launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
+    if (WindowFullscreen()) {
+      restore_when_windowed_ = true;
+      RequestFullscreen(false);
+    } else {
+      StartInSavedState();
+    }
   }
 
  protected:
@@ -150,6 +157,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     }
     PollInstall();
     PollDlcTask();
+    TrackPlacement();
     if (!nav_taken_) {
       saved_nav_flags_ = io.ConfigFlags & kNavFlags;
       saved_has_gamepad_ = io.BackendFlags & ImGuiBackendFlags_HasGamepad;
@@ -157,7 +165,10 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       nav_taken_ = true;
     }
     gamepad_.Update(io);
-    if (starting_ && ImGui::GetTime() - play_started_ >= kPlayFeedbackSeconds) {
+    if (!starting_ && ImGui::IsKeyPressed(ImGuiKey_F11, false) && !fullscreen_gate_.Pending()) {
+      ToggleLauncherFullscreen();
+    }
+    if (starting_ && ImGui::GetTime() - play_started_ >= kPlayFeedbackSeconds && !LeavingFullscreen()) {
       StartGame();
       return;
     }
@@ -200,6 +211,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   }
 
   void StartGame() {
+    // The game builds its own runtime next; the one that read the achievements must be gone.
+    achievements_.reset();
+    achievements_tried_ = false;
     if (cb_.window_changed && cb_.window_changed()) {
       if (cb_.restart && cb_.restart()) {
         Finish(nullptr);
@@ -209,6 +223,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
       launcher_->SetStatus("Could not start the game in a new window. Press Play to try again.", 8);
       return;
     }
+    RestoreStartupWindow();
     Finish(cb_.play);
   }
 
@@ -235,9 +250,111 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
  private:
   void Finish(std::function<void()> action) {
     done_ = true;
+    SavePlacement(placement_.Flush());
     Close();
     if (action) {
       action();
+    }
+  }
+
+  void* WindowHandle() const { return cb_.window_handle ? cb_.window_handle() : nullptr; }
+
+  bool WindowFullscreen() const { return cb_.window_fullscreen && cb_.window_fullscreen(); }
+
+  void StartInSavedState() {
+    RestorePlacement();
+    if (fullscreen_pref_.wanted()) {
+      RequestFullscreen(true);
+    }
+  }
+
+  void ToggleLauncherFullscreen() {
+    const bool fullscreen = !WindowFullscreen();
+    RequestFullscreen(fullscreen);
+    fullscreen_pref_.UserSet(fullscreen);
+    if (!settings_.SaveNow(LauncherFullscreenValues(fullscreen))) {
+      REXLOG_WARN("Could not save the launcher fullscreen state");
+    }
+  }
+
+  void RequestFullscreen(bool fullscreen) {
+    fullscreen_gate_.Request(fullscreen);
+    if (cb_.set_window_fullscreen) {
+      cb_.set_window_fullscreen(fullscreen);
+    }
+  }
+
+  // The game gets the window out of the launcher's temporary fullscreen.
+  bool LeavingFullscreen() {
+    if (!WindowFullscreen() || leave_gave_up_) {
+      return false;
+    }
+    if (!leave_requested_) {
+      leave_requested_ = true;
+      leave_started_ = ImGui::GetTime();
+      RequestFullscreen(false);
+    }
+    leave_gave_up_ = ImGui::GetTime() - leave_started_ >= FullscreenGate::kTimeoutSeconds;
+    return !leave_gave_up_;
+  }
+
+  void RestorePlacement() {
+    if (const auto placed = TakePreShowResult()) {
+      startup_ = placed->startup;
+      placement_ = PlacementTracker(placed->applied);
+      return;
+    }
+    void* window = WindowHandle();
+    const auto state = QueryWindowState(window);
+    if (!state || WindowFullscreen()) {
+      return;
+    }
+    const WindowPlacement saved = SavedLauncherPlacement();
+    const bool restorable = PlacementIsVisible(saved, WorkAreas());
+    startup_ = WindowPlacement{state->rect, state->maximized};
+    placement_ = PlacementTracker(restorable ? std::optional<WindowPlacement>(saved) : std::nullopt);
+    if (restorable) {
+      ApplyWindowPlacement(window, saved);
+    }
+  }
+
+  void TrackPlacement() {
+    const double now = ImGui::GetTime();
+    const FullscreenGate::Step step = fullscreen_gate_.Update(WindowFullscreen(), now);
+    if (restore_when_windowed_) {
+      if (!WindowFullscreen() && !fullscreen_gate_.Pending()) {
+        restore_when_windowed_ = false;
+        StartInSavedState();
+      }
+      return;
+    }
+    if (!startup_) {
+      return;
+    }
+    if (step.restore) {
+      if (const auto current = placement_.Current()) {
+        ApplyWindowPlacement(WindowHandle(), *current);
+      }
+    }
+    if (!step.observe) {
+      return;
+    }
+    if (const auto state = QueryWindowState(WindowHandle())) {
+      placement_.Observe(*state, WindowFullscreen(), now);
+      SavePlacement(placement_.TakeSettled(now));
+    }
+  }
+
+  void SavePlacement(const std::optional<WindowPlacement>& placement) {
+    if (placement && !settings_.SaveNow(PlacementValues(*placement))) {
+      REXLOG_WARN("Could not save the launcher window placement");
+    }
+  }
+
+  // The game keeps the window it was created with, not the launcher's saved placement.
+  void RestoreStartupWindow() {
+    if (startup_ && !WindowFullscreen()) {
+      ApplyWindowPlacement(WindowHandle(), *startup_);
     }
   }
 
@@ -260,6 +377,8 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
         {"Graphics", "Render resolution, anti-aliasing and texture filtering.",
          [](trg::Ui& ui) { PageGraphics(ui); }},
         {"Gameplay", "What the window shows while you play.", [](trg::Ui& ui) { PageGameplay(ui); }},
+        {"Cheats", "Optional gameplay modifiers", [](trg::Ui& ui) { PageCheats(ui); }},
+        {"Achievements", "Your achievements on this PC.", [this](trg::Ui& ui) { PageAchievements(ui); }},
         {"Controls", "Controller and keyboard.", [](trg::Ui& ui) { PageControls(ui); }},
         {"About", "About this port, and where your files and settings live.",
          [this](trg::Ui& ui) { PageAbout(ui); }},
@@ -338,6 +457,8 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     }
     install_failure_.clear();
     install_failure_text_.clear();
+    achievements_.reset();
+    achievements_tried_ = false;
     outcome_ = std::make_shared<InstallOutcome>();
     const bool started = install_.Start(
         "Reading package...",
@@ -797,6 +918,66 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   static void PageGameplay(trg::Ui& ui) {
     ui.Toggle("Frame rate in title", "Shows the game's frame rate in the window title: Hard Corps: Uprising | FPS: 60.00",
               "hcu_show_fps", true, "Off", "On");
+    ui.Toggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
+              "hcu_show_frame_counter", false, "Hidden", "Shown");
+  }
+
+  static void PageCheats(trg::Ui& ui) {
+    ui.Help("Press F10 while playing to open the Cheats menu. Changes made there apply only to the current session.");
+    ui.Spacer(12);
+    ui.Toggle("Infinite Health", "Prevent normal damage from reducing player health", "hcu_cheat_health", false,
+              "Off", "On");
+    ui.Toggle("Infinite Lives", "Prevent the number of remaining lives from decreasing", "hcu_cheat_lives", false,
+              "Off", "On");
+    ui.Toggle("Rapid Fire", "Fire weapons approximately twice as fast", "hcu_cheat_rapid_fire", false, "Off", "On");
+    ui.Toggle("Jump Height 2x", "Reach approximately twice the normal jump height", "hcu_cheat_jump_height", false,
+              "Off", "On");
+    ui.Toggle("Keep Weapons on Hit", "Keep the current weapon when taking normal damage", "hcu_cheat_keep_weapons",
+              false, "Off", "On");
+    ui.Toggle("Movement Speed 2x", "Move at twice the normal speed", "hcu_cheat_movement_speed", false, "Off",
+              "On");
+    ui.Toggle("Super Armor", "Take damage normally without knockback, hit stun or knockdown", "hcu_cheat_super_armor",
+              false, "Off", "On");
+  }
+
+  void PageAchievements(trg::Ui& ui) {
+    if (game_files_ != GameFiles::kReady) {
+      ui.Paragraph("Install the game to see its achievements.");
+      return;
+    }
+    if (!achievements_ && !achievements_tried_) {
+      achievements_tried_ = true;
+      achievements_ = std::make_unique<LauncherAchievements>(paths_.game_dir, paths_.user_dir, paths_.immediate_drawer);
+    }
+    if (!achievements_ || !achievements_->ok()) {
+      ui.Paragraph("The achievements could not be read from the game files.");
+      return;
+    }
+    DrawAchievementSummary(ui, Summarize(achievements_->entries()));
+    std::vector<trg::AchievementCard> cards;
+    for (const AchievementEntry& entry : achievements_->entries()) {
+      trg::AchievementCard card;
+      card.icon = achievements_->Icon(entry.info);
+      card.title = entry.info.label;
+      card.description = EntryDescription(entry);
+      card.points = static_cast<int>(entry.info.gamerscore);
+      card.unlocked = entry.unlocked;
+      cards.push_back(std::move(card));
+    }
+    ui.AchievementGrid(cards, 1);
+  }
+
+  static void DrawAchievementSummary(trg::Ui& ui, const AchievementSummary& summary) {
+    ImGui::PushFont(ui.fonts().semibold, 0.0f);
+    ImGui::Text("%d / %d unlocked", summary.unlocked, summary.total);
+    ImGui::SameLine();
+    ImGui::TextColored(kAccent, "%dG / %dG", summary.earned_gamerscore, summary.total_gamerscore);
+    ImGui::PopFont();
+    const float fraction = summary.total > 0 ? float(summary.unlocked) / float(summary.total) : 0.0f;
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccent);
+    ImGui::ProgressBar(fraction, ImVec2(-FLT_MIN, 6.0f * ui.scale()), "");
+    ImGui::PopStyleColor();
+    ui.Spacer(8);
   }
 
   static void PageControls(trg::Ui& ui) {
@@ -821,7 +1002,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     if (!paths_.game_dir.empty()) {
       ui.FolderRow("Game files", "Where the game data is read from.", "Open game folder", Utf8(paths_.game_dir));
     }
-    ui.FolderRow("Saves and settings", "Your saves, the shader cache and settings.toml.", "Open data folder",
+    ui.FolderRow("Saves and settings", UserDataFolderHelp(paths_.user_data_outcome), "Open data folder",
                  Utf8(paths_.user_dir));
     if (ui.ButtonRow("Settings file", "Your launcher choices, as plain text. Loaded after hard_corps_uprising.toml.",
                      "Show settings file") &&
@@ -850,6 +1031,14 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   ImGuiConfigFlags saved_nav_flags_ = 0;
   ImGuiBackendFlags saved_has_gamepad_ = 0;
   bool done_ = false;
+  std::optional<WindowPlacement> startup_;
+  PlacementTracker placement_;
+  FullscreenGate fullscreen_gate_;
+  LauncherFullscreenPreference fullscreen_pref_{SavedLauncherFullscreen()};
+  bool restore_when_windowed_ = false;
+  bool leave_requested_ = false;
+  bool leave_gave_up_ = false;
+  double leave_started_ = 0.0;
   std::string install_failure_;
   std::string install_failure_text_;
   std::shared_ptr<InstallOutcome> outcome_;
@@ -860,6 +1049,8 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   std::string dlc_removing_name_;
   std::shared_ptr<DlcOutcome> dlc_outcome_;
   trg::Task dlc_task_;
+  std::unique_ptr<LauncherAchievements> achievements_;
+  bool achievements_tried_ = false;
   std::optional<DlcInfo> dlc_remove_target_;
   bool dlc_remove_open_ = false;
   bool dlc_remove_close_ = false;
@@ -883,6 +1074,14 @@ void LoadLauncherFonts(ImFontAtlas* atlas, float density) {
   g_fonts.regular = load(fonts.regular);
   g_fonts.semibold = load(fonts.semibold);
   g_fonts.bold = load(fonts.bold);
+}
+
+ImFont* LauncherRegularFont() {
+  return g_fonts.regular;
+}
+
+ImFont* LauncherSemiboldFont() {
+  return g_fonts.semibold;
 }
 
 namespace {
@@ -925,6 +1124,8 @@ void PrepareLauncherWindow() {
   rex::cvar::SetFlagByName("window_height", std::to_string(height));
   // Monitor 0 lets SDL centre the window on the primary display, whatever the display order.
   rex::cvar::SetFlagByName("monitor", "0");
+  const WindowPlacement saved = SavedLauncherPlacement();
+  InstallPreShowPlacement(PlanPreShow(saved, WorkAreas()), saved);
 }
 
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, LauncherPaths paths, GameSettings& settings,

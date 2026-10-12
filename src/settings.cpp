@@ -24,6 +24,16 @@ REXCVAR_DEFINE_BOOL(hcu_launcher, true, "Hard Corps",
 REXCVAR_DEFINE_BOOL(hcu_skip_launcher, false, "Hard Corps",
                     "Skip the launcher once (set when the launcher restarts the game)");
 REXCVAR_DEFINE_BOOL(hcu_show_fps, true, "Hard Corps", "Show the frame rate in the window title");
+REXCVAR_DEFINE_BOOL(hcu_show_frame_counter, false, "Hard Corps",
+                    "Show the frame counter in the corner (F2 toggles it)");
+REXCVAR_DEFINE_INT32(hcu_launcher_x, 0, "Hard Corps", "Launcher window left edge, written by the launcher");
+REXCVAR_DEFINE_INT32(hcu_launcher_y, 0, "Hard Corps", "Launcher window top edge, written by the launcher");
+REXCVAR_DEFINE_INT32(hcu_launcher_width, 0, "Hard Corps", "Launcher window restored width, written by the launcher");
+REXCVAR_DEFINE_INT32(hcu_launcher_height, 0, "Hard Corps",
+                     "Launcher window restored height, written by the launcher");
+REXCVAR_DEFINE_BOOL(hcu_launcher_maximized, false, "Hard Corps", "Launcher window was maximized when closed");
+REXCVAR_DEFINE_BOOL(hcu_launcher_fullscreen, false, "Hard Corps",
+                    "Launcher was left in its own F11 fullscreen, written by the launcher");
 
 namespace hcu {
 namespace {
@@ -41,7 +51,15 @@ const std::vector<std::string> kGameSettingKeys = {
     "native_2x_msaa",
     "anisotropic_override",
     "hcu_show_fps",
+    "hcu_show_frame_counter",
     "mnk_mode",
+    "hcu_cheat_health",
+    "hcu_cheat_lives",
+    "hcu_cheat_rapid_fire",
+    "hcu_cheat_jump_height",
+    "hcu_cheat_keep_weapons",
+    "hcu_cheat_movement_speed",
+    "hcu_cheat_super_armor",
 };
 
 const std::vector<std::string> kWindowKeys = {
@@ -95,11 +113,17 @@ std::optional<std::string> ConfigValue(const toml::table& table, std::string_vie
   return node->value_exact<std::string>();
 }
 
-}  // namespace
-
-std::filesystem::path PlayerSettingsPath(const std::filesystem::path& user_data_root) {
-  return user_data_root / "settings.toml";
+trg::TextFileSettings OpenPlayerFile(const std::filesystem::path& path) {
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  if (!std::filesystem::exists(path, ec)) {
+    std::ofstream(path) << "# Hard Corps: Uprising player settings, written by the launcher.\n"
+                           "# Loaded after hard_corps_uprising.toml. Remove a line to use the shipped value.\n";
+  }
+  return trg::TextFileSettings(Utf8(path));
 }
+
+}  // namespace
 
 // Runs before the file is parsed: ReXGlue rejects a whole TOML file that contains one bad value.
 void RepairLegacyPlayerSettings(const std::filesystem::path& path) {
@@ -146,6 +170,18 @@ void LoadPlayerSettings(const std::filesystem::path& path) {
   RepairLegacyPlayerSettings(path);
   rex::cvar::LoadConfig(path);
   REXLOG_INFO("Player settings: {}", Utf8(path));
+}
+
+WindowPlacement SavedLauncherPlacement() {
+  struct Cvars {
+    int GetInt(const char* key, int) const { return std::atoi(rex::cvar::GetFlagByName(key).c_str()); }
+    bool GetBool(const char* key, bool) const { return rex::cvar::GetFlagByName(key) == "true"; }
+  };
+  return ReadPlacement(Cvars{});
+}
+
+bool SavedLauncherFullscreen() {
+  return REXCVAR_GET(hcu_launcher_fullscreen);
 }
 
 void GameSettings::Capture(const std::filesystem::path& player_file, const std::filesystem::path& shipped_config) {
@@ -203,13 +239,7 @@ bool GameSettings::Save() {
     }
   }
 
-  std::error_code ec;
-  std::filesystem::create_directories(player_file_.parent_path(), ec);
-  if (!std::filesystem::exists(player_file_, ec)) {
-    std::ofstream(player_file_) << "# Hard Corps: Uprising player settings, written by the launcher.\n"
-                                   "# Loaded after hard_corps_uprising.toml. Remove a line to use the shipped value.\n";
-  }
-  trg::TextFileSettings file(Utf8(player_file_));
+  trg::TextFileSettings file = OpenPlayerFile(player_file_);
   for (const auto& [key, value] : changes) {
     file.Set(key, TomlValue(key, value));
   }
@@ -218,6 +248,18 @@ bool GameSettings::Save() {
     return false;
   }
   saved_ = pending_;
+  return true;
+}
+
+bool GameSettings::SaveNow(const SettingValues& values) {
+  trg::TextFileSettings file = OpenPlayerFile(player_file_);
+  for (const auto& [key, value] : values) {
+    file.Set(key, value);
+  }
+  if (!file.Save()) {
+    REXLOG_ERROR("Cannot write player settings to {}", Utf8(player_file_));
+    return false;
+  }
   return true;
 }
 
