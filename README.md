@@ -16,7 +16,7 @@
 
 ## Features
 
-- **Native static recompilation**: the game's own code, not an emulator. Windows 10/11 x64, and an experimental Linux / Steam Deck AppImage.
+- **Native static recompilation**: the game's own code, not an emulator. Native Windows build, plus an experimental Linux / Steam Deck AppImage
 - **TRG launcher** with a game package installer, optional **DLC characters** (Harley Daniels, Sayuri, Leviathan) and graphics and display options.
 - **Cheats**: press **F10** in game for a cheat menu with Infinite Health, Infinite Lives, Rapid Fire, Jump Height 2x, Keep Weapons on Hit, Movement Speed 2x and Super Armor. Changes made in the menu last for the session.
 - **In-game FPS counter**: frame rate and frame time in the corner, enabled from the launcher and toggled with **F2**. The frame rate can also be shown in the window title, as a separate option.
