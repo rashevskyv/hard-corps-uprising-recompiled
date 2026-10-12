@@ -264,7 +264,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
         {"Graphics", "Render resolution, anti-aliasing and texture filtering.",
          [](trg::Ui& ui) { PageGraphics(ui); }},
         {"Gameplay", "What the window shows while you play.", [](trg::Ui& ui) { PageGameplay(ui); }},
-        {"Cheats", "Gameplay assistance", [](trg::Ui& ui) { PageCheats(ui); }},
+        {"Cheats", "Optional gameplay modifiers", [](trg::Ui& ui) { PageCheats(ui); }},
         {"Achievements", "Your achievements on this PC.", [this](trg::Ui& ui) { PageAchievements(ui); }},
         {"Controls", "Controller and keyboard.", [](trg::Ui& ui) { PageControls(ui); }},
         {"About", "About this port, and where your files and settings live.",
@@ -808,10 +808,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   }
 
   static void PageCheats(trg::Ui& ui) {
-    ui.Paragraph("Optional gameplay assists. All cheats are off by default.");
-    ui.Spacer(8);
-    ui.Help("Press F10 while playing to open the Cheat Menu and change cheats instantly.");
-    ui.Help("Changes made in-game apply only to the current session and are not saved to the launcher.");
+    ui.Help("Press F10 while playing to open the Cheats menu. Changes made there apply only to the current session.");
     ui.Spacer(12);
     ui.Toggle("Infinite Health", "Prevent normal damage from reducing player health", "hcu_cheat_health", false,
               "Off", "On");
