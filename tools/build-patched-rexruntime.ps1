@@ -106,6 +106,7 @@ function Install-PatchedRuntime {
     }
 
     Invoke-Native 'git checkout' { git -C $src checkout -- src include tests }
+    Invoke-Native 'git clean' { git -C $src clean -fdq -- src include tests }
     $patches = Get-RuntimePatchFiles
     foreach ($patch in $patches) {
         & git -C $src apply --check $patch.FullName

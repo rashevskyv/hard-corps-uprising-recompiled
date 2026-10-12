@@ -12,10 +12,57 @@ ships the stock GPU plugin.
 | [0003-gpu-waits-and-submissions](../patches/rexglue-sdk/0003-gpu-waits-and-submissions.patch) | GPU plugin | waits, submissions and occlusion queries of the command processor, resolve preflight (`src/graphics`) |
 | [0004-gpu-draw-path](../patches/rexglue-sdk/0004-gpu-draw-path.patch) | GPU plugin | draw extent estimation, primitive cache threshold, shared memory request allocation |
 | [0005-render-target-transfer-performance](../patches/rexglue-sdk/0005-render-target-transfer-performance.patch) | GPU plugin | render target ownership transfers in the D3D12 render target cache, vertex positions in the draw extent estimator |
-| [0006-debug-saulo-gpu-thread-stats](../patches/rexglue-sdk/0006-debug-saulo-gpu-thread-stats.patch) | GPU plugin | temporary `DEBUG_SAULO` log lines from the D3D12 command processor and render target cache; removed in the final review (needs 0003 and 0005) |
+| [0006-cpu-timers-and-waits](../patches/rexglue-sdk/0006-cpu-timers-and-waits.patch) | runtime | Windows sleeps, the guest vblank thread, the timer queue thread, guest critical sections and a perf counter (`src/core`, `src/graphics/graphics_system.cpp`, `src/kernel/xboxkrnl/xboxkrnl_rtl.cpp`) |
+| [0007-render-target-stencil-regions](../patches/rexglue-sdk/0007-render-target-stencil-regions.patch) | GPU plugin | per-tile stencil bit tracking of depth render targets, stencil runs in depth transfers and clears, transfers and ownership claims that skip the rows above a draw (D3D12 render target cache, render target cache base, draw extent estimator) |
+| [0008-debug-saulo-gpu-thread-stats](../patches/rexglue-sdk/0008-debug-saulo-gpu-thread-stats.patch) | runtime and GPU plugin | temporary `DEBUG_SAULO` log lines from the D3D12 command processor and render target cache, and CPU lines from the kernel (threads, sleeps, waits, file I/O, locks, vblanks); removed in the final review (needs 0003, 0005, 0006 and 0007) |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
+
+## Why 0007
+
+The heavy 4x scenes spent most ownership transfer draws on stencil bits: one depth render target mask that only ever
+gained bits, so a single color to depth transfer made every depth to depth transfer after it draw eight bit passes.
+
+- **Stencil bits per tile.** A depth render target keeps the bits that may be set per EDRAM tile. Draws mark only the
+  tiles they claim and only with the bits their stencil state can write (a failing or never-writing stencil state
+  marks nothing); clears assign the cleared value. A transfer takes the bits of its source tiles, so the transferred
+  range is split into runs of equal bits, drawn once per bit that run has, and the destination stencil is cleared only
+  where it may hold something. Where a transfer replaces the destination it assigns the source bits instead of
+  adding them.
+- **Stencil through color.** A depth to color transfer packs the stencil into the low byte of 8_8_8_8, 2_10_10_10 and
+  16_16 targets, so such a color target keeps the bits of the tiles it received. Any draw or clear that writes color
+  there makes them unknown again, and a transfer back to depth then uses all bits.
+- **Rows above a draw.** The draw extent estimator also returns a conservative first row (scissor, viewport, or the
+  vertex positions when clipping is disabled). The render target cache claims ownership only from that row down, in
+  whole tile rows, so the tiles above are neither transferred nor claimed. The claim stays a single range, so
+  columns are not narrowed.
+
+## Why 0006
+
+Windows only; the Linux build still applies 0001 alone.
+
+- **Profiling counter.** Builds other than Release (RelWithDebInfo, the default of `toolsuild.ps1`) compile the
+  recompiled game with `REXGLUE_ENABLE_PERF_COUNTERS`, so every guest indirect call (every virtual call) ran
+  `rex::perf::IncrementCounter(kFunctionsDispatched)`: a call into the runtime and a locked add on one shared counter.
+  With several guest threads running at once, which is what loading is, they all fought for that one cache line.
+  The counter is now added to a per-thread count that is published in batches of 1024. Release has no such call.
+- **Sleeps.** `Sleep` and the alertable sleep lasted up to a timer tick longer than asked (a 1 ms sleep took 1.8 ms
+  on the test machine). From 1 ms up they now wait on a high-resolution waitable timer, as King Kong Recompiled's
+  frame limiter does. Waits with a timeout (`WaitForSingleObject` and friends) still follow the system timer.
+- **Guest vblank thread.** It polled with `Sleep(1)` (about 1.8 ms), so a vblank could come up to two milliseconds
+  after its time; it now sleeps until the next vblank is due. It runs one priority level above normal, since it sleeps
+  almost all the time and a late vblank delays the guest's frame.
+- **Timer queue thread.** The thread behind `HighResolutionTimer` (the 1 ms `KeTimeStampBundle` updater is the only
+  user on Windows) waited with disruptorplus' spin wait strategy. Each wait began with about 4000 `pause`
+  instructions and 19 `SwitchToThread` calls before a 1 ms sleep, so the thread woke about 500 times a second and
+  spun for a good part of each wake-up for as long as the game ran. It now blocks on a condition variable that
+  `QueueTimer` signals. disruptorplus' own blocking strategy passes its predicate and timeout to
+  `std::condition_variable` in the wrong order and cannot wait with a timeout, so the patch carries a small one.
+  Callbacks run up to a timer tick late.
+- **Guest critical sections.** A thread that finds a guest critical section taken now polls the lock for up to 256
+  pauses before it registers as a waiter and sleeps in the kernel. Only a free lock without waiters is ever taken, so
+  a thread that already waits is not overtaken.
 
 ## Why 0003
 
