@@ -16,6 +16,7 @@
 
 ## Features
 
+- **Major performance improvements on Windows and Linux** (v0.4.0): far less CPU busy-waiting on the GPU, and less render-target and EDRAM transfer work in the D3D12 (Windows) and Vulkan (Linux) renderers, with no change to gameplay.
 - **Native static recompilation**: the game's own code, not an emulator. Native Windows build, plus an experimental Linux / Steam Deck AppImage
 - **TRG launcher** with a game package installer, optional **DLC characters** (Harley Daniels, Sayuri, Leviathan) and graphics and display options.
 - **Cheats**: press **F10** in game for a cheat menu with Infinite Health, Infinite Lives, Rapid Fire, Jump Height 2x, Keep Weapons on Hit, Movement Speed 2x and Super Armor. Changes made in the menu last for the session.
@@ -42,7 +43,7 @@ The launcher checks the Title ID and content type when you pick the package, and
 
 ## Installing
 
-1. Download **HardCorpsUprising-v0.3.2-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
+1. Download **HardCorpsUprising-v0.4.0-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
 2. Run **hard_corps_uprising.exe**. The launcher opens.
 3. On the **Play** page click **Install from package...** and pick your package. It is one file with a long hexadecimal name and no extension. On an Xbox 360 drive it is in `Content\0000000000000000\58410A18\000D0000\`.
 4. Wait until **Ready to play** appears. The game files (about 1 GB) are copied into the `game` folder next to the program. The package file itself is not copied there.
@@ -64,7 +65,7 @@ Installed DLC is stored in the `user_data` folder next to the program (see [docs
 
 ### Linux and Steam Deck
 
-**Experimental.** This is a native Linux build (ReXGlue's Linux runtime with Vulkan), not Proton. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware.
+**Experimental.** This is a native Linux build (ReXGlue's patched Linux runtime and Vulkan GPU plugin, with the same performance work as Windows where it applies), not Proton. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware.
 
 1. Download **HardCorpsUprising-v…-linux-x86_64.AppImage** from the release and mark it executable (right-click > **Properties** > **Permissions** > **Is executable**, or `chmod +x`).
 2. Run it, then install your package from the **Play** page as above. The game files go in a `game` folder next to the AppImage.

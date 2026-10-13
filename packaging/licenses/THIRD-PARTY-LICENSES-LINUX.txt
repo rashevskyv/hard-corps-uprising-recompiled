@@ -2,7 +2,8 @@ THIRD-PARTY LICENSES - LINUX
 ============================
 
 The Linux AppImage ships the Linux release libraries of ReXGlue SDK 0.10.0 (librexruntime.so and
-librexgpu-xenos.so, unmodified). They include every component in THIRD-PARTY-LICENSES.txt that applies
+librexgpu-xenos.so, the Vulkan GPU plugin), built with this project's compatibility and performance patches.
+The libraries include every component in THIRD-PARTY-LICENSES.txt that applies
 to them, plus the components below, which the Windows DLLs do not contain. Commits are the versions that
 ReXGlue SDK 0.10.0 pins.
 

@@ -1,50 +1,60 @@
-## Hard Corps: Uprising PC Port v0.3.2 - Gameplay and Launcher Improvements
+## Hard Corps: Uprising PC Port v0.4.0 - Major Performance Improvements
 
-This release brings together the gameplay, offline Live, portability and launcher improvements added since v0.3.1.
+v0.4.0 is a major cross-platform performance release, bringing extensive CPU, GPU and runtime optimizations to both Windows and Linux. Windows received substantial improvements to D3D12 rendering, synchronization and CPU wait behavior, while Linux now includes equivalent Vulkan/POSIX optimizations for the applicable runtime and rendering paths. The result is significantly lower CPU overhead, reduced render-target and EDRAM transfer work, improved GPU synchronization and more efficient command processing, without changing gameplay behavior.
 
-### New: cheats
-- Press **F10** in game to open the cheat menu. Up and Down (or the D-pad) select, Enter (or A) toggles, F10, Escape or B closes.
-- **Infinite Health**, **Infinite Lives**, **Rapid Fire**, **Jump Height 2x**, **Keep Weapons on Hit**, **Movement Speed 2x** and **Super Armor**.
-- All cheats are off by default. They are also set on the launcher's **Cheats** page before Play. Changes made in the in-game menu apply to the current session only and are not saved.
-- Cheats apply to every character and to both players in local two-player.
+### Major performance improvements
+This is the largest performance-focused release so far. The work covers the whole path between the game and the graphics card:
+- **CPU wait behavior**: far less busy-waiting while the game waits for the GPU and for timers.
+- **GPU synchronization**: the game's GPU fence wait now blocks efficiently and wakes the moment the GPU is done.
+- **GPU register handling and command processing**: faster handling of the stream of register writes and commands the game sends to the graphics card.
+- **Command submission**: how work is handed to the GPU was tuned to cut CPU overhead.
+- **Render-target ownership, stencil and depth handling**: fewer transfers between render targets, and transfers limited to the area that is actually used.
+- **EDRAM tracking and dirty tiles**: the emulated Xbox 360 EDRAM is tracked per tile, so only tiles that changed are copied.
+- **Resolve behavior**: less preparation work before a resolve.
 
-### New: offline Live features
-Everything stays offline: there is no Xbox Live connection, Microsoft sign-in or online player.
-- **Achievements**: the game's 12 achievements unlock locally with the usual notification and are kept between runs. They have an in-game list (**F7** or the menu items) and a launcher **Achievements** page.
-- **Leaderboards**: the game's own Leaderboards screen shows your own scores, kept in a local file on this PC.
-- **Download Content** shows a short note instead of the Xbox Marketplace. Extra characters are installed from the launcher's DLC page.
+Each platform uses its own native mechanisms where that is the right way to do it. The results are equivalent behavior, not identical source code.
 
-### New: portable user data
-Saves, settings and player data now live in a `user_data` folder beside the program (beside the AppImage on Linux). Copying the program folder to another PC carries them along. Data from the previous system location (`Documents\hard_corps_uprising` on Windows, `~/.local/share/hard_corps_uprising` on Linux) is moved into `user_data` automatically at the first start. If the move fails, or the program folder is not writable, the old location is used for that run and nothing is lost. Details are in [docs/user-data.md](https://github.com/saulob/hard-corps-uprising-recompiled/blob/main/docs/user-data.md).
+### CPU and synchronization improvements
+- A GPU fence polling loop that kept the game's main thread spinning was replaced with an efficient blocking wait. It is bounded, so the game always keeps making progress.
+- Less unnecessary CPU busy-waiting, more efficient GPU fence synchronization and lower main-thread CPU usage.
+- Timer, vertical-blank and guest critical-section waits were reworked to avoid unnecessary wakeups and spinning.
+- **On the Windows test system**, the game's main thread used approximately 98-100% of one CPU core in demanding gameplay before this change and approximately 14-20% of one core in representative heavy gameplay after it. Results vary with the PC.
 
-### New: FPS counter
-- A frame counter in the top-right corner shows the frame rate and frame time (for example `60 FPS  16.7 ms`).
-- Enable it from the launcher's **Gameplay** page. It is hidden by default. **F2** shows or hides it for the current session without changing the saved setting.
-- **Frame rate in title** is a separate, independent option that shows the frame rate in the window title.
-- The counter stays readable together with the F10 cheat menu.
+### GPU / rendering performance
+- Faster handling of GPU register writes and a more efficient command processor.
+- Better command submission, and occlusion queries that no longer stall the CPU.
+- Fewer render-target ownership transfers. A transfer is skipped only when the game is proven to overwrite the area anyway; the same EDRAM address alone is never treated as enough.
+- Less stencil and depth transfer work: transfers cover only the tiles and rows that are used.
+- Dirty-tile EDRAM tracking, and a cheaper draw path.
+- **On the Windows test system**, scenes that were previously demanding were able to sustain approximately 59-60 FPS, including at a high internal render scale during validation. This is a result from one system, not a guarantee for every PC or scene.
 
-### Launcher and window improvements
-- The launcher remembers its position and size, and whether it was maximized or in its own F11 borderless fullscreen.
-- **F11** works in both places: in the launcher it controls the launcher's window, and in game it controls the game's Display mode. The two are independent, and the game's Display mode does not change the launcher's state.
-- A saved position that is no longer on any screen, for example after unplugging a monitor, is recovered onto a visible screen.
-- During focused fullscreen gameplay the mouse cursor hides after 5 seconds without movement and returns as soon as the mouse moves.
+### Linux / Vulkan performance parity
+v0.4.0 extends the applicable performance work to Linux instead of leaving it on the older runtime and rendering paths.
+- Linux now uses the project's patched ReXGlue runtime and its patched Vulkan GPU plugin.
+- Command submission is optimized, and occlusion/query handling avoids unnecessary CPU stalls.
+- The render-target transfer optimizations were ported to Vulkan, including stencil/depth region tracking and dirty EDRAM tile handling.
+- GPU fence waits use efficient futex-based blocking.
+- The Linux command thread no longer wakes in short polling slices while it is idle, where applicable.
 
-### Achievement overlay improvements
-- A visible **X** close button.
-- A clearer, larger **B Back** prompt.
-- One **B** press now closes only the achievements overlay, instead of also reaching the menu underneath.
+The Linux runtime and the AppImage passed automated build, packaging and regression validation. **Linux performance has not been measured on real gameplay yet**, so no frame rate or CPU figures are given for it. Reports from real Linux PCs and Steam Deck are welcome.
 
-### Existing fixes included
-v0.3.2 includes the v0.3.1 memory allocator fix: ReXGlue 0.10.0 with the `PhysicalHeap::Release` patch, which releases physical pages only after the game's own memory view has let go of them. Details are in [docs/rexglue-runtime-patch.md](https://github.com/saulob/hard-corps-uprising-recompiled/blob/main/docs/rexglue-runtime-patch.md).
+### Runtime and build improvements
+The build workflow now tracks the active ReXGlue patch set per platform and refreshes the patched runtime and GPU plugin when required, reducing the chance of accidentally using stale runtime binaries. This applies to both Windows and Linux.
+
+### Linux RenderDoc fix
+Fixed unintended RenderDoc activation on Linux. ReXGlue now detects RenderDoc only when it is already intentionally attached instead of loading librenderdoc.so during ordinary startup. Normal RenderDoc debugging support is preserved, with focused loader and packaging checks to prevent the issue from returning.
+
+### Included from earlier releases
+All gameplay, launcher, offline Live, portability and quality-of-life improvements from v0.3.2 remain included: the cheat menu (**F10**), offline achievements and leaderboards, portable `user_data`, the FPS counter (**F2**) and the launcher and window improvements. So does the v0.3.1 memory allocator fix; details are in [docs/rexglue-runtime-patch.md](https://github.com/saulob/hard-corps-uprising-recompiled/blob/main/docs/rexglue-runtime-patch.md).
 
 ### Downloads and install
-**Windows**: **HardCorpsUprising-v0.3.2-windows-x64.zip**
+**Windows**: **HardCorpsUprising-v0.4.0-windows-x64.zip**
 1. Unzip it anywhere you can write to.
 2. Run **hard_corps_uprising.exe**.
 3. On the launcher's **Play** page click **Install from package...** and pick your own Hard Corps: Uprising Xbox Live Arcade package (not needed again if the game is already installed).
 4. Press **PLAY**.
 
-**Linux and Steam Deck (experimental)**: **HardCorpsUprising-v0.3.2-linux-x86_64.AppImage**
+**Linux and Steam Deck (experimental)**: **HardCorpsUprising-v0.4.0-linux-x86_64.AppImage**
 1. Put it in a folder you can write to and mark it executable (right-click > **Properties** > **Permissions** > **Is executable**, or `chmod +x`).
 2. Run it and install your own package from the **Play** page, as on Windows. The game files go in a `game` folder next to the AppImage.
 3. On a Steam Deck, do this in **Desktop Mode**, then add the AppImage with **Games > Add a Non-Steam Game to My Library** and play it from **Game Mode**.
@@ -56,20 +66,20 @@ v0.3.2 includes the v0.3.1 memory allocator fix: ReXGlue 0.10.0 with the `Physic
 | Title ID | `58410A18` (Xbox Live Arcade, content type `000D0000`) |
 | Game version | `default.xex` 0.0.0.3, 12,955,648 bytes, CRC32 `3DF903B9`, SHA-256 `530EDE8ED5271051A2AB19C077A97FB167E4F30B094C292E8F59D37D0D2069DC` |
 
-### Linux status
-**Experimental.** The Linux build is a native x86_64 program on the ReXGlue 0.10.0 Linux runtime with its Vulkan graphics backend. It is **not** a Proton or Wine build. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware, so rendering, audio, controllers and the Steam Deck flow may still have problems. Please report what you find. See [docs/linux.md](https://github.com/saulob/hard-corps-uprising-recompiled/blob/main/docs/linux.md) for details and known limits.
+### Requirements and platform notes
+- **Windows**: Windows 10 or 11 (64-bit), a DirectX 12 graphics card, and the latest Microsoft Visual C++ 2015-2022 Redistributable (x64).
+- **Linux**: 64-bit x86 Linux with glibc 2.35 or newer (Ubuntu 22.04 or later), a Vulkan driver, and an X11 or Wayland desktop.
+- **Linux status: experimental.** The Linux build is a native x86_64 program on the ReXGlue 0.10.0 Linux runtime with its Vulkan graphics backend. It is **not** a Proton or Wine build. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware, so rendering, audio, controllers and the Steam Deck flow may still have problems. See [docs/linux.md](https://github.com/saulob/hard-corps-uprising-recompiled/blob/main/docs/linux.md) for details and known limits.
+- Linux packaging now checks the libraries' search paths and rejects build-machine paths in the packaged binaries.
+- The ReXGlue runtime and GPU plugin are ReXGlue SDK 0.10.0 built with project-maintained compatibility and performance patches; the rest of the SDK is the unmodified release.
 
 ### Reporting problems
 If the game does not start or crashes, please open an [issue](https://github.com/saulob/hard-corps-uprising-recompiled/issues) and attach the newest `hard_corps_uprising_*.log` file from the `logs` folder next to the program (next to the AppImage on Linux), with a line about what you were doing. For Linux reports, please also say your distribution and graphics card.
 
-### Requirements
-- **Windows**: Windows 10 or 11 (64-bit), a DirectX 12 graphics card, and the latest Microsoft Visual C++ 2015-2022 Redistributable (x64).
-- **Linux**: 64-bit x86 Linux with glibc 2.35 or newer (Ubuntu 22.04 or later), a Vulkan driver, and an X11 or Wayland desktop.
-
 ### Checksums
-SHA-256 files are published with the release for both downloads: `HardCorpsUprising-v0.3.2-windows-x64.sha256` and `HardCorpsUprising-v0.3.2-linux-x86_64.sha256`.
+SHA-256 files are published with the release for both downloads: `HardCorpsUprising-v0.4.0-windows-x64.sha256` and `HardCorpsUprising-v0.4.0-linux-x86_64.sha256`.
 
 | File | SHA-256 |
 | --- | --- |
-| `HardCorpsUprising-v0.3.2-windows-x64.zip` | `f3e99954f31244898f25dd5d9222922f93f99b660b6ade4949fb0caf04a10fc4` |
-| `HardCorpsUprising-v0.3.2-linux-x86_64.AppImage` | `31f68c6484e0af72ce1dabd2de5fbd28d47a173b109c50a1da35f4657f6987a5` |
+| `HardCorpsUprising-v0.4.0-windows-x64.zip` | `740069c868444e5937e7f510434af5a5594b49ef4cebade8e1cb101320c16a9d` |
+| `HardCorpsUprising-v0.4.0-linux-x86_64.AppImage` | `0c9a9e2f7762a37f84dc45db3a9a6e2aa821f9debcdff1bace494a5867647ede` |

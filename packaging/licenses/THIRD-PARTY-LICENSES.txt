@@ -3,7 +3,8 @@ THIRD-PARTY LICENSES
 
 Hard Corps: Uprising PC port includes the components below, with ReXGlue SDK 0.10.0
 (https://github.com/rexglue/rexglue-sdk, tag v0.10.0), whose license is in ReXGlue-LICENSE.txt.
-rexruntime.dll and rexgpu-xenos.dll are the unmodified Windows release DLLs of ReXGlue SDK 0.10.0.
+rexruntime.dll and rexgpu-xenos.dll are the Windows release DLLs of ReXGlue SDK 0.10.0, built with this project's
+compatibility and performance patches. The rest of the SDK is the unmodified release.
 Commits are the versions that ReXGlue SDK 0.10.0 pins.
 
 
