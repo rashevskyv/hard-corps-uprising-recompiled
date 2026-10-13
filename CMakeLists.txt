@@ -54,6 +54,7 @@ set(HCU_SOURCES
     src/cheats.cpp
     src/frame_counter.cpp
     src/game_files.cpp
+    src/gpu_fence_wait.cpp
     src/launcher.cpp
     src/launcher_achievements.cpp
     src/legacy_settings.cpp
@@ -83,7 +84,15 @@ endif()
 rexglue_setup_target(hard_corps_uprising GPU_PLUGINS xenos)
 target_link_libraries(hard_corps_uprising PRIVATE trg::launcher)
 if(WIN32)
-    target_link_libraries(hard_corps_uprising PRIVATE shcore)
+    target_link_libraries(hard_corps_uprising PRIVATE shcore synchronization)
+    # The SDK stages its DLLs only when the program links, so a rebuilt runtime or GPU plugin has to
+    # make it link again; tools/build.ps1 also checks the staged copies.
+    foreach(_sdk_dll rexruntime rexruntimed rexruntimerd rexgpu-xenos rexgpu-xenosd rexgpu-xenosrd)
+        if(EXISTS "${HCU_SDK_DIR}/bin/${_sdk_dll}.dll")
+            set_property(TARGET hard_corps_uprising APPEND PROPERTY LINK_DEPENDS
+                "${HCU_SDK_DIR}/bin/${_sdk_dll}.dll")
+        endif()
+    endforeach()
 else()
     # The SDK stages the runtime beside the program only on Windows and macOS; the RPATH is $ORIGIN.
     add_custom_command(TARGET hard_corps_uprising POST_BUILD
@@ -164,4 +173,21 @@ add_custom_command(TARGET hcu_physical_heap_stress POST_BUILD
 )
 if(NOT WIN32)
     set_target_properties(hcu_physical_heap_stress PROPERTIES BUILD_RPATH "$ORIGIN")
+endif()
+
+# RenderDoc detection test (Linux), not part of the default build: cmake --build <dir> --target hcu_renderdoc_detect_tests
+if(UNIX AND NOT APPLE)
+    add_library(hcu_fake_renderdoc SHARED EXCLUDE_FROM_ALL tests/fake_renderdoc.cpp)
+    set_target_properties(hcu_fake_renderdoc PROPERTIES OUTPUT_NAME renderdoc)
+    add_executable(hcu_renderdoc_detect_tests EXCLUDE_FROM_ALL tests/renderdoc_detect_tests.cpp)
+    target_link_libraries(hcu_renderdoc_detect_tests PRIVATE rex::runtime rex::renderdoc ${CMAKE_DL_LIBS})
+    add_dependencies(hcu_renderdoc_detect_tests hcu_fake_renderdoc)
+    add_custom_command(TARGET hcu_renderdoc_detect_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:rex::runtime>"
+            "$<TARGET_FILE:hcu_fake_renderdoc>"
+            "$<TARGET_FILE_DIR:hcu_renderdoc_detect_tests>"
+        VERBATIM
+    )
+    set_target_properties(hcu_renderdoc_detect_tests PROPERTIES BUILD_RPATH "$ORIGIN")
 endif()
