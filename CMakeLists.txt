@@ -101,6 +101,14 @@ else()
             "$<TARGET_FILE_DIR:hard_corps_uprising>"
         VERBATIM
     )
+    # The post-build copies (this one and the SDK's GPU plugin copy) only run when the program links, so a
+    # rebuilt runtime or GPU plugin has to make it link again; tools/package-linux.sh also checks the copies.
+    foreach(_sdk_lib rexruntime rexruntimed rexruntimerd rexgpu-xenos rexgpu-xenosd rexgpu-xenosrd)
+        if(EXISTS "${HCU_SDK_DIR}/lib/lib${_sdk_lib}.so")
+            set_property(TARGET hard_corps_uprising APPEND PROPERTY LINK_DEPENDS
+                "${HCU_SDK_DIR}/lib/lib${_sdk_lib}.so")
+        endif()
+    endforeach()
 endif()
 target_compile_definitions(hard_corps_uprising PRIVATE
     HCU_PORT_VERSION="${PROJECT_VERSION}"
