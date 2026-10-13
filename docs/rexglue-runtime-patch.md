@@ -2,8 +2,8 @@
 
 Hard Corps: Uprising ships ReXGlue **v0.10.0** (tag `v0.10.0`, commit `f5337cdc947ff6d4c4196737e2c807a48f2a1fc2`) with
 local patches to the runtime library (`rexruntime.dll` / `librexruntime.so`) and, on Windows, to the Xenos GPU plugin
-(`rexgpu-xenos.dll`). Everything else in the SDK is the stock release. The Linux build applies only patch 0001 and
-ships the stock GPU plugin.
+(`rexgpu-xenos.dll`). Everything else in the SDK is the stock release. The Linux build applies patches 0001 and 0010
+only and ships the stock GPU plugin.
 
 | Patch | Library | Change |
 | --- | --- | --- |
@@ -16,9 +16,31 @@ ships the stock GPU plugin.
 | [0007-render-target-stencil-regions](../patches/rexglue-sdk/0007-render-target-stencil-regions.patch) | GPU plugin | per-tile stencil bit tracking of depth render targets, stencil runs in depth transfers and clears, transfers and ownership claims that skip the rows above a draw (D3D12 render target cache, render target cache base, draw extent estimator) |
 | [0008-edram-dump-dirty-tiles](../patches/rexglue-sdk/0008-edram-dump-dirty-tiles.patch) | GPU plugin | per-tile tracking of EDRAM tiles that the host render targets changed since they were dumped, so resolves dump only those (render target cache base and D3D12 render target cache) |
 | [0009-guest-fence-wake](../patches/rexglue-sdk/0009-guest-fence-wake.patch) | GPU plugin | wakes host threads blocked on a guest memory word after the command processor writes it (event write, memory write, conditional write, register to memory); the game's GPU fence wait blocks on the word |
+| [0010-renderdoc-detect-loaded-only](../patches/rexglue-sdk/0010-renderdoc-detect-loaded-only.patch) | runtime | `RenderDocAPI::CreateIfConnected` only uses a RenderDoc library the process already loaded (`src/ui/renderdoc_api.cpp`, `DynamicLibrary::LoadExisting` in `src/core/dynlib_*.cpp`) |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
+
+## Why 0010
+
+`RenderDocAPI::CreateIfConnected` is meant to find a RenderDoc that is already attached to the process, and is called
+when the Vulkan instance is created and by the GPU debug marker check. It looked for it with `DynamicLibrary::Load`,
+which is `dlopen("librenderdoc.so")` on Linux and `LoadLibraryW("renderdoc.dll")` on Windows. Those also load the
+library when the loader can find it, and loading RenderDoc's library in-process is what activates it: the reporter
+of [issue #6](https://github.com/saulob/hard-corps-uprising-recompiled/issues/6) on SteamOS got `RenderDoc API
+initialized` in the log and RenderDoc's overlay without having attached anything.
+
+- **Lookup.** `DynamicLibrary::LoadExisting` takes a reference to a library the process has already loaded and never
+  loads one: `dlopen` with `RTLD_NOLOAD` on POSIX (null if the library is not loaded), `GetModuleHandleExW` without
+  `GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT` on Windows (it adds a reference). Both leave the object owning one
+  reference, which the existing `Close` (`dlclose`/`FreeLibrary`) releases. `Load` is unchanged.
+- **Caller.** `CreateIfConnected` uses `LoadExisting`, so it returns `nullptr` when RenderDoc is not in the process,
+  and still returns the API when RenderDoc was injected or preloaded. macOS keeps returning `nullptr` before any
+  lookup. This does not change what the GPU does, and nothing here is evidence about CPU or GPU load.
+- **Test.** `tests/renderdoc_detect_tests.cpp` (CMake target `hcu_renderdoc_detect_tests`, Linux, not part of the
+  default build) puts a fake `librenderdoc.so` on the loader path and checks that `CreateIfConnected` returns
+  `nullptr` without loading it, that it finds the API when the library was loaded on purpose, and that the library
+  unloads once its last owner is gone.
 
 ## Why 0009
 
@@ -72,7 +94,7 @@ gained bits, so a single color to depth transfer made every depth to depth trans
 
 ## Why 0006
 
-Windows only; the Linux build still applies 0001 alone.
+Windows only; the Linux build does not apply it.
 
 - **Profiling counter.** Builds other than Release (RelWithDebInfo, the default of `tools\build.ps1`) compile the
   recompiled game with `REXGLUE_ENABLE_PERF_COUNTERS`, so every guest indirect call (every virtual call) ran
@@ -214,7 +236,8 @@ plugin into `out\rexglue-sdk-src` (use `-WorkDir` for a shorter path) and replac
 The Debug files stay stock. After `-Restore`, the next `build.ps1` patches them again.
 
 Linux (Ubuntu 22.04, see [linux.md](linux.md)): `tools/package-linux.sh` runs `tools/build-patched-rexruntime.sh`
-itself the first time; it applies patch 0001 only and builds only the runtime. Besides the packages in linux.md it
+itself the first time; it applies the patches listed in `PATCHES` in that script (0001 and 0010) and builds only the
+runtime. Besides the packages in linux.md it
 needs git, network access and the SDK's build
 dependencies: `libgtk-3-dev libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev
 libxfixes-dev libxrender-dev libxss-dev libvulkan-dev libwayland-dev libwayland-bin wayland-protocols
@@ -241,8 +264,12 @@ game, and a failure prints the expected and the actual file.
 
 `tools/package-release.ps1` builds through `build.ps1`, then accepts the runtime and the GPU plugin only if the check
 passes; the packaged DLLs must also be identical to the installed ones. With `-SkipBuild` it does not update the
-runtime and fails when it is out of date. `tools/package-linux.sh` checks the runtime against patch 0001 and compares
-`librexgpu-xenos.so` with the stock release file.
+runtime and fails when it is out of date. `tools/package-linux.sh` checks the runtime against the Linux patch list and
+compares `librexgpu-xenos.so` with the stock release file. On Linux the stamp (`rexruntime-patch.txt`) records the
+commit, the patch names and one hash over every patch's name and hash in order, and the check fails if the list or the
+hash differs, if the library does not match the stamp or if it is the stock file. The AppDir check also fails on any
+file named like RenderDoc or a Vulkan layer, any JSON file or symbolic link, and any of the three binaries linking
+RenderDoc, besides the exact file list it already enforces.
 
 ## Allocator stress test
 
@@ -257,3 +284,13 @@ fails. With the stock runtime it fails; with the patched one it passes.
 
 On Linux: `tools/build-patched-rexruntime.sh --stress <sdk dir> <build dir>`, with a configured project build in
 `<build dir>`. To compare, run `-Restore` first and repeat the test with the stock runtime.
+
+## RenderDoc detection test
+
+On Linux, with a configured project build in `<build dir>` and the patched runtime installed:
+
+```bash
+tools/build-patched-rexruntime.sh --loader-test <sdk dir> <build dir>
+```
+
+It prints one `ok`/`FAIL` line per check and `PASS` at the end.

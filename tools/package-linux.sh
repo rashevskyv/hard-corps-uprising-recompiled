@@ -7,7 +7,7 @@
 #
 # Needs clang-20, clang++-20, cmake 3.25+, ninja, rsync, git, wget or curl, unzip or python3, binutils and the
 # GCC 13+ C++ runtime. Release builds are made on Ubuntu 22.04: the AppImage needs the build machine's glibc.
-# The ReXGlue runtime is built from source with the project's patch (tools/build-patched-rexruntime.sh) the
+# The ReXGlue runtime is built from source with the project's patches (tools/build-patched-rexruntime.sh) the
 # first time, which also needs network access and the packages in docs/rexglue-runtime-patch.md.
 # Needs generated/default (tools/codegen.ps1) and game/extracted/default.xex: the build re-runs codegen
 # when its inputs look changed, and it never packages either of them.
@@ -165,7 +165,9 @@ while IFS= read -r -d '' item; do
     default.xex | DataXENON | game | game-install-temp | game-install-backup | user_data | user_data.migrating | content | cache | logs | \
       settings.toml | settings.toml.bak | ArcadeInfo.xml | nxeart | 58410A18) problem "forbidden name: $rel" ;;
     *.xex | *.log | *.dmp | *.pdb | *.xsh | *.xpso | *.bak | *.tmp | *.sav) problem "forbidden file type: $rel" ;;
+    *[Rr]ender[Dd]oc* | *VkLayer* | *.json) problem "RenderDoc or Vulkan layer file: $rel" ;;
   esac
+  [ -L "$item" ] && problem "symbolic link: $rel"
   if [ -f "$item" ]; then
     case "$(head -c 4 "$item" | tr -d '\0')" in LIVE | PIRS | "CON ") problem "Xbox 360 package: $rel" ;; esac
     for path in "$ROOT" "$WORK" "$HOME"; do
@@ -202,6 +204,9 @@ ACTUAL="$(cd "$APPDIR" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
 [ "$ACTUAL" = "$EXPECTED" ] || { problem "unexpected AppDir contents:"; diff <(echo "$EXPECTED") <(echo "$ACTUAL") >&2 || true; }
 grep -qxF "StartupWMClass=$APP_ID" "$APPDIR/$APP_ID.desktop" || problem "StartupWMClass in $APP_ID.desktop is not $APP_ID"
 grep -qaF "$APP_ID" "$APPDIR/usr/bin/hard_corps_uprising" || problem "the program does not contain the application id $APP_ID"
+for f in hard_corps_uprising librexruntime.so librexgpu-xenos.so; do
+  if readelf -d "$APPDIR/usr/bin/$f" | grep -i renderdoc >/dev/null; then problem "$f links RenderDoc"; fi
+done
 readelf -d "$APPDIR/usr/bin/hard_corps_uprising" | grep -q 'R.*PATH.*\[\$ORIGIN\]' || problem "the program's RPATH is not \$ORIGIN"
 missing="$(ldd "$APPDIR/usr/bin/hard_corps_uprising" | grep 'not found' || true)"
 [ -z "$missing" ] || problem "unresolved libraries: $missing"
