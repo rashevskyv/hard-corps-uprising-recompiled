@@ -16,7 +16,6 @@ ships the stock GPU plugin.
 | [0007-render-target-stencil-regions](../patches/rexglue-sdk/0007-render-target-stencil-regions.patch) | GPU plugin | per-tile stencil bit tracking of depth render targets, stencil runs in depth transfers and clears, transfers and ownership claims that skip the rows above a draw (D3D12 render target cache, render target cache base, draw extent estimator) |
 | [0008-edram-dump-dirty-tiles](../patches/rexglue-sdk/0008-edram-dump-dirty-tiles.patch) | GPU plugin | per-tile tracking of EDRAM tiles that the host render targets changed since they were dumped, so resolves dump only those (render target cache base and D3D12 render target cache) |
 | [0009-guest-fence-wake](../patches/rexglue-sdk/0009-guest-fence-wake.patch) | GPU plugin | wakes host threads blocked on a guest memory word after the command processor writes it (event write, memory write, conditional write, register to memory); the game's GPU fence wait blocks on the word |
-| [0010-debug-saulo-gpu-thread-stats](../patches/rexglue-sdk/0010-debug-saulo-gpu-thread-stats.patch) | runtime and GPU plugin | temporary `DEBUG_SAULO` log lines from the D3D12 command processor and render target cache, and CPU lines from the kernel (threads, sleeps, waits, file I/O, locks, vblanks); removed in the final review (needs 0003, 0005, 0006, 0007 and 0008) |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
@@ -75,7 +74,7 @@ gained bits, so a single color to depth transfer made every depth to depth trans
 
 Windows only; the Linux build still applies 0001 alone.
 
-- **Profiling counter.** Builds other than Release (RelWithDebInfo, the default of `toolsuild.ps1`) compile the
+- **Profiling counter.** Builds other than Release (RelWithDebInfo, the default of `tools\build.ps1`) compile the
   recompiled game with `REXGLUE_ENABLE_PERF_COUNTERS`, so every guest indirect call (every virtual call) ran
   `rex::perf::IncrementCounter(kFunctionsDispatched)`: a call into the runtime and a locked add on one shared counter.
   With several guest threads running at once, which is what loading is, they all fought for that one cache line.
