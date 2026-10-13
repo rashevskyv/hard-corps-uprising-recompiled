@@ -54,6 +54,7 @@ set(HCU_SOURCES
     src/cheats.cpp
     src/frame_counter.cpp
     src/game_files.cpp
+    src/gpu_fence_wait.cpp
     src/launcher.cpp
     src/launcher_achievements.cpp
     src/legacy_settings.cpp
@@ -83,7 +84,7 @@ endif()
 rexglue_setup_target(hard_corps_uprising GPU_PLUGINS xenos)
 target_link_libraries(hard_corps_uprising PRIVATE trg::launcher)
 if(WIN32)
-    target_link_libraries(hard_corps_uprising PRIVATE shcore)
+    target_link_libraries(hard_corps_uprising PRIVATE shcore synchronization)
     # The SDK stages its DLLs only when the program links, so a rebuilt runtime or GPU plugin has to
     # make it link again; tools/build.ps1 also checks the staged copies.
     foreach(_sdk_dll rexruntime rexruntimed rexruntimerd rexgpu-xenos rexgpu-xenosd rexgpu-xenosrd)

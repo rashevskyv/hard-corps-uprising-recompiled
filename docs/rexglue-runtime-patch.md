@@ -14,10 +14,43 @@ ships the stock GPU plugin.
 | [0005-render-target-transfer-performance](../patches/rexglue-sdk/0005-render-target-transfer-performance.patch) | GPU plugin | render target ownership transfers in the D3D12 render target cache, vertex positions in the draw extent estimator |
 | [0006-cpu-timers-and-waits](../patches/rexglue-sdk/0006-cpu-timers-and-waits.patch) | runtime | Windows sleeps, the guest vblank thread, the timer queue thread, guest critical sections and a perf counter (`src/core`, `src/graphics/graphics_system.cpp`, `src/kernel/xboxkrnl/xboxkrnl_rtl.cpp`) |
 | [0007-render-target-stencil-regions](../patches/rexglue-sdk/0007-render-target-stencil-regions.patch) | GPU plugin | per-tile stencil bit tracking of depth render targets, stencil runs in depth transfers and clears, transfers and ownership claims that skip the rows above a draw (D3D12 render target cache, render target cache base, draw extent estimator) |
-| [0008-debug-saulo-gpu-thread-stats](../patches/rexglue-sdk/0008-debug-saulo-gpu-thread-stats.patch) | runtime and GPU plugin | temporary `DEBUG_SAULO` log lines from the D3D12 command processor and render target cache, and CPU lines from the kernel (threads, sleeps, waits, file I/O, locks, vblanks); removed in the final review (needs 0003, 0005, 0006 and 0007) |
+| [0008-edram-dump-dirty-tiles](../patches/rexglue-sdk/0008-edram-dump-dirty-tiles.patch) | GPU plugin | per-tile tracking of EDRAM tiles that the host render targets changed since they were dumped, so resolves dump only those (render target cache base and D3D12 render target cache) |
+| [0009-guest-fence-wake](../patches/rexglue-sdk/0009-guest-fence-wake.patch) | GPU plugin | wakes host threads blocked on a guest memory word after the command processor writes it (event write, memory write, conditional write, register to memory); the game's GPU fence wait blocks on the word |
+| [0010-debug-saulo-gpu-thread-stats](../patches/rexglue-sdk/0010-debug-saulo-gpu-thread-stats.patch) | runtime and GPU plugin | temporary `DEBUG_SAULO` log lines from the D3D12 command processor and render target cache, and CPU lines from the kernel (threads, sleeps, waits, file I/O, locks, vblanks); removed in the final review (needs 0003, 0005, 0006, 0007 and 0008) |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
+
+## Why 0009
+
+The game's main thread spent its time in a loop polling the GPU fence word of the device. The command processor writes
+that word with an event write packet on its own thread, so a waiter can sleep on the word's address instead.
+
+- **Wake.** After each guest memory write by the command processor (event write, memory write, conditional write,
+  register to memory) `WakeGuestWordWaiters` calls `WakeByAddressAll` on the written address. Nothing else changes in
+  the packet handlers. A full fence precedes the wake so the store is ordered before the wake looks for waiters.
+- **Wait.** `src/gpu_fence_wait.cpp` in the game hooks the begin and poll helpers of that one loop and calls
+  `WaitOnAddress` on the same physical-view address with the value it last saw, bounded by 2 ms. A write after the
+  value was read makes the wait return at once, so no write is slept through.
+- **Safety.** Any other caller, a stopped device, an unaligned or unmapped word, or a word whose two views differ keeps
+  the guest's own polling. After 8 waits that ended by timeout with the word already changed, blocking is turned off.
+
+## Why 0008
+
+A resolve first dumps the host render targets owning its source tiles into the EDRAM buffer, then copies from there.
+At 4x the dump was repeated for every resolve over the whole source rectangle, even for tiles no draw touched since
+the last dump.
+
+- **Dirty tiles.** One bit per EDRAM tile says the owning host render target may differ from what the EDRAM buffer
+  last got from it. It is set when ownership of a tile changes (any claim, including the transfer and the host depth
+  store into it), for the tiles of a resolve clear, and for the tiles a draw can write: the claimed range of each
+  color target with a nonzero write mask, and of the depth target when depth or stencil can be written. Dumping a
+  tile clears it. Everything starts dirty, and the render target cache reset sets everything dirty.
+- **Dump.** Each dump dispatch is shrunk to the smallest rectangle containing its dirty tiles, and dropped if there
+  are none. The guest-visible resolve copy is unchanged: it still reads the same EDRAM tiles, which are current.
+- **Not done.** Skipping the resolve copy itself (the destination would need a proof against CPU writes, other
+  resolves and the scaled resolve memory), a lazy dump, and a copy-free resolve (no way to prove every reader of the
+  EDRAM buffer).
 
 ## Why 0007
 
