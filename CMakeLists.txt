@@ -65,6 +65,7 @@ set(HCU_SOURCES
     src/notice_dialog.cpp
     src/platform.cpp
     src/settings.cpp
+    src/skip_intro.cpp
     src/stfs.cpp
     src/user_data.cpp
     src/window_host.cpp
@@ -139,6 +140,11 @@ target_compile_definitions(hcu_cheats_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT
 add_executable(hcu_frame_counter_tests EXCLUDE_FROM_ALL tests/frame_counter_tests.cpp)
 target_include_directories(hcu_frame_counter_tests PRIVATE src)
 target_compile_definitions(hcu_frame_counter_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Skip intro setting tests, not part of the default build: cmake --build <dir> --target hcu_skip_intro_tests
+add_executable(hcu_skip_intro_tests EXCLUDE_FROM_ALL tests/skip_intro_tests.cpp)
+target_include_directories(hcu_skip_intro_tests PRIVATE src)
+target_compile_definitions(hcu_skip_intro_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 # Cursor auto-hide tests, not part of the default build: cmake --build <dir> --target hcu_window_host_tests
 add_executable(hcu_window_host_tests EXCLUDE_FROM_ALL tests/window_host_tests.cpp)

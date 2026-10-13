@@ -14,6 +14,7 @@
 
 REXCVAR_DECLARE(bool, hcu_launcher);
 REXCVAR_DECLARE(bool, hcu_skip_launcher);
+REXCVAR_DECLARE(bool, hcu_skip_intro);
 REXCVAR_DECLARE(bool, hcu_show_fps);
 REXCVAR_DECLARE(bool, hcu_show_frame_counter);
 REXCVAR_DECLARE(int32_t, hcu_launcher_x);
