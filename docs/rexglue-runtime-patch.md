@@ -1,25 +1,67 @@
 # ReXGlue runtime patches
 
 Hard Corps: Uprising ships ReXGlue **v0.10.0** (tag `v0.10.0`, commit `f5337cdc947ff6d4c4196737e2c807a48f2a1fc2`) with
-local patches to the runtime library (`rexruntime.dll` / `librexruntime.so`) and, on Windows, to the Xenos GPU plugin
-(`rexgpu-xenos.dll`). Everything else in the SDK is the stock release. The Linux build applies patches 0001 and 0010
-only and ships the stock GPU plugin.
+local patches to the runtime library (`rexruntime.dll` / `librexruntime.so`) and to the Xenos GPU plugin
+(`rexgpu-xenos.dll` / `librexgpu-xenos.so`, the D3D12 backend on Windows and the Vulkan backend on Linux). Everything
+else in the SDK is the stock release.
 
-| Patch | Library | Change |
-| --- | --- | --- |
-| [0001-physical-release-order](../patches/rexglue-sdk/0001-physical-release-order.patch) | runtime | `PhysicalHeap::Release` in `src/system/xmemory.cpp` |
-| [0002-gpu-register-write-bulk-path](../patches/rexglue-sdk/0002-gpu-register-write-bulk-path.patch) | GPU plugin | register writes in `src/graphics/command_processor.cpp` |
-| [0003-gpu-waits-and-submissions](../patches/rexglue-sdk/0003-gpu-waits-and-submissions.patch) | GPU plugin | waits, submissions and occlusion queries of the command processor, resolve preflight (`src/graphics`) |
-| [0004-gpu-draw-path](../patches/rexglue-sdk/0004-gpu-draw-path.patch) | GPU plugin | draw extent estimation, primitive cache threshold, shared memory request allocation |
-| [0005-render-target-transfer-performance](../patches/rexglue-sdk/0005-render-target-transfer-performance.patch) | GPU plugin | render target ownership transfers in the D3D12 render target cache, vertex positions in the draw extent estimator |
-| [0006-cpu-timers-and-waits](../patches/rexglue-sdk/0006-cpu-timers-and-waits.patch) | runtime | Windows sleeps, the guest vblank thread, the timer queue thread, guest critical sections and a perf counter (`src/core`, `src/graphics/graphics_system.cpp`, `src/kernel/xboxkrnl/xboxkrnl_rtl.cpp`) |
-| [0007-render-target-stencil-regions](../patches/rexglue-sdk/0007-render-target-stencil-regions.patch) | GPU plugin | per-tile stencil bit tracking of depth render targets, stencil runs in depth transfers and clears, transfers and ownership claims that skip the rows above a draw (D3D12 render target cache, render target cache base, draw extent estimator) |
-| [0008-edram-dump-dirty-tiles](../patches/rexglue-sdk/0008-edram-dump-dirty-tiles.patch) | GPU plugin | per-tile tracking of EDRAM tiles that the host render targets changed since they were dumped, so resolves dump only those (render target cache base and D3D12 render target cache) |
-| [0009-guest-fence-wake](../patches/rexglue-sdk/0009-guest-fence-wake.patch) | GPU plugin | wakes host threads blocked on a guest memory word after the command processor writes it (event write, memory write, conditional write, register to memory); the game's GPU fence wait blocks on the word |
-| [0010-renderdoc-detect-loaded-only](../patches/rexglue-sdk/0010-renderdoc-detect-loaded-only.patch) | runtime | `RenderDocAPI::CreateIfConnected` only uses a RenderDoc library the process already loaded (`src/ui/renderdoc_api.cpp`, `DynamicLibrary::LoadExisting` in `src/core/dynlib_*.cpp`) |
+The platform of a patch is in its file name: `NNNN-name.patch` applies on Windows and Linux, `NNNN-name.windows.patch`
+only on Windows and `NNNN-name.linux.patch` only on Linux. The numbers are unique and the patches are applied in name
+order. `tools/rexruntime-patch.ps1` and `tools/build-patched-rexruntime.sh` follow the same rule, reject a patch whose
+name does not follow it and put only the patches of their platform in the fingerprint, so changing a Linux patch does
+not make the Windows runtime out of date, nor the other way round.
+
+| Patch | Platform | Library | Change |
+| --- | --- | --- | --- |
+| [0001-physical-release-order](../patches/rexglue-sdk/0001-physical-release-order.patch) | both | runtime | `PhysicalHeap::Release` in `src/system/xmemory.cpp` |
+| [0002-gpu-register-write-bulk-path](../patches/rexglue-sdk/0002-gpu-register-write-bulk-path.patch) | both | GPU plugin | register writes in `src/graphics/command_processor.cpp` |
+| [0003-gpu-waits-and-submissions](../patches/rexglue-sdk/0003-gpu-waits-and-submissions.patch) | both | GPU plugin | idle command thread wait, `WAIT_REG_MEM` polling and the `PollBackgroundWork` hook of the common command processor |
+| [0004-gpu-draw-path](../patches/rexglue-sdk/0004-gpu-draw-path.patch) | both | GPU plugin | draw extent estimation, primitive cache threshold, shared memory request allocation |
+| [0005-render-target-transfer-performance](../patches/rexglue-sdk/0005-render-target-transfer-performance.patch) | both | GPU plugin | draw-overwrite proof of the common render target cache, vertex positions in the draw extent estimator |
+| [0006-cpu-timers-and-waits](../patches/rexglue-sdk/0006-cpu-timers-and-waits.patch) | both | runtime | the guest vblank thread, the timer queue thread, guest critical sections and a perf counter (`src/core`, `src/graphics/graphics_system.cpp`, `src/kernel/xboxkrnl/xboxkrnl_rtl.cpp`) |
+| [0007-render-target-stencil-regions](../patches/rexglue-sdk/0007-render-target-stencil-regions.patch) | both | GPU plugin | used tile ranges and the first row of a draw, so ownership claims skip the rows above it (render target cache base, draw extent estimator) |
+| [0008-edram-dump-dirty-tiles](../patches/rexglue-sdk/0008-edram-dump-dirty-tiles.patch) | both | GPU plugin | per-tile dirty bits of the EDRAM, set by ownership claims and resolve clears (render target cache base) |
+| [0009-guest-fence-wake](../patches/rexglue-sdk/0009-guest-fence-wake.patch) | both | GPU plugin | wakes host threads blocked on a guest memory word after the command processor writes it (event write, memory write, conditional write, register to memory); the game's GPU fence wait blocks on the word (`WakeByAddressAll` / futex) |
+| [0010-renderdoc-detect-loaded-only](../patches/rexglue-sdk/0010-renderdoc-detect-loaded-only.patch) | both | runtime | `RenderDocAPI::CreateIfConnected` only uses a RenderDoc library the process already loaded (`src/ui/renderdoc_api.cpp`, `DynamicLibrary::LoadExisting` in `src/core/dynlib_*.cpp`) |
+| [0011-d3d12-submissions-and-occlusion](../patches/rexglue-sdk/0011-d3d12-submissions-and-occlusion.windows.patch) | Windows | GPU plugin | submission limit, deferred occlusion queries and the resolve preflight in the D3D12 command processor and render target cache |
+| [0012-d3d12-render-target-transfers](../patches/rexglue-sdk/0012-d3d12-render-target-transfers.windows.patch) | Windows | GPU plugin | draw-overwrite cutouts and stencil bits of the D3D12 transfers |
+| [0013-d3d12-stencil-regions](../patches/rexglue-sdk/0013-d3d12-stencil-regions.windows.patch) | Windows | GPU plugin | per-tile stencil bits, stencil runs and first-row claims in the D3D12 render target cache |
+| [0014-d3d12-edram-dump-dirty-tiles](../patches/rexglue-sdk/0014-d3d12-edram-dump-dirty-tiles.windows.patch) | Windows | GPU plugin | dirty-tile dumps in the D3D12 render target cache |
+| [0015-windows-high-resolution-sleep](../patches/rexglue-sdk/0015-windows-high-resolution-sleep.windows.patch) | Windows | runtime | high-resolution waitable timer for `Sleep` (`src/core/threading_win.cpp`) |
+| [0016-vulkan-submissions-and-occlusion](../patches/rexglue-sdk/0016-vulkan-submissions-and-occlusion.linux.patch) | Linux | GPU plugin | submission limit and deferred occlusion queries in the Vulkan command processor |
+| [0017-vulkan-render-target-transfers](../patches/rexglue-sdk/0017-vulkan-render-target-transfers.linux.patch) | Linux | GPU plugin | resolve preflight, draw-overwrite cutouts and per-tile stencil bits in the Vulkan render target cache |
+| [0018-vulkan-edram-dump-dirty-tiles](../patches/rexglue-sdk/0018-vulkan-edram-dump-dirty-tiles.linux.patch) | Linux | GPU plugin | dirty-tile dumps in the Vulkan render target cache |
+| [0019-linux-command-thread-wait](../patches/rexglue-sdk/0019-linux-command-thread-wait.linux.patch) | Linux | GPU plugin | the idle command thread waits without the alertable flag |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
+
+## What each platform gets
+
+The optimizations are in the common code where the cost is in the common code, and in the backend where it is in the
+backend. A "not needed" is a statement about the platform, not about the API it uses.
+
+| Optimization | Windows (D3D12) | Linux (Vulkan) |
+| --- | --- | --- |
+| Physical release order (0001) | common | common |
+| Register write bulk path, known-register table (0002) | common | common |
+| Idle command thread wait, `WAIT_REG_MEM` polling (0003) | common | common, plus 0019 (the wait is not alertable, so it is not polled in 1 ms slices) |
+| Draw extent on the CPU, page state, primitive cache, request ranges (0004) | common | common |
+| Guest vblank wait, timer queue thread, critical section spin, perf counter (0006) | common | common |
+| Draw-overwrite proof, rows above a draw, dirty bits (0005, 0007, 0008) | common | common |
+| Submission limit and deferred occlusion queries | 0011 | 0016 |
+| Resolve preflight removed | 0011 | 0017 |
+| Draw-overwrite cutouts in transfers | 0012 | 0017 |
+| Per-tile stencil bits and runs | 0013 (always needed without stencil reference output) | 0017 (needed without `VK_EXT_shader_stencil_export`) |
+| Dirty-tile EDRAM dumps | 0014 | 0018 |
+| GPU fence wake and wait (0009 and the game) | `WakeByAddressAll` / `WaitOnAddress` | futex wake / wait |
+| High-resolution sleep | 0015 | not needed: `Sleep` is `nanosleep`, precise already |
+| Vblank thread priority (in 0006) | above normal | not applicable: raising it needs `CAP_SYS_NICE` or an rlimit |
+| RenderDoc detection (0010) | common | common |
+
+The POSIX wait on several handles (`WaitMultiple` in `threading_posix.cpp`) polls with 1 ms sleeps; Windows waits in the
+kernel. It is not changed here: a notification scheme across the condition variables of the handles is a redesign of
+the runtime's synchronization, and nothing yet shows the game waits on several handles in a hot path.
 
 ## Why 0010
 
@@ -48,15 +90,23 @@ The game's main thread spent its time in a loop polling the GPU fence word of th
 that word with an event write packet on its own thread, so a waiter can sleep on the word's address instead.
 
 - **Wake.** After each guest memory write by the command processor (event write, memory write, conditional write,
-  register to memory) `WakeGuestWordWaiters` calls `WakeByAddressAll` on the written address. Nothing else changes in
-  the packet handlers. A full fence precedes the wake so the store is ordered before the wake looks for waiters.
-- **Wait.** `src/gpu_fence_wait.cpp` in the game hooks the begin and poll helpers of that one loop and calls
-  `WaitOnAddress` on the same physical-view address with the value it last saw, bounded by 2 ms. A write after the
-  value was read makes the wait return at once, so no write is slept through.
+  register to memory) `WakeGuestWordWaiters` wakes the waiters of the written address: `WakeByAddressAll` on Windows,
+  `futex(FUTEX_WAKE_PRIVATE)` on Linux (the plugin and the game are one process, so the private futex is enough; the
+  wake is a system call each time, a few per frame). Nothing else changes in the packet handlers. A full fence precedes
+  the wake so the store is ordered before the wake looks for waiters.
+- **Wait.** `src/gpu_fence_wait.cpp` in the game hooks the begin and poll helpers of that one loop and waits on the same
+  physical-view address with the value it last saw, bounded by 2 ms: `WaitOnAddress` on Windows,
+  `futex(FUTEX_WAIT_PRIVATE)` on Linux. A write after the value was read makes the wait return at once (the kernel
+  compares the word and sleeps in one step; `EAGAIN`), so no write is slept through. A signal (`EINTR`) ends the wait
+  like a wake, and the guest re-checks its condition. The offset between the guest view and the host view of the 0xE0
+  heap is `rex::memory::detail::PhysicalHostOffset`, zero on Linux.
 - **Safety.** Any other caller, a stopped device, an unaligned or unmapped word, or a word whose two views differ keeps
-  the guest's own polling. After 8 waits that ended by timeout with the word already changed, blocking is turned off.
+  the guest's own polling. After 8 waits that ended by timeout with the word already changed, or after a wait that
+  failed (`EFAULT` on a page the host cannot read, for one), blocking is turned off.
 
-## Why 0008
+## Why 0008 and 0014
+
+0008 sets the dirty bits in the common render target cache; 0014 (D3D12) and 0018 (Vulkan) shrink the dumps with them.
 
 A resolve first dumps the host render targets owning its source tiles into the EDRAM buffer, then copies from there.
 At 4x the dump was repeated for every resolve over the whole source rectangle, even for tiles no draw touched since
@@ -73,7 +123,10 @@ the last dump.
   resolves and the scaled resolve memory), a lazy dump, and a copy-free resolve (no way to prove every reader of the
   EDRAM buffer).
 
-## Why 0007
+## Why 0007 and 0013
+
+0007 is the common part (used tile ranges and the first row of a draw); 0013 is the per-tile stencil bits of the D3D12
+render target cache.
 
 The heavy 4x scenes spent most ownership transfer draws on stencil bits: one depth render target mask that only ever
 gained bits, so a single color to depth transfer made every depth to depth transfer after it draw eight bit passes.
@@ -94,7 +147,10 @@ gained bits, so a single color to depth transfer made every depth to depth trans
 
 ## Why 0006
 
-Windows only; the Linux build does not apply it.
+The common parts apply on Linux too (the profiling counter, the vblank wait, the timer queue thread and the guest
+critical sections); the sleep timer is `0015`, Windows only: Linux `Sleep` is `nanosleep`, which already lasts as
+long as asked, and raising the priority of the vblank thread needs privileges that a normal Linux desktop does not
+give, so it stays at the default there.
 
 - **Profiling counter.** Builds other than Release (RelWithDebInfo, the default of `tools\build.ps1`) compile the
   recompiled game with `REXGLUE_ENABLE_PERF_COUNTERS`, so every guest indirect call (every virtual call) ran
@@ -120,6 +176,18 @@ Windows only; the Linux build does not apply it.
 
 ## Why 0003
 
+- **Waiting for commands.** The idle command thread spun through 500 `SwitchToThread` calls before sleeping on the
+  write pointer event; it now yields 32 times and sleeps (The Simpsons Game Recomp). `WAIT_REG_MEM` treats the guest's
+  wait value as a poll interval, re-polls 16 times before sleeping and sleeps 1 ms at most (the Simpsons fork caps
+  it at 500 us), instead of sleeping the whole value, so the ring does not stay blocked after the condition is met.
+- **Background work.** Both waits call the new virtual `PollBackgroundWork` of the command processor, which returns
+  whether it has to be polled again soon (the idle wait then lasts 1 ms instead of 5 ms). The backends use it to write
+  deferred occlusion query results and to end the open submission when there is nothing more to record (0011, 0016).
+
+## Why 0011
+
+The Direct3D 12 half of 0003; 0016 is the Vulkan one.
+
 - **Occlusion queries.** Ending a guest query ended the D3D12 submission and waited for the GPU to finish all work
   queued before it, on every query. The result is now written to the guest once the submission that holds the
   `ResolveQueryData` has completed, and the guest sees the query as unfinished until then (its `0xFFFFFEED` markers
@@ -130,14 +198,13 @@ Windows only; the Linux build does not apply it.
 - **Submissions.** Submitting at the end of every primary buffer (`d3d12_submit_on_primary_buffer_end`) now only
   happens while fewer than three submissions are in flight, which is when it keeps the GPU fed. With more queued, the
   commands stay in the open submission until the swap, or until the GPU queue gets short again.
-- **Waiting for commands.** The idle command thread spun through 500 `SwitchToThread` calls before sleeping on the
-  write pointer event; it now yields 32 times and sleeps (The Simpsons Game Recomp). `WAIT_REG_MEM` treats the guest's
-  wait value as a poll interval, re-polls 16 times before sleeping and sleeps 1 ms at most (the Simpsons fork caps
-  it at 500 us), instead of sleeping the whole value, so the ring does not stay blocked after the condition is met.
 - **Resolves.** The `direct_host_resolve` preflight only computed the dump rectangles that `DumpRenderTargets` then
   computed again before doing the same dump, so it is skipped in the D3D12 backend.
 
-## Why 0005
+## Why 0005 and 0012
+
+0005 is the part in the common render target cache (the draw-overwrite proof and the vertex positions of the draw
+extent estimator); 0012 uses it in the D3D12 transfers and adds the stencil bit mask there.
 
 Ownership transfers (copies of the old contents of an EDRAM range when another host render target takes it over) were
 the main GPU cost at high resolution scales: their count did not grow with the scale, their pixels did.
@@ -207,6 +274,67 @@ Reported in [issue #6](https://github.com/saulob/hard-corps-uprising-recompiled/
 showed these errors around exiting the game. The code is the same on Windows; the error needs two threads to hit the
 window between the two releases, so how often it happens depends on timing.
 
+## Why 0016
+
+The Vulkan command processor had the two problems that 0003 and 0011 fix in D3D12.
+
+- **Occlusion queries.** Ending a guest query ended the submission and waited for the GPU to finish everything queued
+  (`AwaitAllQueueOperationsCompletion`), on every query. The query is now copied into the readback buffer inside the
+  submission, and its result is written to the guest once that submission has completed (`CompleteOcclusionQueries`,
+  run whenever the submission fences are checked), so the guest sees the query as unfinished until then, as with a GPU
+  running behind the command processor. A result still pending for the same address is dropped when a new query for it
+  ends, the query indices are only reused after the pending results have been written, and a TRANSFER to HOST barrier
+  makes the copied result readable. A submission is not ended while a query is open (it would end the query, and a
+  query cannot span command buffers, which turned host queries off for the session).
+- **Submissions.** `vulkan_submit_on_primary_buffer_end` only submits at the end of a primary buffer while fewer than
+  three submissions are in flight. The base class polls `PollBackgroundWork` while the command processor idles or sits
+  in `WAIT_REG_MEM`; the Vulkan override ends the open submission when it holds pending query results or when the early
+  submission rule allows it, and checks the fences without blocking.
+
+## Why 0017
+
+Vulkan's default render target path is host render targets, so it has the same ownership transfers as D3D12, through
+the common render target cache. This patch gives the Vulkan transfer code the parts of 0005 and 0007 that live in the
+backend, on top of the common parts that Vulkan gets from 0005 to 0008.
+
+- **Resolve preflight.** `Resolve` no longer runs `TryResolveCopyDirectly`, which computed the dump rectangles and then
+  called `DumpRenderTargets`, which computes them again.
+- **Draws that replace their target.** `Update` asks the common `GetDrawOverwrittenRenderTargets` whether the draw
+  replaces what it writes (same proof as in D3D12: rectangle list, tests always passing, no blending, whole mask, no
+  kill or depth output, vertices run on the CPU) and cuts that rectangle out of the transfers. A draw that only
+  replaces the depth keeps the stencil transfers, and is only considered without `VK_EXT_shader_stencil_export`, since
+  with it the transfer shader writes the stencil together with the depth.
+- **Stencil bits.** Without `VK_EXT_shader_stencil_export` (NVIDIA, for one) a depth transfer copies the stencil one
+  bit at a time. Each render target keeps the bits that may be set per EDRAM tile; transfers split their range into
+  runs of equal bits, draw once per bit of each run, and clear the destination stencil only where it may hold
+  something. Draws add the bits their stencil state can write, resolve clears assign the cleared value, and transfers
+  assign the source's bits where they replace the destination. Vulkan images are not created zeroed, so every tile
+  starts with all bits possible: the first transfer into a tile clears its stencil as before. With the extension (AMD,
+  Intel, the Steam Deck) the stencil bit draws do not exist, so the tracking has no effect on what is drawn.
+
+## Why 0018
+
+The Vulkan counterpart of 0008 and 0014. The common render target cache sets the dirty bits of the EDRAM tiles; this
+patch sets them for the tiles a draw can write (color targets with a nonzero mask, depth when depth or stencil can be
+written), shrinks each dump dispatch of `DumpRenderTargets` to the dirty tiles of its rectangle, drops the invocations
+without any, and clears the bits of a tile after its dispatch has been recorded. A dump that cannot be recorded (no
+pipeline) leaves its tiles dirty. The EDRAM buffer is not transitioned when nothing needs dumping.
+
+## Why 0019
+
+On POSIX an alertable wait (`rex::thread::Wait` with the alertable flag) is not one blocking wait: it is polled in 1 ms
+slices so queued APCs can run in between. The idle command thread waits on the write pointer event with that flag, so
+its 5 ms wait woke five times (1000 times a second while idle) although the thread has no APCs. The wait is no longer
+alertable. The same patch is not needed on Windows, where an alertable wait is one kernel wait. Other alertable waits,
+the guest's own, keep the slices: delivering an APC to a blocked POSIX waiter needs a wake-up from the thread's
+user-callback queue, which is a change to the runtime's synchronization that this work does not make.
+
+## Windows-only patches
+
+- 0011, 0012, 0013 and 0014 are the D3D12 halves of 0003, 0005, 0007 and 0008 (submissions and occlusion queries,
+  transfers, stencil bits and dump dirty tiles in `src/graphics/d3d12`); the common halves also apply on Linux.
+- 0015 is the high-resolution waitable timer of `threading_win.cpp` (see 0006).
+
 ## Building the patched runtime
 
 On Windows (Visual Studio with the LLVM/Clang component, and git), after `tools\codegen.ps1` has put the SDK in
@@ -231,18 +359,20 @@ network access, and a build takes a few minutes). The Debug configuration uses t
 .\tools\build-patched-rexruntime.ps1 -Restore        # put the stock runtime and GPU plugin back
 ```
 
-It applies every patch in `patches\rexglue-sdk` in name order, builds the RelWithDebInfo and Release runtime and GPU
+It applies the patches that apply to Windows (the shared and the `.windows.patch` ones, in name order), builds the RelWithDebInfo and Release runtime and GPU
 plugin into `out\rexglue-sdk-src` (use `-WorkDir` for a shorter path) and replaces them in `tools\rexglue\win-amd64`.
 The Debug files stay stock. After `-Restore`, the next `build.ps1` patches them again.
 
 Linux (Ubuntu 22.04, see [linux.md](linux.md)): `tools/package-linux.sh` runs `tools/build-patched-rexruntime.sh`
-itself the first time; it applies the patches listed in `PATCHES` in that script (0001 and 0010) and builds only the
-runtime. Besides the packages in linux.md it
-needs git, network access and the SDK's build
-dependencies: `libgtk-3-dev libx11-dev libx11-xcb-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev
-libxfixes-dev libxrender-dev libxss-dev libvulkan-dev libwayland-dev libwayland-bin wayland-protocols
-libxkbcommon-dev libdecor-0-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libgl1-mesa-dev libudev-dev
-pkg-config`.
+itself the first time and whenever the check described below fails. The script applies the patches that apply to
+Linux (the shared and the `.linux.patch` ones, in name order; `--list` prints them with the fingerprint) and builds
+`librexruntime.so` and `librexgpu-xenos.so`, the Vulkan GPU plugin, which is a separate library on Linux as well. Only
+the Release libraries are patched, with the stock RUNPATH (`$ORIGIN:$ORIGIN/../lib`) instead of the build folder CMake
+would put there; the Debug and RelWithDebInfo libraries of the SDK stay stock. Besides the packages in
+linux.md it needs git, network access and the SDK's build dependencies: `libgtk-3-dev libx11-dev libx11-xcb-dev
+libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxrender-dev libxss-dev libvulkan-dev
+libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libdecor-0-dev libasound2-dev libpulse-dev
+libpipewire-0.3-dev libgl1-mesa-dev libudev-dev pkg-config`.
 
 Both scripts check the source is exactly the pinned commit, stop if a patch no longer applies, compile with
 `-ffile-prefix-map` so no build folder ends up in the library, and refuse a result that equals the stock file.
@@ -264,11 +394,17 @@ game, and a failure prints the expected and the actual file.
 
 `tools/package-release.ps1` builds through `build.ps1`, then accepts the runtime and the GPU plugin only if the check
 passes; the packaged DLLs must also be identical to the installed ones. With `-SkipBuild` it does not update the
-runtime and fails when it is out of date. `tools/package-linux.sh` checks the runtime against the Linux patch list and
-compares `librexgpu-xenos.so` with the stock release file. On Linux the stamp (`rexruntime-patch.txt`) records the
-commit, the patch names and one hash over every patch's name and hash in order, and the check fails if the list or the
-hash differs, if the library does not match the stamp or if it is the stock file. The AppDir check also fails on any
-file named like RenderDoc or a Vulkan layer, any JSON file or symbolic link, and any of the three binaries linking
+runtime and fails when it is out of date.
+
+On Linux the stamp (`rexruntime-patch.txt`) has the same fields (`inputs_sha256` over the SDK version, tag and commit,
+the compiler flags, the RUNPATH, the targets and every Linux patch's name and hash; `patch_sha256`; `patches`) and the SHA-256 of
+`lib/librexruntime.so` and `lib/librexgpu-xenos.so`. `tools/build-patched-rexruntime.sh --check` fails if the
+fingerprint differs, if either library does not match the stamp or if either is the stock file, and names what changed
+(for example `patches added: ...`). `tools/package-linux.sh` runs that check, rebuilds when it fails, and then checks
+that the libraries next to the built program are byte-identical to the installed ones. The project build relinks the
+program when `lib/librexruntime*.so` or `lib/librexgpu-xenos*.so` in `tools/rexglue/linux-amd64` change (`LINK_DEPENDS`
+in `CMakeLists.txt`), so the post-build copies cannot leave a stale library beside it. The AppDir check also fails on
+any file named like RenderDoc or a Vulkan layer, any JSON file or symbolic link, and any of the three binaries linking
 RenderDoc, besides the exact file list it already enforces.
 
 ## Allocator stress test

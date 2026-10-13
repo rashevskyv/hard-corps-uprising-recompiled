@@ -5,8 +5,8 @@
 
 .DESCRIPTION
   The source is fetched from the official ReXGlue repository (network needed the first time) into -WorkDir,
-  checked against the pinned commit in patches\rexglue-sdk\baseline.env, patched with every patch in
-  patches\rexglue-sdk (in name order), and built.
+  checked against the pinned commit in patches\rexglue-sdk\baseline.env, patched with the patches in
+  patches\rexglue-sdk that apply to Windows (NNNN-name.patch and NNNN-name.windows.patch, in name order), and built.
   The installed files are recorded with the fingerprint of the baseline, build settings and patches in
   tools\rexglue\win-amd64\rexruntime-patch.txt, which build.ps1 and package-release.ps1 check.
   tools\build.ps1 runs this script by itself when that check fails, so it is only needed by hand for the options

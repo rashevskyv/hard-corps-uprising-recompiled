@@ -4,8 +4,9 @@
 > compiled and packaged. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck
 > hardware. Reports are welcome.
 
-The Linux build uses the same code as the Windows build: ReXGlue SDK 0.10.0's Linux runtime, the Xenos GPU
-plugin's Vulkan backend, and the same TRG launcher. It ships as one AppImage, which is also the Steam Deck build.
+The Linux build uses the same code as the Windows build: ReXGlue SDK 0.10.0's Linux runtime and the Xenos GPU
+plugin's Vulkan backend, both built with the project's patches, and the same TRG launcher. It ships as one
+AppImage, which is also the Steam Deck build.
 
 ## Requirements
 
@@ -87,9 +88,10 @@ Ubuntu 22.04, clang 20 comes from [apt.llvm.org](https://apt.llvm.org) and the G
 ships 3.22.
 
 The script copies the sources to `~/hcu-linux-build` (set `HCU_WORK` to change it), downloads the pinned ReXGlue
-SDK, appimagetool and AppImage runtime with their SHA-256 checks, builds the project's patched ReXGlue runtime from
-source the first time ([docs/rexglue-runtime-patch.md](rexglue-runtime-patch.md) lists the extra packages and the
-network access this needs), builds the `linux-amd64-release` preset, checks
+SDK, appimagetool and AppImage runtime with their SHA-256 checks, builds the project's patched ReXGlue runtime and
+Vulkan GPU plugin from source the first time and whenever the patches change
+([docs/rexglue-runtime-patch.md](rexglue-runtime-patch.md) lists the extra packages and the network access this
+needs), builds the `linux-amd64-release` preset, checks
 that the AppDir holds no game files, packages, saves, logs or local paths, and writes
 `dist/HardCorpsUprising-v<version>-linux-x86_64.AppImage` with its `.sha256`. It publishes nothing.
 

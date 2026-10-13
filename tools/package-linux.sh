@@ -7,8 +7,9 @@
 #
 # Needs clang-20, clang++-20, cmake 3.25+, ninja, rsync, git, wget or curl, unzip or python3, binutils and the
 # GCC 13+ C++ runtime. Release builds are made on Ubuntu 22.04: the AppImage needs the build machine's glibc.
-# The ReXGlue runtime is built from source with the project's patches (tools/build-patched-rexruntime.sh) the
-# first time, which also needs network access and the packages in docs/rexglue-runtime-patch.md.
+# The ReXGlue runtime and Vulkan GPU plugin are built from source with the project's patches
+# (tools/build-patched-rexruntime.sh) the first time and whenever the patches change, which also needs network
+# access and the packages in docs/rexglue-runtime-patch.md.
 # Needs generated/default (tools/codegen.ps1) and game/extracted/default.xex: the build re-runs codegen
 # when its inputs look changed, and it never packages either of them.
 set -euo pipefail
@@ -101,7 +102,7 @@ if [ ! -x "$SDK/bin/rexglue" ]; then
 fi
 [ "$("$SDK/bin/rexglue" --version | tr -d '[:space:]')" = "$SDK_VERSION" ] || fail "tools/rexglue/linux-amd64 is not ReXGlue $SDK_VERSION"
 
-echo "== Patched ReXGlue runtime"
+echo "== Patched ReXGlue runtime and GPU plugin"
 if ! bash "$ROOT/tools/build-patched-rexruntime.sh" --check "$SDK" >/dev/null 2>&1; then
   bash "$ROOT/tools/build-patched-rexruntime.sh" "$SDK" "$WORK/rexglue-sdk-src"
 fi
@@ -115,7 +116,7 @@ for f in hard_corps_uprising librexruntime.so librexgpu-xenos.so hard_corps_upri
   [ -f "$BIN/$f" ] || fail "build output is missing $f"
 done
 cmp -s "$BIN/librexruntime.so" "$SDK/lib/librexruntime.so" || fail "librexruntime.so is not the patched runtime"
-cmp -s "$BIN/librexgpu-xenos.so" "$SDK/lib/librexgpu-xenos.so" || fail "librexgpu-xenos.so is not the ReXGlue SDK release file"
+cmp -s "$BIN/librexgpu-xenos.so" "$SDK/lib/librexgpu-xenos.so" || fail "librexgpu-xenos.so is not the patched GPU plugin"
 
 echo "== AppDir"
 APPDIR="$WORK/AppDir"

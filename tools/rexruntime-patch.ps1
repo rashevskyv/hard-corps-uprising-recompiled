@@ -1,6 +1,6 @@
 # Shared by build.ps1, build-patched-rexruntime.ps1 and package-release.ps1: the pinned ReXGlue baseline, the
-# runtime and GPU plugin patches, the check that an SDK folder holds the files built from them, and the check
-# that a build folder holds the SDK's files.
+# runtime and GPU plugin patches (those for Windows; the Linux ones are for build-patched-rexruntime.sh), the check
+# that an SDK folder holds the files built from them, and the check that a build folder holds the SDK's files.
 
 $RuntimePatchDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'patches\rexglue-sdk'
 $RuntimeStampName = 'rexruntime-patch.txt'
@@ -29,10 +29,23 @@ function Get-TextSha256([string]$Text) {
     finally { $sha.Dispose() }
 }
 
-# The patches in the order they are applied (by ordinal name).
-function Get-RuntimePatchFiles {
+# NNNN-name.patch applies on every platform, NNNN-name.windows.patch only here and NNNN-name.linux.patch only on
+# Linux (tools/build-patched-rexruntime.sh). The numbers are unique, so the order is unambiguous.
+$RuntimePatchNamePattern = '^(?<number>[0-9]{4})-[a-z0-9]+(-[a-z0-9]+)*(\.(?<platform>windows|linux))?\.patch$'
+
+# The patches this platform applies, in the order they are applied (by ordinal name).
+function Get-RuntimePatchFiles([string]$Platform = 'windows') {
     $files = @{}
-    foreach ($file in Get-ChildItem -LiteralPath $RuntimePatchDir -Filter '*.patch' -File) { $files[$file.Name] = $file }
+    $numbers = @{}
+    foreach ($file in Get-ChildItem -LiteralPath $RuntimePatchDir -Filter '*.patch' -File) {
+        if ($file.Name -notmatch $RuntimePatchNamePattern) { throw "patches\rexglue-sdk\$($file.Name) is not named NNNN-name[.windows|.linux].patch" }
+        $number = $Matches['number']
+        if ($numbers.ContainsKey($number)) { throw "patches\rexglue-sdk\$($file.Name) and $($numbers[$number]) share the number $number" }
+        $numbers[$number] = $file.Name
+        if ($Matches['platform'] -and $Matches['platform'] -ne $Platform) { continue }
+        $files[$file.Name] = $file
+    }
+    if (-not $files.Count) { throw 'No patches in patches\rexglue-sdk' }
     $names = [string[]]@($files.Keys)
     [Array]::Sort($names, [StringComparer]::Ordinal)
     return @($names | ForEach-Object { $files[$_] })

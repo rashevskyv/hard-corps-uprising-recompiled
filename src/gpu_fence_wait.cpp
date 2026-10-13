@@ -3,6 +3,12 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__linux__)
+#include <cerrno>
+#include <ctime>
+#include <linux/futex.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 #include <rex/hook.h>
@@ -11,7 +17,7 @@
 
 #include "guest_memory.h"
 
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__linux__)
 
 namespace {
 
@@ -24,7 +30,7 @@ constexpr uint32_t kDeviceFenceOffset = 10896;
 constexpr uint32_t kDeviceFlagsOffset = 10941;
 constexpr uint8_t kDeviceStoppedFlag = 2;
 // Upper bound on one block, for fence writers that do not wake the waiter.
-constexpr DWORD kBlockTimeoutMs = 2;
+constexpr uint32_t kBlockTimeoutMs = 2;
 // Blocks that ended by timeout with the word already changed before blocking is given up.
 constexpr uint32_t kMissedWakeLimit = 8;
 
@@ -43,9 +49,8 @@ thread_local WaitState t_wait;
 std::atomic<bool> g_blocking_enabled{true};
 std::atomic<uint32_t> g_missed_wakes{0};
 
-// The recompiled loads add 0x1000 for the 4 KB physical view, whose host pages sit 4 KB further on.
 constexpr uint32_t HostOffset(uint32_t address) {
-  return address >= 0xE0000000u ? 0x1000u : 0u;
+  return rex::memory::detail::PhysicalHostOffset(address);
 }
 
 inline uint32_t LoadGuest32(const uint8_t* base, uint32_t address) {
@@ -91,16 +96,43 @@ bool ResolveFenceWord(const uint8_t* base, uint32_t device, WaitState& wait) {
   return ViewsAgree(wait.word, wait.guest_word);
 }
 
+enum class WaitOutcome { kReturned, kTimedOut, kFailed };
+
+// Returns at once if the word no longer holds `undesired`; the comparison and the sleep are one
+// atomic step, so a store between the caller's read and the sleep is never slept through. A signal
+// ends the wait early like a wake does.
+WaitOutcome WaitWhileEqual(const uint32_t* word, uint32_t undesired) {
+#if defined(_WIN32)
+  if (WaitOnAddress(const_cast<uint32_t*>(word), &undesired, sizeof(undesired), kBlockTimeoutMs)) {
+    return WaitOutcome::kReturned;
+  }
+  return GetLastError() == ERROR_TIMEOUT ? WaitOutcome::kTimedOut : WaitOutcome::kFailed;
+#else
+  const timespec timeout = {0, long(kBlockTimeoutMs) * 1000000L};
+  if (syscall(SYS_futex, word, FUTEX_WAIT_PRIVATE, undesired, &timeout, nullptr, 0) == 0) {
+    return WaitOutcome::kReturned;
+  }
+  switch (errno) {
+    case EAGAIN:
+    case EINTR:
+      return WaitOutcome::kReturned;
+    case ETIMEDOUT:
+      return WaitOutcome::kTimedOut;
+    default:
+      return WaitOutcome::kFailed;
+  }
+#endif
+}
+
 // Blocks while the word still holds the value read before the guest last re-checked its condition,
 // so a write after that read is never slept through.
 void BlockUntilFenceWritten(WaitState& wait) {
-  uint32_t undesired = wait.seen;
-  const BOOL signaled = WaitOnAddress(const_cast<uint32_t*>(wait.word), &undesired,
-                                      sizeof(undesired), kBlockTimeoutMs);
-  const bool timed_out = !signaled && GetLastError() == ERROR_TIMEOUT;
+  const WaitOutcome outcome = WaitWhileEqual(wait.word, wait.seen);
+  const bool signaled = outcome == WaitOutcome::kReturned;
+  const bool timed_out = outcome == WaitOutcome::kTimedOut;
   const uint32_t current = LoadWord(wait.word);
   const bool missed_wake = timed_out && current != wait.seen;
-  if (!ViewsAgree(wait.word, wait.guest_word)) {
+  if (outcome == WaitOutcome::kFailed || !ViewsAgree(wait.word, wait.guest_word)) {
     g_blocking_enabled.store(false, std::memory_order_relaxed);
   }
   if (missed_wake) {
@@ -158,4 +190,4 @@ REX_HOOK_RAW(sub_82564258) {
   BlockUntilFenceWritten(wait);
 }
 
-#endif  // _WIN32
+#endif  // _WIN32 || __linux__
