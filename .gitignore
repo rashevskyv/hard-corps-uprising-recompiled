@@ -42,3 +42,7 @@ cmake-build-*/
 
 # Python
 __pycache__/
+
+# Local AI agent instructions
+CLAUDE.md
+.claude/
