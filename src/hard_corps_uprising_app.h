@@ -151,6 +151,10 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    // ReXApp destroys the window before the runtime; the input drivers must detach while it still exists.
+    if (auto* input = runtime() ? runtime()->input_system() : nullptr) {
+      input->Shutdown();
+    }
     hcu::ModalDialog::DetachEscapeKey();
     delete achievements_;
     delete notice_;

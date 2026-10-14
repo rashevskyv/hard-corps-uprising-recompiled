@@ -223,6 +223,19 @@ if(NOT WIN32)
     set_target_properties(hcu_physical_heap_stress PROPERTIES BUILD_RPATH "$ORIGIN")
 endif()
 
+# Exit Game shutdown order test, not part of the default build: cmake --build <dir> --target hcu_shutdown_order_tests
+add_executable(hcu_shutdown_order_tests EXCLUDE_FROM_ALL tests/shutdown_order_tests.cpp)
+target_link_libraries(hcu_shutdown_order_tests PRIVATE rex::runtime)
+add_custom_command(TARGET hcu_shutdown_order_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:rex::runtime>"
+        "$<TARGET_FILE_DIR:hcu_shutdown_order_tests>"
+    VERBATIM
+)
+if(NOT WIN32)
+    set_target_properties(hcu_shutdown_order_tests PROPERTIES BUILD_RPATH "$ORIGIN")
+endif()
+
 # RenderDoc detection test (Linux), not part of the default build: cmake --build <dir> --target hcu_renderdoc_detect_tests
 if(UNIX AND NOT APPLE)
     add_library(hcu_fake_renderdoc SHARED EXCLUDE_FROM_ALL tests/fake_renderdoc.cpp)
