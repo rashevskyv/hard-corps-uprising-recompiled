@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Builds ReXGlue's librexruntime.so and librexgpu-xenos.so (the Vulkan GPU plugin) from the pinned v0.10.0 source with
-# this project's patches and installs them into an extracted linux-amd64 SDK folder. package-linux.sh runs this itself;
-# see docs/rexglue-runtime-patch.md.
+# Builds ReXGlue's Release and RelWithDebInfo librexruntime.so and librexgpu-xenos.so (the Vulkan GPU plugin) from the
+# pinned v0.10.0 source with this project's patches and installs them into an extracted linux-amd64 SDK folder.
+# package-linux.sh runs this itself; see docs/rexglue-runtime-patch.md.
 #
 #   tools/build-patched-rexruntime.sh SDK_DIR [WORK_DIR]    build and install (network needed the first time)
 #   tools/build-patched-rexruntime.sh --check SDK_DIR       only verify that SDK_DIR holds the patched libraries
@@ -19,11 +19,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PATCH_DIR="$ROOT/patches/rexglue-sdk"
 PATCH_PLATFORM=linux
 STAMP_NAME=rexruntime-patch.txt
-LIBS=(lib/librexruntime.so lib/librexgpu-xenos.so)
+LIBS=(lib/librexruntime.so lib/librexruntimerd.so lib/librexgpu-xenos.so lib/librexgpu-xenosrd.so)
 # How the patched files are built; part of the fingerprint, so changing them invalidates the installed files.
 BUILD_FLAGS=-march=x86-64-v2
 LINK_RPATH='$ORIGIN:$ORIGIN/../lib'
 BUILD_TARGETS=(rexruntime rexgpu-xenos)
+BUILD_CONFIGS=(RelWithDebInfo Release)
 
 # shellcheck source=../patches/rexglue-sdk/baseline.env
 . "$PATCH_DIR/baseline.env"
@@ -73,6 +74,7 @@ inputs_sha() {  # everything the installed files are built from
     echo "build_flags=$BUILD_FLAGS"
     echo "link_rpath=$LINK_RPATH"
     echo "build_targets=$(join_by , "${BUILD_TARGETS[@]}")"
+    echo "build_configs=$(join_by , "${BUILD_CONFIGS[@]}")"
     local name
     for name in "${PATCHES[@]}"; do echo "patch $name $(sha "$PATCH_DIR/$name")"; done
   } | text_sha
@@ -80,10 +82,19 @@ inputs_sha() {  # everything the installed files are built from
 official_sha() {  # lib
   case "$1" in
     lib/librexruntime.so) echo "$OFFICIAL_LINUX_RUNTIME_SHA256" ;;
+    lib/librexruntimerd.so) echo "$OFFICIAL_LINUX_RUNTIME_RD_SHA256" ;;
     lib/librexgpu-xenos.so) echo "$OFFICIAL_LINUX_GPU_SHA256" ;;
+    lib/librexgpu-xenosrd.so) echo "$OFFICIAL_LINUX_GPU_RD_SHA256" ;;
     *) fail "no stock hash for $1" ;;
   esac
 }
+lib_config() {  # lib
+  case "$1" in
+    *rd.so) echo RelWithDebInfo ;;
+    *) echo Release ;;
+  esac
+}
+built_lib() { echo "$SRC/out/linux-amd64/$(lib_config "$1")/$(basename "$1")"; }
 
 inputs_change() {  # stamp: which inputs differ from the ones the stamp was written for
   local old current added removed name
@@ -169,7 +180,7 @@ for name in "${PATCHES[@]}"; do
   git -C "$SRC" apply "$PATCH_DIR/$name"
 done
 
-echo "== Build ${BUILD_TARGETS[*]} (Release)"
+echo "== Build ${BUILD_TARGETS[*]} (${BUILD_CONFIGS[*]})"
 # -ffile-prefix-map keeps the build folder out of the libraries' log strings; the RUNPATH is the stock libraries'
 # instead of the build folder and the empty entries CMake would add.
 FLAGS="$BUILD_FLAGS -ffile-prefix-map=$SRC=."
@@ -178,18 +189,21 @@ FLAGS="$BUILD_FLAGS -ffile-prefix-map=$SRC=."
   cmake --preset linux-amd64 -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
     "-DCMAKE_C_FLAGS=$FLAGS" "-DCMAKE_CXX_FLAGS=$FLAGS" -DCMAKE_SKIP_RPATH=ON \
     "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-rpath,'$LINK_RPATH'" >/dev/null
-  cmake --build out/build/linux-amd64 --config Release --target "${BUILD_TARGETS[@]}" --parallel
+  for config in "${BUILD_CONFIGS[@]}"; do
+    cmake --build out/build/linux-amd64 --config "$config" --target "${BUILD_TARGETS[@]}" --parallel
+  done
 )
 for lib in "${LIBS[@]}"; do
-  BUILT="$SRC/out/linux-amd64/Release/$(basename "$lib")"
+  BUILT="$(built_lib "$lib")"
   [ -f "$BUILT" ] || fail "ReXGlue build output is missing $BUILT"
   [ "$(sha "$BUILT")" != "$(official_sha "$lib")" ] || fail "$(basename "$lib") came out identical to the stock release; the patches were not built in"
-  ! grep -qaF "$SRC" "$BUILT" || fail "$(basename "$lib") embeds the build folder"
+  # The RelWithDebInfo debug info names the source folder; only the Release files are packaged.
+  [ "$(lib_config "$lib")" != Release ] || ! grep -qaF "$SRC" "$BUILT" || fail "$(basename "$lib") embeds the build folder"
   readelf -d "$BUILT" | grep -qF "[$LINK_RPATH]" || fail "$(basename "$lib") does not have the RUNPATH $LINK_RPATH"
 done
 
 rm -f "$SDK/$STAMP_NAME"
-for lib in "${LIBS[@]}"; do cp "$SRC/out/linux-amd64/Release/$(basename "$lib")" "$SDK/$lib"; done
+for lib in "${LIBS[@]}"; do cp "$(built_lib "$lib")" "$SDK/$lib"; done
 {
   echo "sdk_version=$SDK_VERSION"
   echo "sdk_commit=$SDK_COMMIT"

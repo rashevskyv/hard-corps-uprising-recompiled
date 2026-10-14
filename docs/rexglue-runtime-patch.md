@@ -11,6 +11,10 @@ order. `tools/rexruntime-patch.ps1` and `tools/build-patched-rexruntime.sh` foll
 name does not follow it and put only the patches of their platform in the fingerprint, so changing a Linux patch does
 not make the Windows runtime out of date, nor the other way round.
 
+The game itself is built against the stock SDK headers. A patch must not move the virtual functions or data members of a
+class the game's code or `share/rexglue/rex_app.cpp` uses (`Window`, the public parts of `Presenter`, ...): a new
+virtual function goes after all the others, and a new member must not move one the game reads inline.
+
 | Patch | Platform | Library | Change |
 | --- | --- | --- | --- |
 | [0001-physical-release-order](../patches/rexglue-sdk/0001-physical-release-order.patch) | both | runtime | `PhysicalHeap::Release` in `src/system/xmemory.cpp` |
@@ -32,6 +36,18 @@ not make the Windows runtime out of date, nor the other way round.
 | [0017-vulkan-render-target-transfers](../patches/rexglue-sdk/0017-vulkan-render-target-transfers.linux.patch) | Linux | GPU plugin | resolve preflight, draw-overwrite cutouts and per-tile stencil bits in the Vulkan render target cache |
 | [0018-vulkan-edram-dump-dirty-tiles](../patches/rexglue-sdk/0018-vulkan-edram-dump-dirty-tiles.linux.patch) | Linux | GPU plugin | dirty-tile dumps in the Vulkan render target cache |
 | [0019-linux-command-thread-wait](../patches/rexglue-sdk/0019-linux-command-thread-wait.linux.patch) | Linux | GPU plugin | the idle command thread waits without the alertable flag |
+| [0021-posix-wait-multiple-contention](../patches/rexglue-sdk/0021-posix-wait-multiple-contention.linux.patch) | Linux | runtime | `WaitMultiple` in `src/core/threading_posix.cpp` backs off on lock contention instead of spinning |
+| [0022-resolve-copy-into-textures](../patches/rexglue-sdk/0022-resolve-copy-into-textures.patch) | both | GPU plugin | which resolves can be copied from the render target into the textures sampling them, the copy regions, and the red/blue order of such textures (render target and texture cache bases, `draw.h`) |
+| [0023-d3d12-resolve-copy-into-textures](../patches/rexglue-sdk/0023-d3d12-resolve-copy-into-textures.windows.patch) | Windows | GPU plugin | the copies in the D3D12 render target and texture caches |
+| [0024-vulkan-resolve-copy-into-textures](../patches/rexglue-sdk/0024-vulkan-resolve-copy-into-textures.linux.patch) | Linux | both | the copies in the Vulkan render target and texture caches, `vkCmdCopyImage` in the deferred command buffer and the device functions |
+| [0025-wait-reg-mem-vblank-wake](../patches/rexglue-sdk/0025-wait-reg-mem-vblank-wake.patch) | both | both | a `WAIT_REG_MEM` past its yields waits for the vblank interrupt instead of a blind 1 ms sleep (common command processor, `graphics_system.cpp`) |
+| [0026-vulkan-device-preference](../patches/rexglue-sdk/0026-vulkan-device-preference.patch) | both | runtime | Vulkan auto-selection prefers a discrete GPU among equally capable devices and logs the chosen one |
+| [0027-d3d12-adapter-preference](../patches/rexglue-sdk/0027-d3d12-adapter-preference.windows.patch) | Windows | runtime | the D3D12 adapter is the high-performance one unless the player chose power saving for the game in Windows |
+| [0028-msaa-2x-host-log](../patches/rexglue-sdk/0028-msaa-2x-host-log.patch) | both | GPU plugin | both render target caches log whether the game's 2x MSAA render targets are host 2x or 4x, and why |
+| [0029-ui-repaint-with-guest-frames](../patches/rexglue-sdk/0029-ui-repaint-with-guest-frames.patch) | both | runtime | the presenter draws the UI with the next guest frame instead of presenting the same frame again, and limits UI repaints to the display refresh where nothing else does (`presenter.cpp`, `window_sdl.cpp`) |
+| [0030-resolve-deferred-writeback](../patches/rexglue-sdk/0030-resolve-deferred-writeback.patch) | both | GPU plugin | which resolves copied into a texture may leave their memory unwritten, and when it is written after all (render target and texture cache bases) |
+| [0031-d3d12-resolve-deferred-writeback](../patches/rexglue-sdk/0031-d3d12-resolve-deferred-writeback.windows.patch) | Windows | GPU plugin | the deferral and the later writes in the D3D12 render target and texture caches |
+| [0032-vulkan-resolve-deferred-writeback](../patches/rexglue-sdk/0032-vulkan-resolve-deferred-writeback.linux.patch) | Linux | GPU plugin | the deferral and the later writes in the Vulkan render target and texture caches |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
@@ -58,10 +74,17 @@ backend. A "not needed" is a statement about the platform, not about the API it 
 | High-resolution sleep | 0015 | not needed: `Sleep` is `nanosleep`, precise already |
 | Vblank thread priority (in 0006) | above normal | not applicable: raising it needs `CAP_SYS_NICE` or an rlimit |
 | RenderDoc detection (0010) | common | common |
+| Wait on several handles | not needed: one kernel wait | 0021 (contention back-off) |
+| Resolved render target copied into the textures sampling it (0022) | 0023 (`CopyTextureRegion`) | 0024 (`vkCmdCopyImage`) |
+| `WAIT_REG_MEM` woken by the vblank interrupt (0025) | common | common |
+| GPU preference | 0027 (DXGI high performance) | 0026 (discrete Vulkan device) |
+| Host samples of 2x MSAA logged (0028) | common | common |
+| UI drawn with the next guest frame (0029) | common; vertical blank ticks without guest frames | common; display refresh limit without guest frames |
+| Resolve memory written only when needed (0030) | 0031 | 0032 |
 
 The POSIX wait on several handles (`WaitMultiple` in `threading_posix.cpp`) polls with 1 ms sleeps; Windows waits in the
-kernel. It is not changed here: a notification scheme across the condition variables of the handles is a redesign of
-the runtime's synchronization, and nothing yet shows the game waits on several handles in a hot path.
+kernel. 0021 only removes its spin on lock contention; the polling stays, since a notification scheme across the
+condition variables of the handles is a redesign of the runtime's synchronization.
 
 ## Why 0010
 
@@ -329,11 +352,93 @@ alertable. The same patch is not needed on Windows, where an alertable wait is o
 the guest's own, keep the slices: delivering an APC to a blocked POSIX waiter needs a wake-up from the thread's
 user-callback queue, which is a change to the runtime's synchronization that this work does not make.
 
+## Why 0021
+
+`WaitMultiple` try-locks the mutex of every handle before checking them. When one is held (the thread signaling it,
+such as the SDL audio callback releasing the audio worker's client semaphores), it yielded and retried at once, so
+the waiter spun for as long as the signaling side was busy; it also allocated its lock vector and read the clock on
+every pass, even for waits without a timeout. Now it sleeps 100 microseconds before retrying, keeps one vector for
+the whole wait and reads the clock only when there is a timeout. Which handle satisfies the wait, the 1 ms polling
+and the timeouts are unchanged. Ported from The Simpsons Game recompilation (`030a9412`), where this loop serving
+the audio worker took 42% of the process's CPU time on Linux.
+
+## Why 0022, 0023 and 0024
+
+A resolve writes the render target into memory, and a texture sampling that memory is loaded from it
+again: a compute decode into a scratch buffer and a copy into the texture, at the resolution scale. When
+the resolve copies a whole single-sampled render target from its origin, without conversion, into the
+same `k_8_8_8_8` or `k_2_10_10_10` bits the texture samples, the texture can be copied from the render
+target instead, and the load is skipped. The resolve still writes the memory.
+
+The copy is made only when it gives the same texels as the load:
+- one render target owns every resolved tile and starts at the resolve origin, with the same pitch and
+  a format of the same family; the destination is the texture's base address, page aligned, and the
+  texture is a single-level tiled 2D texture with the resolve's pitch, format and endianness, inside
+  the resolved rectangle, up to date before the resolve and not a copy destination still in flight;
+- the resolve shader's half-pixel offset fill (`resolve_resolution_scale_fill_half_pixel_offset`, the
+  left and top `scale / 2` host pixels take the first fully covered column and row) is reproduced with
+  extra copies;
+- a resolve swapping red and blue leaves the texture with them swapped, and every view of it (the
+  bindings, the front buffer) swaps them back; a normal load clears that.
+
+Anything else (MSAA, depth, other formats, exponent bias, offsets, render targets aliasing the area,
+mipmapped textures) is resolved and loaded as before. `resolve_copy_into_textures` turns the copies off.
+On Vulkan the eligible render targets get the transfer source usage.
+
+## Why 0025
+
+The game's present makes the GPU wait (`WAIT_REG_MEM`, equal) for a word that its vblank interrupt
+handler clears when the flip is done. Past its yields, the command processor polled that word in 1 ms
+sleeps, so it resumed up to 1 ms after the vblank. The vblank thread now signals an event after running
+the interrupt, and the wait waits on it for at most the same 1 ms. A signal set after the value was read
+stays pending, so it isn't lost; other waits keep the 1 ms poll.
+
+## Why 0026 and 0027
+
+With several GPUs, D3D12 took the first adapter DXGI enumerated and Vulkan the first of the equally
+capable devices, which is the integrated GPU on many laptops. D3D12 now enumerates by high-performance
+preference, or by minimum power when the player chose power saving for the game in Windows' graphics
+settings; `d3d12_adapter` still picks one by index. Vulkan prefers a discrete GPU among devices with the
+same features, unless `DRI_PRIME`, `MESA_VK_DEVICE_SELECT`, `VK_LOADER_DEVICE_SELECT` or
+`__NV_PRIME_RENDER_OFFLOAD` already chose one; `vulkan_device` still picks one by index. The game also
+exports `NvOptimusEnablement` and `AmdPowerXpressRequestHighPerformance`.
+
+## Why 0028
+
+`native_2x_msaa = false` doesn't turn multisampling off: the game's 2x MSAA render targets get host 4x
+MSAA. Both backends now log which host sample count those render targets get and why.
+
+## Why 0029
+
+While any ImGui dialog exists (the game keeps its frame counter and cursor timer as dialogs), the presenter
+paints from the UI thread, and the ImGui drawer asks for a repaint after every frame. Each guest frame was
+presented as it arrived, and the UI repaint presented it again at the next vertical blank: about 120
+presents a second for 60 guest frames. On Linux, with no vertical blank ticks, the repaint ran as fast as
+the GPU allowed. A repaint for the UI alone now waits for the next guest frame, which is presented with the
+UI, for up to 50 ms. Without guest frames (the launcher, a stall) it waits for a vertical blank tick on
+Windows as before, or for the display refresh interval elsewhere. Resizes, surface changes, OS repaints and
+changes to the dialogs still paint at once.
+
+## Why 0030, 0031 and 0032
+
+With resolution scaling, a resolve copied into the one texture sampling exactly its rectangle (0022) still
+dumped the render target to the EDRAM buffer and wrote the scaled resolve memory, which nothing else read
+while the resolve kept repeating. `resolve_defer_writeback` now skips both and keeps the texture, which
+then can't be evicted, as the only copy. The memory is written before a texture load reads any of it,
+before another resolve partly overwrites it, and when the resolve isn't repeated in the next frame: the
+texture goes through the render target's own dump shader into the EDRAM buffer (those tiles are then dirty
+again) and the saved resolve runs as it would have. That gives the same bits, as the texture holds what
+the render target had there, and the resolve's half-pixel fill takes the pixels it already took. A later
+resolve writing exactly the same bytes drops the unwritten one. Without resolution scaling, other GPU work
+reads the resolved memory directly, and resolve readback needs it at once, so neither defers.
+
 ## Windows-only patches
 
 - 0011, 0012, 0013 and 0014 are the D3D12 halves of 0003, 0005, 0007 and 0008 (submissions and occlusion queries,
   transfers, stencil bits and dump dirty tiles in `src/graphics/d3d12`); the common halves also apply on Linux.
 - 0015 is the high-resolution waitable timer of `threading_win.cpp` (see 0006).
+- 0023 and 0031 are the D3D12 halves of 0022 and 0030 (0024 and 0032 are the Vulkan ones), and 0027 the D3D12
+  counterpart of 0026.
 
 ## Building the patched runtime
 
@@ -366,10 +471,10 @@ The Debug files stay stock. After `-Restore`, the next `build.ps1` patches them 
 Linux (Ubuntu 22.04, see [linux.md](linux.md)): `tools/package-linux.sh` runs `tools/build-patched-rexruntime.sh`
 itself the first time and whenever the check described below fails. The script applies the patches that apply to
 Linux (the shared and the `.linux.patch` ones, in name order; `--list` prints them with the fingerprint) and builds
-`librexruntime.so` and `librexgpu-xenos.so`, the Vulkan GPU plugin, which is a separate library on Linux as well. Only
-the Release libraries are patched, with the stock RUNPATH (`$ORIGIN:$ORIGIN/../lib`) instead of the build folder CMake
-would put there; the Debug and RelWithDebInfo libraries of the SDK stay stock. Besides the packages in
-linux.md it needs git, network access and the SDK's build dependencies: `libgtk-3-dev libx11-dev libx11-xcb-dev
+`librexruntime.so` and `librexgpu-xenos.so`, the Vulkan GPU plugin, which is a separate library on Linux as well. The
+RelWithDebInfo (`librexruntimerd.so`, `librexgpu-xenosrd.so`) and Release libraries are patched, with the stock RUNPATH
+(`$ORIGIN:$ORIGIN/../lib`) instead of the build folder CMake would put there; the Debug libraries stay stock. Besides
+the packages in linux.md it needs git, network access and the SDK's build dependencies: `libgtk-3-dev libx11-dev libx11-xcb-dev
 libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxrender-dev libxss-dev libvulkan-dev
 libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libdecor-0-dev libasound2-dev libpulse-dev
 libpipewire-0.3-dev libgl1-mesa-dev libudev-dev pkg-config`.
@@ -397,9 +502,9 @@ passes; the packaged DLLs must also be identical to the installed ones. With `-S
 runtime and fails when it is out of date.
 
 On Linux the stamp (`rexruntime-patch.txt`) has the same fields (`inputs_sha256` over the SDK version, tag and commit,
-the compiler flags, the RUNPATH, the targets and every Linux patch's name and hash; `patch_sha256`; `patches`) and the SHA-256 of
-`lib/librexruntime.so` and `lib/librexgpu-xenos.so`. `tools/build-patched-rexruntime.sh --check` fails if the
-fingerprint differs, if either library does not match the stamp or if either is the stock file, and names what changed
+the compiler flags, the RUNPATH, the targets, the configurations and every Linux patch's name and hash; `patch_sha256`;
+`patches`) and the SHA-256 of the four libraries. `tools/build-patched-rexruntime.sh --check` fails if the
+fingerprint differs, if a library does not match the stamp or if one is the stock file, and names what changed
 (for example `patches added: ...`). `tools/package-linux.sh` runs that check, rebuilds when it fails, and then checks
 that the libraries next to the built program are byte-identical to the installed ones. The project build relinks the
 program when `lib/librexruntime*.so` or `lib/librexgpu-xenos*.so` in `tools/rexglue/linux-amd64` change (`LINK_DEPENDS`

@@ -17,6 +17,7 @@ REXCVAR_DECLARE(bool, hcu_skip_launcher);
 REXCVAR_DECLARE(bool, hcu_skip_intro);
 REXCVAR_DECLARE(bool, hcu_show_fps);
 REXCVAR_DECLARE(bool, hcu_show_frame_counter);
+REXCVAR_DECLARE(bool, hcu_msaa_compatibility);
 REXCVAR_DECLARE(int32_t, hcu_launcher_x);
 REXCVAR_DECLARE(int32_t, hcu_launcher_y);
 REXCVAR_DECLARE(int32_t, hcu_launcher_width);
@@ -38,6 +39,10 @@ inline std::filesystem::path PlayerSettingsPath(const std::filesystem::path& use
   return user_data_root / "settings.toml";
 }
 void LoadPlayerSettings(const std::filesystem::path& path);
+
+// Sets the Xenos native_2x_msaa cvar from the launcher's Multisampling choice. Call once the GPU plugin
+// has registered its cvars and before emulation starts.
+void ApplyMultisampling();
 
 // The launcher window placement loaded from the player file.
 WindowPlacement SavedLauncherPlacement();

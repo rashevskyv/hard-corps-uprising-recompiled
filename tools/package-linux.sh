@@ -5,7 +5,7 @@
 #   tools/package-linux.sh            incremental Release build, then package
 #   tools/package-linux.sh --clean    clean Release build first
 #
-# Needs clang-20, clang++-20, cmake 3.25+, ninja, rsync, git, wget or curl, unzip or python3, binutils and the
+# Needs clang-20, clang++-20, lld-20, cmake 3.25+, ninja, rsync, git, wget or curl, unzip or python3, binutils and the
 # GCC 13+ C++ runtime. Release builds are made on Ubuntu 22.04: the AppImage needs the build machine's glibc.
 # The ReXGlue runtime and Vulkan GPU plugin are built from source with the project's patches
 # (tools/build-patched-rexruntime.sh) the first time and whenever the patches change, which also needs network
@@ -55,7 +55,7 @@ NAME="HardCorpsUprising-v$VERSION-linux-x86_64"
 echo "Hard Corps: Uprising $VERSION - Linux AppImage (local only)"
 
 echo "== Tools"
-for tool in clang-20 clang++-20 cmake ninja rsync sha256sum strip readelf objdump ldd; do
+for tool in clang-20 clang++-20 ld.lld-20 cmake ninja rsync sha256sum strip readelf objdump ldd; do
   command -v "$tool" >/dev/null || fail "$tool not found"
 done
 command -v wget >/dev/null || command -v curl >/dev/null || fail "wget or curl not found"

@@ -100,7 +100,7 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 ### Graphics
 - **Render resolution**: Original (1280×720), 2x (2560×1440, recommended for 1440p), 3x (3840×2160) or 4x (5120×2880)
 - **Anti-aliasing**: Off, FXAA or FXAA Extreme
-- **Multisampling**: 2x MSAA on or off
+- **Multisampling**: 2x MSAA, or 4x MSAA (Compatibility) if 2x shows graphics problems
 - **Texture filtering**: Game, Off, 2x, 4x, 8x or 16x
 
 ### Gameplay
@@ -165,7 +165,7 @@ In an existing clone, run `git submodule update --init --recursive`.
 2. Extract your package's files into `game\extracted` with an Xbox 360 STFS extractor, so that `game\extracted\default.xex` exists.
 3. `.\tools\codegen.ps1` downloads the pinned ReXGlue SDK 0.10.0, checks `default.xex` and generates the C++ into `generated\`.
 4. `.\tools\build.ps1` builds `build\hard_corps_uprising.exe`. `.\tools\build.ps1 -Run` also starts it. It first checks that ReXGlue's runtime and Xenos GPU plugin in `tools\rexglue` were built from this project's patches (`patches\rexglue-sdk`) and rebuilds them from the v0.10.0 source when they were not (network access the first time), and afterwards that the DLLs next to the program are those files; it does not start the game otherwise. See [docs/rexglue-runtime-patch.md](docs/rexglue-runtime-patch.md).
-5. `.\tools\package-release.ps1` makes the release ZIP in `dist\`. It builds the same way, refuses to package a runtime that does not match the patches, and publishes nothing.
+5. `.\tools\package-release.ps1` makes the release ZIP in `dist\`. It builds the same way, refuses to package a runtime that does not match the patches, and publishes nothing. Release and RelWithDebInfo builds (the default) link the game and its recompiled code with ThinLTO.
 
 The Linux AppImage is built on Linux or WSL with `tools/package-linux.sh`, after the steps above have generated the C++. See [docs/linux.md](docs/linux.md).
 

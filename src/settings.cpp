@@ -16,6 +16,7 @@
 #include "trg/settings.h"
 
 #include "legacy_settings.h"
+#include "multisampling.h"
 
 #include "platform.h"
 
@@ -27,6 +28,9 @@ REXCVAR_DEFINE_BOOL(hcu_skip_intro, false, "Hard Corps", "Start directly at the 
 REXCVAR_DEFINE_BOOL(hcu_show_fps, true, "Hard Corps", "Show the frame rate in the window title");
 REXCVAR_DEFINE_BOOL(hcu_show_frame_counter, false, "Hard Corps",
                     "Show the frame counter in the corner (F2 toggles it)");
+REXCVAR_DEFINE_BOOL(hcu_msaa_compatibility, false, "Hard Corps",
+                    "Draw the game's 2x MSAA render targets with 4x MSAA, for GPUs or drivers whose "
+                    "native 2x MSAA misrenders (sets native_2x_msaa)");
 REXCVAR_DEFINE_INT32(hcu_launcher_x, 0, "Hard Corps", "Launcher window left edge, written by the launcher");
 REXCVAR_DEFINE_INT32(hcu_launcher_y, 0, "Hard Corps", "Launcher window top edge, written by the launcher");
 REXCVAR_DEFINE_INT32(hcu_launcher_width, 0, "Hard Corps", "Launcher window restored width, written by the launcher");
@@ -49,7 +53,7 @@ const std::vector<std::string> kGameSettingKeys = {
     "present_letterbox",
     "resolution_scale",
     "swap_post_effect",
-    "native_2x_msaa",
+    "hcu_msaa_compatibility",
     "anisotropic_override",
     "hcu_show_fps",
     "hcu_show_frame_counter",
@@ -285,6 +289,13 @@ void GameSettings::Apply() const {
     }
     rex::cvar::SetFlagByName(key, value);
   }
+  ApplyMultisampling();
+}
+
+// Also replaces a native_2x_msaa = false written by launchers that labelled it Off.
+void ApplyMultisampling() {
+  rex::cvar::SetFlagByName("native_2x_msaa",
+                           Native2xMsaaFor(REXCVAR_GET(hcu_msaa_compatibility)) ? "true" : "false");
 }
 
 void GameSettings::MarkWindowCreated() {

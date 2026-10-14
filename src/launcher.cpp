@@ -902,8 +902,9 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
              "resolution_scale", "1", RenderResolutionOptions());
     ui.Choice("Anti-aliasing", "Smooths jagged edges after the frame is drawn. Extreme is softer but cleaner.",
               "swap_post_effect", "none", {{"none", "Off"}, {"fxaa", "FXAA"}, {"fxaa_extreme", "FXAA Extreme"}});
-    ui.Toggle("Multisampling", "Native 2\xC3\x97 MSAA wherever the game asks the Xbox 360 GPU for it.",
-              "native_2x_msaa", true, "Off", "2\xC3\x97 MSAA");
+    ui.Toggle("Multisampling",
+              "Use 2\xC3\x97 MSAA for best performance. Try 4\xC3\x97 only if you see graphics problems with 2\xC3\x97.",
+              "hcu_msaa_compatibility", false, "2\xC3\x97 MSAA", "4\xC3\x97 MSAA (Compatibility)");
     ui.Choice("Texture filtering", "Anisotropic filtering keeps textures sharp at oblique angles. Game leaves it to the game.",
               "anisotropic_override", "3",
               {{"-1", "Game"},

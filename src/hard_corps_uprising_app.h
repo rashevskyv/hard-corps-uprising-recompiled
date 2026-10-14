@@ -91,6 +91,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
       show_launcher_ = true;
     }
     if (!show_launcher_) {
+      hcu::ApplyMultisampling();
       return defaults;
     }
     if (!imgui_drawer()) {

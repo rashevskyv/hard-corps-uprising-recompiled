@@ -26,6 +26,15 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 
+#if defined(_WIN32)
+// The NVIDIA Optimus and AMD switchable graphics drivers run programs exporting these on the
+// discrete GPU.
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 namespace hcu {
 namespace {
 

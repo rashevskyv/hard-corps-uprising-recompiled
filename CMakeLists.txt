@@ -52,6 +52,7 @@ set(HCU_SOURCES
     src/achievements_overlay.cpp
     src/cheat_menu.cpp
     src/cheats.cpp
+    src/crt_native.cpp
     src/frame_counter.cpp
     src/game_files.cpp
     src/gpu_fence_wait.cpp
@@ -111,6 +112,29 @@ else()
         endif()
     endforeach()
 endif()
+# ThinLTO in Release and RelWithDebInfo (the default of tools/build.ps1); the runtime and GPU plugin are
+# prebuilt. Debug compiles at -O0, which marks every function optnone, so LTO would optimize nothing there.
+function(hcu_enable_thinlto target)
+    set(_lto "$<CONFIG:Release,RelWithDebInfo>")
+    if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+        # lld-link runs the LTO backend at -O2 unless told otherwise; Release compiles at -O3.
+        set(_link -flto=thin "$<$<CONFIG:Release>:-Wl,/opt:lldlto=3>"
+            "-Wl,/lldltocache:${CMAKE_BINARY_DIR}/lto-cache")
+    elseif(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(_link -flto=thin -fuse-ld=lld "-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache")
+    else()
+        return()
+    endif()
+    target_compile_options(${target} PRIVATE "$<$<AND:${_lto},$<COMPILE_LANGUAGE:CXX>>:-flto=thin>")
+    get_target_property(_type ${target} TYPE)
+    if(NOT _type STREQUAL "OBJECT_LIBRARY")
+        target_link_options(${target} PRIVATE "$<${_lto}:${_link}>")
+    endif()
+endfunction()
+hcu_enable_thinlto(hard_corps_uprising)
+if(TARGET hard_corps_uprising_recomp)
+    hcu_enable_thinlto(hard_corps_uprising_recomp)
+endif()
 target_compile_definitions(hard_corps_uprising PRIVATE
     HCU_PORT_VERSION="${PROJECT_VERSION}"
     HCU_TRG_VERSION="${HCU_TRG_VERSION}")
@@ -146,6 +170,11 @@ add_executable(hcu_skip_intro_tests EXCLUDE_FROM_ALL tests/skip_intro_tests.cpp)
 target_include_directories(hcu_skip_intro_tests PRIVATE src)
 target_compile_definitions(hcu_skip_intro_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+# Multisampling setting tests, not part of the default build: cmake --build <dir> --target hcu_multisampling_tests
+add_executable(hcu_multisampling_tests EXCLUDE_FROM_ALL tests/multisampling_tests.cpp)
+target_include_directories(hcu_multisampling_tests PRIVATE src)
+target_compile_definitions(hcu_multisampling_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 # Cursor auto-hide tests, not part of the default build: cmake --build <dir> --target hcu_window_host_tests
 add_executable(hcu_window_host_tests EXCLUDE_FROM_ALL tests/window_host_tests.cpp)
 target_include_directories(hcu_window_host_tests PRIVATE src)
@@ -175,6 +204,11 @@ add_executable(hcu_user_data_tests EXCLUDE_FROM_ALL
 )
 target_include_directories(hcu_user_data_tests PRIVATE src)
 target_include_directories(hcu_user_data_tests SYSTEM PRIVATE "${HCU_SDK_DIR}/include" "${_trg_dir}/include")
+
+# The tests that compile game code are built like the game.
+foreach(_test installer cheats frame_counter skip_intro multisampling window_host window_placement live user_data)
+    hcu_enable_thinlto(hcu_${_test}_tests)
+endforeach()
 
 # Allocator stress test, not part of the default build: cmake --build <dir> --target hcu_physical_heap_stress
 add_executable(hcu_physical_heap_stress EXCLUDE_FROM_ALL tests/physical_heap_stress.cpp)

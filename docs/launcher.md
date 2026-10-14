@@ -100,7 +100,7 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 | | Aspect ratio | `present_letterbox` |
 | Graphics | Render resolution | `resolution_scale` |
 | | Anti-aliasing | `swap_post_effect` |
-| | Multisampling | `native_2x_msaa` |
+| | Multisampling | `hcu_msaa_compatibility` |
 | | Texture filtering | `anisotropic_override` |
 | Gameplay | Frame rate in title | `hcu_show_fps` |
 |  | Frame counter | `hcu_show_frame_counter` |
@@ -119,8 +119,10 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 | --- | --- | --- |
 | Render resolution | `resolution_scale` (integer 1–8, the launcher offers 1–4) | `1` Original, `2`, `3`, `4` (`1`) |
 | Anti-aliasing | `swap_post_effect` | `none` Off, `fxaa`, `fxaa_extreme` (`none`) |
-| Multisampling | `native_2x_msaa` | `true` 2x MSAA, `false` Off (`true`) |
+| Multisampling | `hcu_msaa_compatibility` | `false` 2x MSAA, `true` 4x MSAA (Compatibility) (`false`) |
 | Texture filtering | `anisotropic_override` | `-1` Game (no override), `0` Off, `2` 2x, `3` 4x, `4` 8x, `5` 16x (`3`, 4x) |
+
+Multisampling only decides how the render targets the game itself draws with 2x MSAA are drawn on the host: native 2x MSAA, or 4x MSAA using two of its samples, for GPUs or drivers whose 2x MSAA misrenders. It cannot turn the game's multisampling off, and the compatibility choice costs more GPU time. The game sets the Xenos `native_2x_msaa` from it at every start, also replacing a `native_2x_msaa = false` that older launchers wrote for "Off".
 
 Shader compilation is not a launcher setting; the game uses ReXGlue's default, `async_shader_compilation = true`.
 
