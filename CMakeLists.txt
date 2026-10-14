@@ -236,6 +236,19 @@ if(NOT WIN32)
     set_target_properties(hcu_shutdown_order_tests PROPERTIES BUILD_RPATH "$ORIGIN")
 endif()
 
+# Guest thread shutdown test, not part of the default build: cmake --build <dir> --target hcu_title_thread_shutdown_tests
+add_executable(hcu_title_thread_shutdown_tests EXCLUDE_FROM_ALL tests/title_thread_shutdown_tests.cpp)
+target_link_libraries(hcu_title_thread_shutdown_tests PRIVATE rex::runtime)
+add_custom_command(TARGET hcu_title_thread_shutdown_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:rex::runtime>"
+        "$<TARGET_FILE_DIR:hcu_title_thread_shutdown_tests>"
+    VERBATIM
+)
+if(NOT WIN32)
+    set_target_properties(hcu_title_thread_shutdown_tests PROPERTIES BUILD_RPATH "$ORIGIN")
+endif()
+
 # RenderDoc detection test (Linux), not part of the default build: cmake --build <dir> --target hcu_renderdoc_detect_tests
 if(UNIX AND NOT APPLE)
     add_library(hcu_fake_renderdoc SHARED EXCLUDE_FROM_ALL tests/fake_renderdoc.cpp)

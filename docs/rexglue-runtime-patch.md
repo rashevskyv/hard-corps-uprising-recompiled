@@ -48,6 +48,7 @@ virtual function goes after all the others, and a new member must not move one t
 | [0030-resolve-deferred-writeback](../patches/rexglue-sdk/0030-resolve-deferred-writeback.patch) | both | GPU plugin | which resolves copied into a texture may leave their memory unwritten, and when it is written after all (render target and texture cache bases) |
 | [0031-d3d12-resolve-deferred-writeback](../patches/rexglue-sdk/0031-d3d12-resolve-deferred-writeback.windows.patch) | Windows | GPU plugin | the deferral and the later writes in the D3D12 render target and texture caches |
 | [0032-vulkan-resolve-deferred-writeback](../patches/rexglue-sdk/0032-vulkan-resolve-deferred-writeback.linux.patch) | Linux | GPU plugin | the deferral and the later writes in the Vulkan render target and texture caches |
+| [0033-stop-title-threads](../patches/rexglue-sdk/0033-stop-title-threads.patch) | both | runtime | title termination and `Runtime::Shutdown` stop every guest thread of the title before anything is torn down (`kernel_state.cpp`, `runtime.cpp`, the kernel waits in `xobject.cpp` and `xthread.cpp`) |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
@@ -431,6 +432,30 @@ again) and the saved resolve runs as it would have. That gives the same bits, as
 the render target had there, and the resolve's half-pixel fill takes the pixels it already took. A later
 resolve writing exactly the same bytes drops the unwritten one. Without resolution scaling, other GPU work
 reads the resolved memory directly, and resolve readback needs it at once, so neither defers.
+
+## Why 0033
+
+Exit Game ends in `XamLoaderLaunchTitle`, which runs `KernelState::TerminateTitle` on the main guest thread. It woke
+the other guest threads, gave them 200 ms to reach a kernel wait and exit, then cleared its flag and dropped the rest
+from its thread list. The game's polling worker sleeps 500 ms per round in `KeDelayExecutionThread`, so it often
+outlived that window and kept running while `Runtime::Shutdown` destroyed the kernel state and unmapped guest memory:
+a SIGSEGV on Linux a few seconds after "Execution complete" under CPU load.
+
+- **Stop.** A guest thread of the title counts as running from its start until it exits, except while it is blocked in
+  a kernel wait (`XObject::Wait`, `WaitMultiple`, `SignalAndWait`, `XThread::Delay`). `XThread::StopTitleThreads`
+  waits until none runs and then closes the gate: a thread leaving its wait after that never returns to guest code and
+  stays parked until the process exits. Nothing is killed; runtime threads (vblank, audio, kernel dispatch) are not
+  title threads and are stopped by their subsystems as before.
+- **Lifetime.** `TerminateTitle` keeps its flag set and keeps the object of each thread that did not exit, since that
+  host thread still uses it. `Runtime::Shutdown` stops the title's threads (terminating the title if nothing did) and
+  waits for the thread that terminated it to exit before it tears anything down. A thread still running guest code
+  after 2 s can be neither stopped nor killed safely, so the process then ends at once without any teardown, as on
+  window close.
+- **Test.** `tests/title_thread_shutdown_tests.cpp` (CMake target `hcu_title_thread_shutdown_tests`, not part of the
+  default build) runs the runtime with a worker asleep in a 500 ms delay, one blocked on a cancelled timer and one
+  running guest code, terminates the title from the main guest thread and tears the runtime down: no guest code may
+  run after the main thread has finished. A last case adds a thread that never reaches a kernel wait, for which the
+  runtime must end the process instead.
 
 ## Windows-only patches
 
