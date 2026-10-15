@@ -358,6 +358,8 @@ void ApplyWindowIcon() {}
 
 void SetApplicationId() {}
 
+void ReportGraphicsFailure() {}
+
 std::vector<Rect> WorkAreas() {
   std::vector<Rect> areas;
   EnumDisplayMonitors(nullptr, nullptr, AddWorkArea, reinterpret_cast<LPARAM>(&areas));
@@ -496,6 +498,17 @@ void LauncherGamepad::Release(ImGuiIO& io) {
 
 void SetApplicationId() {
   SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, kApplicationId);
+}
+
+// SDL's X11 message box hangs on empty lines in the text.
+void ReportGraphicsFailure() {
+  SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Hard Corps: Uprising",
+                           "The graphics system could not start.\n"
+                           "The game needs a working Vulkan graphics driver, such as Mesa (AMD and Intel) or the "
+                           "NVIDIA driver.\n"
+                           "Install or update it and start the game again.\n"
+                           "The log folder next to the AppImage has the details.",
+                           nullptr);
 }
 
 void ApplyWindowIcon() {

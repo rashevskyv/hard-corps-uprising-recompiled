@@ -57,6 +57,14 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     }
   }
 
+  bool SetupPresentation() override {
+    if (rex::ReXApp::SetupPresentation()) {
+      return true;
+    }
+    hcu::ReportGraphicsFailure();
+    return false;
+  }
+
   void OnPostInitLogging() override {
     const hcu::UserDataMessage message = hcu::DescribeUserData(user_data_);
     if (message.warning) {

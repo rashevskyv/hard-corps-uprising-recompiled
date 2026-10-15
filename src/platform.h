@@ -35,6 +35,10 @@ void ApplyWindowIcon();
 // be set before the window is created. A no-op on Windows.
 void SetApplicationId();
 
+// Linux: tells the player, in a window that needs no GPU, that graphics could not start; the SDK only logs it. A no-op
+// on Windows.
+void ReportGraphicsFailure();
+
 // True while Shift is held. On Linux SDL only knows the keyboard once a window has focus.
 bool ShiftHeld();
 
