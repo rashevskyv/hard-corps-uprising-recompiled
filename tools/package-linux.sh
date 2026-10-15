@@ -70,8 +70,8 @@ clang++-20 --version | sed -n 1p
 cmake --version | sed -n 1p
 HOST_GLIBC="$(getconf GNU_LIBC_VERSION | cut -d' ' -f2)"
 echo "glibc $HOST_GLIBC"
-[ "$(printf '%s\n' 2.35 "$HOST_GLIBC" | sort -V | tail -1)" = 2.35 ] ||
-  echo "WARNING: this AppImage will need glibc $HOST_GLIBC; release builds use Ubuntu 22.04 (glibc 2.35)" >&2
+[ "$(printf '%s\n' "$MAX_GLIBC" "$HOST_GLIBC" | sort -V | tail -1)" = "$MAX_GLIBC" ] ||
+  echo "WARNING: this AppImage will need glibc $HOST_GLIBC; release builds use Ubuntu 20.04 (glibc $MAX_GLIBC)" >&2
 
 echo "== Inputs"
 [ -f "$ROOT/generated/default/sources.cmake" ] || fail "generated/default is missing (run tools/codegen.ps1 first)"
@@ -237,8 +237,7 @@ echo "  clean"
 for f in usr/bin/hard_corps_uprising usr/bin/librexruntime.so usr/bin/librexgpu-xenos.so usr/lib/libstdc++.so.6 usr/lib/libgcc_s.so.1; do
   glibc="$(readelf --dyn-syms -W "$APPDIR/$f" | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
   echo "  $f needs $glibc"
-  [ "$(printf '%s
-' "${glibc#GLIBC_}" "$MAX_GLIBC" | sort -V | tail -1)" = "$MAX_GLIBC" ] ||
+  [ "$(printf '%s\n' "${glibc#GLIBC_}" "$MAX_GLIBC" | sort -V | tail -1)" = "$MAX_GLIBC" ] ||
     fail "$f needs $glibc, above the glibc $MAX_GLIBC baseline"
 done
 

@@ -510,10 +510,9 @@ Linux (the shared and the `.linux.patch` ones, in name order; `--list` prints th
 `librexruntime.so` and `librexgpu-xenos.so`, the Vulkan GPU plugin, which is a separate library on Linux as well. The
 RelWithDebInfo (`librexruntimerd.so`, `librexgpu-xenosrd.so`) and Release libraries are patched, with the stock RUNPATH
 (`$ORIGIN:$ORIGIN/../lib`) instead of the build folder CMake would put there; the Debug libraries stay stock. Besides
-the packages in linux.md it needs git, network access and the SDK's build dependencies: `libgtk-3-dev libx11-dev libx11-xcb-dev
-libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxrender-dev libxss-dev libvulkan-dev
-libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libdecor-0-dev libasound2-dev libpulse-dev
-libpipewire-0.3-dev libgl1-mesa-dev libudev-dev pkg-config`.
+the packages in linux.md it needs git, network access and the SDK's build dependencies, which
+`tools/setup-linux-build-env.sh` installs on Ubuntu 20.04 (it builds libdecor and PipeWire from pinned sources, since
+20.04 does not package them).
 
 Both scripts check the source is exactly the pinned commit, stop if a patch no longer applies, compile with
 `-ffile-prefix-map` so no build folder ends up in the library, and refuse a result that equals the stock file.
