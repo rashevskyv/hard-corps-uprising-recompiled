@@ -172,7 +172,7 @@ measured 1280x720 base. Both are game choices, HARD_CORPS_SPECIFIC, and a port s
 | Deferred write-back | 0031 | 0032 |
 | VSync cvar | `d3d12_allow_variable_refresh_rate_and_tearing` | `vulkan_allow_present_mode_immediate` |
 | Vertical-blank tick for UI repaint | exists (DXGI tick thread) | none; display refresh interval is used (0029) |
-| Failure reporting | log only | SDL message box if setup fails ([05](05-platform-linux.md)) |
+| Failure reporting | log only | Linux error window (SDL surface) if setup fails ([05](05-platform-linux.md)) |
 
 ## Overlays and capture tools
 

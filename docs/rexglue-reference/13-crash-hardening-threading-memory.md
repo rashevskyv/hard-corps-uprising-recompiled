@@ -176,8 +176,9 @@ Wrong power-of-two scaling in the Vulkan fetch path; a correctness fix, not a cr
 
 ### 5.5 Startup failure when Vulkan is unavailable (`6cf59bd`) -- `PLATFORM_LINUX`, `REUSABLE_INFRASTRUCTURE`
 The SDK only logs a presentation failure, so a user without a Vulkan driver saw nothing. `HardCorpsUprisingApp::SetupPresentation`
-calls the base; on failure `hcu::ReportGraphicsFailure` shows an SDL simple message box (needs no GPU). Pitfall recorded in
-the source: SDL's X11 message box hangs on empty lines in the text. Windows: no-op (D3D12 failure is not handled this way).
+calls the base; on failure `hcu::ReportGraphicsFailure` shows an error window drawn in an SDL surface (needs no GPU and no
+zenity). SDL's own message box is avoided: it runs zenity first when zenity is installed. Windows: no-op (D3D12 failure is
+not handled this way).
 Validation: manual (Linux-headless smoke only).
 
 ### 5.6 AppImage and libstdc++ / glibc mismatch (`9964f82`, `df29fe2`) -- `PLATFORM_LINUX`

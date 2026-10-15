@@ -18,7 +18,7 @@ writing this; statements come from source, history and the project's docs.
 | Log file selection | When the "port folder" is not the executable folder (an AppImage), the app sets the SDK `log_file` cvar to `<portfolder>/logs/hard_corps_uprising_NNN.log` (next free number), falling back to `<user data>/logs`; otherwise the SDK's own naming in `logs` next to the program is used | `HardCorpsUprisingApp::OnConfigurePaths` in `src/hard_corps_uprising_app.h`, `hcu::NextLogFile` in `src/platform.cpp` | REUSABLE_INFRASTRUCTURE (needed because the AppImage mount is read-only) | manual; origin `9964f82` |
 | Startup trail lines | `User data: ...` (one line each start; a warning when a migration fell back), `Player settings: <path>`, `Launcher shown`, `Window mode: borderless fullscreen / windowed`, `Scheduling: ...` (Windows), a warning when the window opened on another display than the setting, install and DLC progress/failure lines (`Installing game files from ...`, `DLC install failed: ... (detail)`) | `src/hard_corps_uprising_app.h`, `src/settings.cpp`, `src/launcher.cpp`, `src/window_host.cpp`, `src/platform.cpp` | REUSABLE_INFRASTRUCTURE | `tests/user_data_tests.cpp` checks the user-data log/About text; the rest manual |
 | Warnings the player cannot see | offline stats corrupt or unwritable, achievement 0 not registerable, unsupported `default.xex` CRC32, settings repair | `src/live_fix.cpp`, `src/settings.cpp`, `src/launcher.cpp` | GAME_ADAPTATION / REUSABLE | `tests/live_tests.cpp` covers the stats store logic |
-| Graphics start failure box (Linux) | `hcu::ReportGraphicsFailure()` shows an SDL message box ("graphics system could not start ... needs a working Vulkan graphics driver ... the log folder next to the AppImage has the details") when `ReXApp::SetupPresentation` returns false; no-op on Windows | `SetupPresentation` override in `src/hard_corps_uprising_app.h`, `src/platform.cpp`; origin `6cf59bd` | PLATFORM_LINUX, REUSABLE_INFRASTRUCTURE | manual (not re-run) |
+| Graphics start failure box (Linux) | `hcu::ReportGraphicsFailure()` shows an error window drawn in an SDL surface, not an SDL message box ("graphics system could not start ... needs a working Vulkan graphics driver ... the log folder next to the AppImage has the details") when `ReXApp::SetupPresentation` returns false; no-op on Windows | `SetupPresentation` override in `src/hard_corps_uprising_app.h`, `src/platform.cpp`; origin `6cf59bd` | PLATFORM_LINUX, REUSABLE_INFRASTRUCTURE | manual (not re-run) |
 | GPU device log | `Vulkan device: <name> (type N)` when the Vulkan backend picks a device | patch 0026 ([01-rexglue-core.md](01-rexglue-core.md)) | LIKELY GENERIC_REXGLUE | manual |
 | MSAA host-sample log | both render target caches log whether the game's 2x MSAA targets get host 2x or 4x and why | patch 0028 | the framing is HARD_CORPS_SPECIFIC; logging the host sample count is reusable | manual |
 | On-screen performance | FPS in the window title (`hcu_show_fps`, default on) and an optional ImGui frame counter (`hcu_show_frame_counter`) | `src/frame_counter.cpp`, `src/window_host.cpp` | REUSABLE_INFRASTRUCTURE (the swap hook that feeds it is GAME_ADAPTATION, see [07-display-window-frame-pacing.md](07-display-window-frame-pacing.md)) | `tests/frame_counter_tests.cpp` |
@@ -79,8 +79,8 @@ confirmed the fix. See [13-crash-hardening-threading-memory.md](13-crash-hardeni
 
 ## 5. Vulkan and graphics diagnostics
 
-1. If the window never appears on Linux and a message box shows, the SDK failed `SetupPresentation`; the log has the
-   cause (for example no Vulkan driver or loader). Origin `6cf59bd`.
+1. If the window never appears on Linux, the log says whether the SDK failed `SetupPresentation` and why (for example no
+   Vulkan driver or loader). Origin `6cf59bd`.
 2. Check the `Vulkan device:` line to confirm the intended GPU (patch 0026); on hybrid laptops use the variables in
    section 3.
 3. The Linux brightness bug (patch 0034, SPIR-V exponent bias read from the wrong fetch constant word) was found by
@@ -165,7 +165,7 @@ whether they compile or ran is not established by the repository.
 | Install, DLC and settings-repair lines | yes | | |
 | `Vulkan device:` line (0026), MSAA log (0028) | yes | | |
 | FPS title and frame counter | yes | | |
-| `ReportGraphicsFailure` message box (Linux) | yes | | |
+| `ReportGraphicsFailure` error window (Linux) | yes | | |
 | RenderDoc detection fix and test | yes | | |
 | AppImage log placement (`NextLogFile`) | yes | | |
 | GPU thread stats debug patch | | removed `bbd02f2` | |

@@ -27,7 +27,7 @@ Evidence level is taken from the repo only. "Release notes" means `.github/relea
 | Rendering, audio, controllers, performance | largely unconfirmed | `docs/linux.md` Known limits |
 | X11 vs Wayland vs XWayland | not recorded | the docs list "X11 or Wayland desktop"; no per-server result exists |
 | glibc 2.31 baseline (Ubuntu 20.04 build) | build-time only, unreleased | commit `df29fe2` is after the v0.5.0 release; released AppImages say glibc 2.35 |
-| Vulkan-unavailable error window | code only | commit `6cf59bd`; no run evidence |
+| Vulkan-unavailable error window | Xvfb, no Vulkan ICD, zenity installed | window visible at 1 s and up for 40 s, click closes it with exit 1; fix not committed |
 | WSL as build host | documented | `docs/linux.md`, `tools/package-linux.sh` header ("Run on Linux or WSL"); the repo holds no WSL run log |
 | Performance parity with Windows | claimed for the CPU/runtime work only | commit `dc6feb8`; no Linux numbers in the repo (see [12](12-performance.md)) |
 
@@ -120,9 +120,10 @@ from `tools/codegen.ps1` (PowerShell) in the documented flow.
   `kdialog`; if neither exists the call returns empty. Folder and URL buttons run `xdg-open`. `docs/linux.md` lists
   `zenity` or `kdialog` and `xdg-open` as requirements. Whether those exist on a Steam Deck is not recorded.
 - **Vulkan unavailable.** `HardCorpsUprisingApp::SetupPresentation` calls `ReportGraphicsFailure()` when ReXGlue's setup
-  fails: an SDL simple message box (a window that needs no GPU) naming Vulkan and pointing at the `logs` folder. The
-  comment records an SDL X11 quirk: its message box hangs on empty lines, so the text has none. Origin `6cf59bd`.
-  Never run on a machine without Vulkan in the repo evidence (UNCERTAIN).
+  fails: a small SDL window (software surface, text from ImGui's built-in font, no GPU) naming Vulkan and pointing at the
+  `logs` folder. It closes on a key, a click or the window close button, and the app then exits with a nonzero status.
+  It does not use `SDL_ShowSimpleMessageBox`: SDL runs `zenity` first when zenity is installed, and a stalled zenity kept
+  the window from appearing. Origin `6cf59bd`. Never run on a machine without Vulkan in the repo evidence (UNCERTAIN).
 
 ## Paths, logs and shutdown
 

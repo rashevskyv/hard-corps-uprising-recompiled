@@ -294,7 +294,7 @@ the `trg::` helpers, `TuneProcessScheduling` (Windows). See [16](16-reusable-gam
 | `ReXApp::OnClosing` hard-exits; `OnDestroy` runs full teardown; their divergence hides teardown bugs from window-close testing | staged `rex_app.cpp` | [13](13-crash-hardening-threading-memory.md) |
 | Windows sleeps last up to a timer tick longer than asked; POSIX alertable waits poll in 1 ms slices; `WaitMultiple` polls | patches 0015, 0019, 0021 | [12](12-performance.md) |
 | SDK defaults changed here: `execute_unclipped_draw_vs_on_cpu` (off in the release), `clear_memory_page_state` (on), `primitive_processor_cache_min_indices` (0) | patch 0004 | [12](12-performance.md) |
-| SDL's X11 message box hangs on empty lines in the text | comment in `ReportGraphicsFailure` | [05](05-platform-linux.md) |
+| SDL's message box runs zenity first when zenity is installed, and a stalled zenity hides the window | `ReportGraphicsFailure` uses an SDL surface window instead | [05](05-platform-linux.md) |
 
 NO_VALUE profile settings and license-mask behaviour are not evidenced in this repository's patches or app code (the
 offline-Live work is documented in [11](11-offline-services-profile-achievements.md)); nothing is claimed here.

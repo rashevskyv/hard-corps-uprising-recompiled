@@ -500,15 +500,115 @@ void SetApplicationId() {
   SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, kApplicationId);
 }
 
-// SDL's X11 message box hangs on empty lines in the text.
+namespace {
+
+constexpr const char* kGraphicsFailureLines[] = {
+    "The graphics system could not start.",
+    "The game needs a working Vulkan graphics driver,",
+    "such as Mesa (AMD and Intel) or the NVIDIA driver.",
+    "Install or update it and start the game again.",
+    "The log folder next to the AppImage has the details.",
+    "Press a key or click to close.",
+};
+constexpr int kGraphicsFailureWidth = 520;
+constexpr int kGraphicsFailureHeight = 152;
+constexpr float kGraphicsFailureMargin = 16.0f;
+constexpr float kGraphicsFailureLineStep = 20.0f;
+
+// Loading a glyph rewrites the atlas pixels, so every glyph is loaded before they are read.
+void LoadGraphicsFailureGlyphs(ImFontBaked* baked) {
+  for (const char* line : kGraphicsFailureLines) {
+    for (const char* c = line; *c; ++c) {
+      baked->FindGlyph(static_cast<ImWchar>(static_cast<unsigned char>(*c)));
+    }
+  }
+}
+
+void BlitGlyph(SDL_Surface* surface, const ImFontGlyph& glyph, const unsigned char* atlas, int atlas_width,
+               int atlas_height, float x, float y) {
+  if (!glyph.Visible) {
+    return;
+  }
+  const int source_x = int(glyph.U0 * float(atlas_width) + 0.5f);
+  const int source_y = int(glyph.V0 * float(atlas_height) + 0.5f);
+  const int width = int(glyph.X1 - glyph.X0 + 0.5f);
+  const int height = int(glyph.Y1 - glyph.Y0 + 0.5f);
+  const int left = int(x + glyph.X0 + 0.5f);
+  const int top = int(y + glyph.Y0 + 0.5f);
+  for (int row = 0; row < height; ++row) {
+    for (int column = 0; column < width; ++column) {
+      const unsigned int alpha = atlas[(source_y + row) * atlas_width + source_x + column];
+      const Uint8 level = Uint8(0x2b + (0xf0 - 0x2b) * alpha / 255);
+      SDL_WriteSurfacePixel(surface, left + column, top + row, level, level, level, 0xff);
+    }
+  }
+}
+
+void DrawGraphicsFailure(SDL_Window* window, ImFontBaked* baked, const unsigned char* atlas, int atlas_width,
+                         int atlas_height) {
+  SDL_Surface* surface = SDL_GetWindowSurface(window);
+  if (!surface) {
+    return;
+  }
+  SDL_FillSurfaceRect(surface, nullptr, SDL_MapSurfaceRGB(surface, 0x2b, 0x2b, 0x2b));
+  float line_y = kGraphicsFailureMargin;
+  for (const char* line : kGraphicsFailureLines) {
+    float pen_x = kGraphicsFailureMargin;
+    for (const char* c = line; *c; ++c) {
+      const ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(static_cast<unsigned char>(*c)));
+      BlitGlyph(surface, *glyph, atlas, atlas_width, atlas_height, pen_x, line_y);
+      pen_x += glyph->AdvanceX;
+    }
+    line_y += kGraphicsFailureLineStep;
+  }
+  SDL_UpdateWindowSurface(window);
+}
+
+}  // namespace
+
+// SDL's message box runs zenity first when it is installed, and zenity can block before any window appears.
 void ReportGraphicsFailure() {
-  SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Hard Corps: Uprising",
-                           "The graphics system could not start.\n"
-                           "The game needs a working Vulkan graphics driver, such as Mesa (AMD and Intel) or the "
-                           "NVIDIA driver.\n"
-                           "Install or update it and start the game again.\n"
-                           "The log folder next to the AppImage has the details.",
-                           nullptr);
+  ImFontAtlas atlas;
+  ImFont* font = atlas.AddFontDefault();
+  ImFontBaked* baked = font->GetFontBaked(font->LegacySize);
+  LoadGraphicsFailureGlyphs(baked);
+  unsigned char* atlas_pixels = nullptr;
+  int atlas_width = 0;
+  int atlas_height = 0;
+  atlas.GetTexDataAsAlpha8(&atlas_pixels, &atlas_width, &atlas_height);
+
+  SDL_Window* window = SDL_CreateWindow("Hard Corps: Uprising", kGraphicsFailureWidth, kGraphicsFailureHeight, 0);
+  if (!window) {
+    REXLOG_ERROR("Could not create the graphics error window: {}", SDL_GetError());
+    return;
+  }
+  if (!SDL_GetWindowSurface(window)) {
+    REXLOG_ERROR("Could not get the graphics error window surface: {}", SDL_GetError());
+    SDL_DestroyWindow(window);
+    return;
+  }
+  DrawGraphicsFailure(window, baked, atlas_pixels, atlas_width, atlas_height);
+  bool open = true;
+  while (open) {
+    SDL_Event event;
+    if (!SDL_WaitEvent(&event)) {
+      break;
+    }
+    switch (event.type) {
+      case SDL_EVENT_QUIT:
+      case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+      case SDL_EVENT_KEY_DOWN:
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        open = false;
+        break;
+      case SDL_EVENT_WINDOW_EXPOSED:
+        DrawGraphicsFailure(window, baked, atlas_pixels, atlas_width, atlas_height);
+        break;
+      default:
+        break;
+    }
+  }
+  SDL_DestroyWindow(window);
 }
 
 void ApplyWindowIcon() {

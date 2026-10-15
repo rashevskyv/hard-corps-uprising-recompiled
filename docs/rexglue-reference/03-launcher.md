@@ -355,10 +355,10 @@ Frame rate in title (`hcu_show_fps`), in-game frame counter (`hcu_show_frame_cou
 - Settings could not be saved: Play refused, launcher stays.
 - Relaunch failed: launcher stays, message.
 - Graphics failure (`6cf59bd`, PLATFORM_LINUX): `SetupPresentation` is overridden; when the base call fails the app
-  calls `hcu::ReportGraphicsFailure()`, which on Linux shows an `SDL_ShowSimpleMessageBox` error ("graphics system could not
-  start ... needs a working Vulkan graphics driver ... log folder next to the AppImage"). A message box needs no GPU, which
-  is the point: the SDK only logs the failure, so before the commit a machine without Vulkan exited silently. The comment in
-  the code notes SDL's X11 message box hangs on empty lines in the text. Windows has an empty implementation (D3D12 failure
+  calls `hcu::ReportGraphicsFailure()`, which on Linux shows an error window ("graphics system could not start ... needs a
+  working Vulkan graphics driver ... log folder next to the AppImage") drawn in an SDL surface. It needs no GPU, which is
+  the point: the SDK only logs the failure, so before the commit a machine without Vulkan exited silently. SDL's message box
+  is not used, because it runs zenity first when zenity is installed. Windows has an empty implementation (D3D12 failure
   is not reported by this function). Manual only, no test; classification REUSABLE_INFRASTRUCTURE, CONFIRMED from the commit,
   UNCERTAIN on how every Linux session manager renders the box.
 
