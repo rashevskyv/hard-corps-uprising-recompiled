@@ -43,7 +43,8 @@ ImGui drawer and the GPU plugin already exist at that point; the guest does not.
    `PrepareLauncherWindow` overrides the window cvars (windowed, launcher size, monitor 0); then
    `MarkWindowCreated` records the window parameters this process creates its window with.
 4. `SetupPresentation` creates the window and loads the GPU plugin, which registers the Graphics cvars. If it fails
-   the app calls `ReportGraphicsFailure` (section 14).
+   the app opens `RunLauncherWithoutGraphics` (Linux): a launcher window on an SDL surface that shows the game files and
+   graphics status, and Play reports the graphics failure with `ReportGraphicsFailure` (section 14).
 5. `OnFinalizePaths`: sets title and icon, `CaptureLateRegistered` (Graphics keys registered only now), re-checks
    Shift on Linux, then either returns the defaults (no launcher) or calls `ShowLauncher` and returns `nullopt`.
 6. Play: `callbacks.play` queues, on the UI thread, `GameSettings::Apply()` then `resume(defaults)`.

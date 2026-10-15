@@ -5,7 +5,7 @@
 #include <functional>
 #include <optional>
 
-inline constexpr char kWindowTitle[] = "Hard Corps: Uprising";
+inline constexpr char kWindowTitle[] = "Hard Corps: Uprising Recompiled";
 
 // The latest one-second sample of the game's swaps; all zero until the first one is measured.
 struct GuestFrameStats {

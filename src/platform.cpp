@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -25,6 +26,8 @@
 
 #include <rex/filesystem.h>
 #include <rex/logging.h>
+
+#include "window_host.h"
 
 #if defined(_WIN32)
 // The NVIDIA Optimus and AMD switchable graphics drivers run programs exporting these on the
@@ -360,6 +363,8 @@ void SetApplicationId() {}
 
 void ReportGraphicsFailure() {}
 
+void RunLauncherWithoutGraphics(const GraphicsFallbackInfo&) {}
+
 std::vector<Rect> WorkAreas() {
   std::vector<Rect> areas;
   EnumDisplayMonitors(nullptr, nullptr, AddWorkArea, reinterpret_cast<LPARAM>(&areas));
@@ -502,6 +507,13 @@ void SetApplicationId() {
 
 namespace {
 
+struct Color {
+  int r, g, b;
+};
+
+constexpr Color kPanel{0x2b, 0x2b, 0x2b};
+constexpr Color kText{0xf0, 0xf0, 0xf0};
+
 constexpr const char* kGraphicsFailureLines[] = {
     "The graphics system could not start.",
     "The game needs a working Vulkan graphics driver,",
@@ -512,73 +524,211 @@ constexpr const char* kGraphicsFailureLines[] = {
 };
 constexpr int kGraphicsFailureWidth = 520;
 constexpr int kGraphicsFailureHeight = 152;
-constexpr float kGraphicsFailureMargin = 16.0f;
-constexpr float kGraphicsFailureLineStep = 20.0f;
+constexpr int kGraphicsFailureMargin = 16;
+constexpr int kGraphicsFailureLineStep = 20;
 
-// Loading a glyph rewrites the atlas pixels, so every glyph is loaded before they are read.
-void LoadGraphicsFailureGlyphs(ImFontBaked* baked) {
-  for (const char* line : kGraphicsFailureLines) {
-    for (const char* c = line; *c; ++c) {
-      baked->FindGlyph(static_cast<ImWchar>(static_cast<unsigned char>(*c)));
+class SoftwareText {
+ public:
+  SoftwareText() {
+    ImFont* font = atlas_.AddFontDefault();
+    baked_ = font->GetFontBaked(font->LegacySize);
+    // Loading a glyph rewrites the atlas pixels, so every glyph is loaded before they are read.
+    for (ImWchar c = kFirstGlyph; c <= kLastGlyph; ++c) {
+      baked_->FindGlyph(c);
+    }
+    atlas_.GetTexDataAsAlpha8(&pixels_, &width_, &height_);
+  }
+
+  int Width(std::string_view text, int scale) const {
+    float width = 0.0f;
+    for (const char c : text) {
+      width += baked_->FindGlyph(Printable(c))->AdvanceX;
+    }
+    return int(width) * scale;
+  }
+
+  int Height(int scale) const { return int(baked_->Size) * scale; }
+
+  void Draw(SDL_Surface* surface, std::string_view text, int x, int y, int scale, Color color) const {
+    float pen_x = float(x);
+    for (const char c : text) {
+      const ImFontGlyph* glyph = baked_->FindGlyph(Printable(c));
+      DrawGlyph(surface, *glyph, int(pen_x), y, scale, color);
+      pen_x += glyph->AdvanceX * float(scale);
     }
   }
-}
 
-void BlitGlyph(SDL_Surface* surface, const ImFontGlyph& glyph, const unsigned char* atlas, int atlas_width,
-               int atlas_height, float x, float y) {
-  if (!glyph.Visible) {
-    return;
+ private:
+  static constexpr ImWchar kFirstGlyph = 0x20;
+  static constexpr ImWchar kLastGlyph = 0x7e;
+
+  static ImWchar Printable(char c) {
+    const auto code = static_cast<unsigned char>(c);
+    return code >= kFirstGlyph && code <= kLastGlyph ? ImWchar(code) : ImWchar('?');
   }
-  const int source_x = int(glyph.U0 * float(atlas_width) + 0.5f);
-  const int source_y = int(glyph.V0 * float(atlas_height) + 0.5f);
-  const int width = int(glyph.X1 - glyph.X0 + 0.5f);
-  const int height = int(glyph.Y1 - glyph.Y0 + 0.5f);
-  const int left = int(x + glyph.X0 + 0.5f);
-  const int top = int(y + glyph.Y0 + 0.5f);
-  for (int row = 0; row < height; ++row) {
-    for (int column = 0; column < width; ++column) {
-      const unsigned int alpha = atlas[(source_y + row) * atlas_width + source_x + column];
-      const Uint8 level = Uint8(0x2b + (0xf0 - 0x2b) * alpha / 255);
-      SDL_WriteSurfacePixel(surface, left + column, top + row, level, level, level, 0xff);
+
+  void DrawGlyph(SDL_Surface* surface, const ImFontGlyph& glyph, int x, int y, int scale, Color color) const {
+    if (!glyph.Visible) {
+      return;
+    }
+    const int source_x = int(glyph.U0 * float(width_) + 0.5f);
+    const int source_y = int(glyph.V0 * float(height_) + 0.5f);
+    const int width = int(glyph.X1 - glyph.X0 + 0.5f);
+    const int height = int(glyph.Y1 - glyph.Y0 + 0.5f);
+    const int left = x + int(glyph.X0 * float(scale) + 0.5f);
+    const int top = y + int(glyph.Y0 * float(scale) + 0.5f);
+    for (int row = 0; row < height; ++row) {
+      for (int column = 0; column < width; ++column) {
+        const int alpha = pixels_[(source_y + row) * width_ + source_x + column];
+        if (alpha == 0) {
+          continue;
+        }
+        for (int dy = 0; dy < scale; ++dy) {
+          for (int dx = 0; dx < scale; ++dx) {
+            Blend(surface, left + column * scale + dx, top + row * scale + dy, color, alpha);
+          }
+        }
+      }
     }
   }
+
+  static void Blend(SDL_Surface* surface, int x, int y, Color color, int alpha) {
+    Uint8 r, g, b, a;
+    if (x < 0 || y < 0 || x >= surface->w || y >= surface->h ||
+        !SDL_ReadSurfacePixel(surface, x, y, &r, &g, &b, &a)) {
+      return;
+    }
+    SDL_WriteSurfacePixel(surface, x, y, Uint8(r + (color.r - r) * alpha / 255),
+                          Uint8(g + (color.g - g) * alpha / 255), Uint8(b + (color.b - b) * alpha / 255), 0xff);
+  }
+
+  ImFontAtlas atlas_;
+  ImFontBaked* baked_ = nullptr;
+  unsigned char* pixels_ = nullptr;
+  int width_ = 0;
+  int height_ = 0;
+};
+
+void FillRect(SDL_Surface* surface, const SDL_Rect& rect, Color color) {
+  SDL_FillSurfaceRect(surface, &rect, SDL_MapSurfaceRGB(surface, Uint8(color.r), Uint8(color.g), Uint8(color.b)));
 }
 
-void DrawGraphicsFailure(SDL_Window* window, ImFontBaked* baked, const unsigned char* atlas, int atlas_width,
-                         int atlas_height) {
+void DrawGraphicsFailure(SDL_Window* window, const SoftwareText& text) {
   SDL_Surface* surface = SDL_GetWindowSurface(window);
   if (!surface) {
     return;
   }
-  SDL_FillSurfaceRect(surface, nullptr, SDL_MapSurfaceRGB(surface, 0x2b, 0x2b, 0x2b));
-  float line_y = kGraphicsFailureMargin;
+  FillRect(surface, {0, 0, surface->w, surface->h}, kPanel);
+  int line_y = kGraphicsFailureMargin;
   for (const char* line : kGraphicsFailureLines) {
-    float pen_x = kGraphicsFailureMargin;
-    for (const char* c = line; *c; ++c) {
-      const ImFontGlyph* glyph = baked->FindGlyph(static_cast<ImWchar>(static_cast<unsigned char>(*c)));
-      BlitGlyph(surface, *glyph, atlas, atlas_width, atlas_height, pen_x, line_y);
-      pen_x += glyph->AdvanceX;
-    }
+    text.Draw(surface, line, kGraphicsFailureMargin, line_y, 1, kText);
     line_y += kGraphicsFailureLineStep;
   }
   SDL_UpdateWindowSurface(window);
+}
+
+constexpr int kFallbackWidth = 640;
+constexpr int kFallbackHeight = 400;
+constexpr int kFallbackMargin = 24;
+constexpr int kFallbackHeaderHeight = 96;
+constexpr int kFallbackIconSize = 72;
+constexpr int kFallbackLargeScale = 2;
+constexpr int kFallbackRowStep = 34;
+constexpr int kFallbackLabelWidth = 120;
+constexpr Color kFallbackBackground{0x1e, 0x1e, 0x24};
+constexpr Color kFallbackHeader{0x2b, 0x2b, 0x36};
+constexpr Color kAccent{0xff, 0x8a, 0x1f};
+constexpr Color kAccentHover{0xff, 0xa8, 0x55};
+constexpr Color kButton{0x3a, 0x3a, 0x48};
+constexpr Color kButtonHover{0x4e, 0x4e, 0x60};
+constexpr Color kDimText{0x9a, 0x9a, 0xa6};
+constexpr Color kReadyText{0x5c, 0xc9, 0x6b};
+constexpr Color kWarningText{0xf2, 0xb1, 0x3a};
+constexpr Color kDarkText{0x1e, 0x1e, 0x24};
+
+enum class FallbackButton { kNone, kPlay, kQuit };
+
+constexpr SDL_Rect kPlayButton{kFallbackMargin, kFallbackHeight - 76, 200, 48};
+constexpr SDL_Rect kQuitButton{kFallbackMargin + 216, kFallbackHeight - 76, 140, 48};
+
+FallbackButton ButtonAt(float x, float y) {
+  const SDL_Point point{int(x), int(y)};
+  if (SDL_PointInRect(&point, &kPlayButton)) {
+    return FallbackButton::kPlay;
+  }
+  return SDL_PointInRect(&point, &kQuitButton) ? FallbackButton::kQuit : FallbackButton::kNone;
+}
+
+std::string FitToWidth(const SoftwareText& text, std::string value, int max_width) {
+  if (text.Width(value, 1) <= max_width) {
+    return value;
+  }
+  while (value.size() > 1 && text.Width("..." + value, 1) > max_width) {
+    value.erase(0, 1);
+  }
+  return "..." + value;
+}
+
+void DrawButton(SDL_Surface* surface, const SoftwareText& text, const SDL_Rect& rect, const char* label,
+                bool primary, bool hovered) {
+  const Color fill = primary ? (hovered ? kAccentHover : kAccent) : (hovered ? kButtonHover : kButton);
+  FillRect(surface, rect, fill);
+  const int width = text.Width(label, kFallbackLargeScale);
+  text.Draw(surface, label, rect.x + (rect.w - width) / 2, rect.y + (rect.h - text.Height(kFallbackLargeScale)) / 2,
+            kFallbackLargeScale, primary ? kDarkText : kText);
+}
+
+void DrawStatusRow(SDL_Surface* surface, const SoftwareText& text, int y, const char* label, const std::string& value,
+                   Color value_color) {
+  text.Draw(surface, label, kFallbackMargin, y, 1, kDimText);
+  text.Draw(surface, value, kFallbackMargin + kFallbackLabelWidth, y, 1, value_color);
+}
+
+void DrawLauncherWithoutGraphics(SDL_Window* window, const SoftwareText& text, SDL_Surface* icon,
+                                 const GraphicsFallbackInfo& info, FallbackButton hovered) {
+  SDL_Surface* surface = SDL_GetWindowSurface(window);
+  if (!surface) {
+    return;
+  }
+  FillRect(surface, {0, 0, surface->w, surface->h}, kFallbackBackground);
+  FillRect(surface, {0, 0, surface->w, kFallbackHeaderHeight}, kFallbackHeader);
+  FillRect(surface, {0, kFallbackHeaderHeight, surface->w, 3}, kAccent);
+  int title_x = kFallbackMargin;
+  if (icon) {
+    SDL_Rect target{kFallbackMargin, (kFallbackHeaderHeight - kFallbackIconSize) / 2, kFallbackIconSize,
+                    kFallbackIconSize};
+    SDL_BlitSurfaceScaled(icon, nullptr, surface, &target, SDL_SCALEMODE_LINEAR);
+    title_x += kFallbackIconSize + kFallbackMargin;
+  }
+  text.Draw(surface, "HARD CORPS: UPRISING", title_x, 24, kFallbackLargeScale, kText);
+  text.Draw(surface, "RECOMPILED", title_x, 32 + text.Height(kFallbackLargeScale), kFallbackLargeScale, kAccent);
+
+  const int max_value_width = surface->w - 2 * kFallbackMargin - kFallbackLabelWidth;
+  int row_y = kFallbackHeaderHeight + 32;
+  DrawStatusRow(surface, text, row_y, "Game files", info.game_files_status,
+                info.game_files_ready ? kReadyText : kWarningText);
+  row_y += kFallbackRowStep;
+  DrawStatusRow(surface, text, row_y, "Folder", FitToWidth(text, info.game_dir, max_value_width), kDimText);
+  row_y += kFallbackRowStep;
+  DrawStatusRow(surface, text, row_y, "Graphics", "Vulkan setup required", kWarningText);
+
+  DrawButton(surface, text, kPlayButton, "PLAY", true, hovered == FallbackButton::kPlay);
+  DrawButton(surface, text, kQuitButton, "QUIT", false, hovered == FallbackButton::kQuit);
+  SDL_UpdateWindowSurface(window);
+}
+
+SDL_Surface* LoadApplicationIcon() {
+  const std::filesystem::path icon_file = rex::filesystem::GetExecutableFolder() / ".." / "share" / "icons" /
+                                          "hicolor" / "256x256" / "apps" / "hard_corps_uprising.png";
+  return SDL_LoadPNG(Utf8(icon_file).c_str());
 }
 
 }  // namespace
 
 // SDL's message box runs zenity first when it is installed, and zenity can block before any window appears.
 void ReportGraphicsFailure() {
-  ImFontAtlas atlas;
-  ImFont* font = atlas.AddFontDefault();
-  ImFontBaked* baked = font->GetFontBaked(font->LegacySize);
-  LoadGraphicsFailureGlyphs(baked);
-  unsigned char* atlas_pixels = nullptr;
-  int atlas_width = 0;
-  int atlas_height = 0;
-  atlas.GetTexDataAsAlpha8(&atlas_pixels, &atlas_width, &atlas_height);
-
-  SDL_Window* window =
-      SDL_CreateWindow("Hard Corps: Uprising Recompiled", kGraphicsFailureWidth, kGraphicsFailureHeight, 0);
+  const SoftwareText text;
+  SDL_Window* window = SDL_CreateWindow(kWindowTitle, kGraphicsFailureWidth, kGraphicsFailureHeight, 0);
   if (!window) {
     REXLOG_ERROR("Could not create the graphics error window: {}", SDL_GetError());
     return;
@@ -588,7 +738,7 @@ void ReportGraphicsFailure() {
     SDL_DestroyWindow(window);
     return;
   }
-  DrawGraphicsFailure(window, baked, atlas_pixels, atlas_width, atlas_height);
+  DrawGraphicsFailure(window, text);
   bool open = true;
   while (open) {
     SDL_Event event;
@@ -603,12 +753,72 @@ void ReportGraphicsFailure() {
         open = false;
         break;
       case SDL_EVENT_WINDOW_EXPOSED:
-        DrawGraphicsFailure(window, baked, atlas_pixels, atlas_width, atlas_height);
+        DrawGraphicsFailure(window, text);
         break;
       default:
         break;
     }
   }
+  SDL_DestroyWindow(window);
+}
+
+void RunLauncherWithoutGraphics(const GraphicsFallbackInfo& info) {
+  const SoftwareText text;
+  SDL_Window* window = SDL_CreateWindow(kWindowTitle, kFallbackWidth, kFallbackHeight, 0);
+  if (!window || !SDL_GetWindowSurface(window)) {
+    REXLOG_ERROR("Could not open the launcher window without graphics: {}", SDL_GetError());
+    SDL_DestroyWindow(window);
+    ReportGraphicsFailure();
+    return;
+  }
+  SDL_Surface* icon = LoadApplicationIcon();
+  if (icon) {
+    SDL_SetWindowIcon(window, icon);
+  }
+  FallbackButton hovered = FallbackButton::kNone;
+  DrawLauncherWithoutGraphics(window, text, icon, info, hovered);
+  bool open = true;
+  while (open) {
+    SDL_Event event;
+    if (!SDL_WaitEvent(&event)) {
+      break;
+    }
+    FallbackButton pressed = FallbackButton::kNone;
+    switch (event.type) {
+      case SDL_EVENT_QUIT:
+      case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        open = false;
+        break;
+      case SDL_EVENT_KEY_DOWN:
+        if (event.key.key == SDLK_ESCAPE) {
+          open = false;
+        } else if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) {
+          pressed = FallbackButton::kPlay;
+        }
+        break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        pressed = ButtonAt(event.button.x, event.button.y);
+        break;
+      case SDL_EVENT_MOUSE_MOTION:
+        if (const FallbackButton over = ButtonAt(event.motion.x, event.motion.y); over != hovered) {
+          hovered = over;
+          DrawLauncherWithoutGraphics(window, text, icon, info, hovered);
+        }
+        break;
+      case SDL_EVENT_WINDOW_EXPOSED:
+        DrawLauncherWithoutGraphics(window, text, icon, info, hovered);
+        break;
+      default:
+        break;
+    }
+    if (pressed == FallbackButton::kQuit) {
+      open = false;
+    } else if (pressed == FallbackButton::kPlay) {
+      ReportGraphicsFailure();
+      DrawLauncherWithoutGraphics(window, text, icon, info, hovered);
+    }
+  }
+  SDL_DestroySurface(icon);
   SDL_DestroyWindow(window);
 }
 

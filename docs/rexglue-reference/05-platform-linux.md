@@ -119,8 +119,10 @@ from `tools/codegen.ps1` (PowerShell) in the documented flow.
 - **Desktop helpers.** TRG Launcher (a submodule) opens file pickers with `zenity --file-selection`, falling back to
   `kdialog`; if neither exists the call returns empty. Folder and URL buttons run `xdg-open`. `docs/linux.md` lists
   `zenity` or `kdialog` and `xdg-open` as requirements. Whether those exist on a Steam Deck is not recorded.
-- **Vulkan unavailable.** `HardCorpsUprisingApp::SetupPresentation` calls `ReportGraphicsFailure()` when ReXGlue's setup
-  fails: a small SDL window (software surface, text from ImGui's built-in font, no GPU) naming Vulkan and pointing at the
+- **Vulkan unavailable.** `HardCorpsUprisingApp::SetupPresentation` calls `RunLauncherWithoutGraphics()` when ReXGlue's
+  setup fails: a 640x400 SDL launcher window (software surface, no GPU, app icon, game files and graphics status, Play and
+  Quit; Escape or the close button also quit) so the application still opens. The real launcher is ImGui drawn through the
+  Vulkan presenter, so it cannot run here. Play calls `ReportGraphicsFailure()`: a small SDL window (software surface, text from ImGui's built-in font, no GPU) naming Vulkan and pointing at the
   `logs` folder. It closes on a key, a click or the window close button, and the app then exits with a nonzero status.
   It does not use `SDL_ShowSimpleMessageBox`: SDL runs `zenity` first when zenity is installed, and a stalled zenity kept
   the window from appearing. Origin `6cf59bd`. Never run on a machine without Vulkan in the repo evidence (UNCERTAIN).

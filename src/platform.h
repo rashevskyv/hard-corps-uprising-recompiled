@@ -39,6 +39,16 @@ void SetApplicationId();
 // on Windows.
 void ReportGraphicsFailure();
 
+struct GraphicsFallbackInfo {
+  std::string game_dir;
+  std::string game_files_status;
+  bool game_files_ready = false;
+};
+
+// Linux: the launcher's window when graphics cannot start, drawn on an SDL surface with no GPU. It shows the game
+// files and graphics status; Play reports the graphics failure. Returns when the player closes it. A no-op on Windows.
+void RunLauncherWithoutGraphics(const GraphicsFallbackInfo& info);
+
 // True while Shift is held. On Linux SDL only knows the keyboard once a window has focus.
 bool ShiftHeld();
 

@@ -17,6 +17,7 @@
 #include "achievements_overlay.h"
 #include "cheat_menu.h"
 #include "frame_counter.h"
+#include "game_files.h"
 #include "launcher.h"
 #include "live_fix.h"
 #include "local_stats.h"
@@ -61,7 +62,8 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     if (rex::ReXApp::SetupPresentation()) {
       return true;
     }
-    hcu::ReportGraphicsFailure();
+    REXLOG_WARN("Graphics unavailable; opening the launcher without graphics");
+    hcu::RunLauncherWithoutGraphics(DescribeGameFiles());
     return false;
   }
 
@@ -181,6 +183,17 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   }
 
  private:
+  hcu::GraphicsFallbackInfo DescribeGameFiles() const {
+    switch (hcu::CheckGameFiles(game_data_root()).state) {
+      case hcu::GameFiles::kReady:
+        return {hcu::Utf8(game_data_root()), "Ready", true};
+      case hcu::GameFiles::kUnsupported:
+        return {hcu::Utf8(game_data_root()), "Unsupported version", false};
+      default:
+        return {hcu::Utf8(game_data_root()), "Setup required", false};
+    }
+  }
+
   // The cache folder ReXGlue derived from the system root follows the user data root unless it was set explicitly.
   void ChooseUserData(rex::PathConfig& paths, const std::filesystem::path& port_folder) {
     user_data_ = hcu::SelectUserData({port_folder, paths.user_data_root, !REXCVAR_GET(user_data_root).empty()});
