@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the Linux x86_64 Release and packages dist/HardCorpsUprising-v<version>-x86_64.AppImage.
+# Builds the Linux x86_64 Release and packages dist/HardCorpsUprisingRecompiled-v<version>-x86_64.AppImage.
 # Local only: nothing is published, tagged or uploaded. Run on Linux or WSL.
 #
 #   tools/package-linux.sh            incremental Release build, then package
@@ -57,8 +57,8 @@ APP_ID="$(sed -nE 's/^[[:space:]]*constexpr char kApplicationId\[\] = "([^"]+)";
 [[ "$APP_ID" =~ ^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$ ]] ||
   fail "src/platform.cpp must declare kApplicationId exactly once, as a dotted name on one line (found: '$APP_ID')"
 [ -f "$ROOT/packaging/linux/$APP_ID.desktop" ] || fail "packaging/linux/$APP_ID.desktop is missing: the desktop file is named after kApplicationId"
-NAME="HardCorpsUprising-v$VERSION-x86_64"
-echo "Hard Corps: Uprising $VERSION - Linux AppImage (local only)"
+NAME="HardCorpsUprisingRecompiled-v$VERSION-x86_64"
+echo "Hard Corps: Uprising Recompiled $VERSION - Linux AppImage (local only)"
 
 echo "== Tools"
 for tool in clang-20 clang++-20 ld.lld-20 cmake ninja rsync sha256sum strip readelf objdump ldd; do

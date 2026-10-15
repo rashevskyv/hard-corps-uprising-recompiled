@@ -26,9 +26,9 @@ is older than GCC 13.
 
 ## Installing
 
-1. Download **HardCorpsUprising-v…-x86_64.AppImage** and put it in a folder you can write to.
+1. Download **HardCorpsUprisingRecompiled-v…-x86_64.AppImage** and put it in a folder you can write to.
 2. Make it executable: right-click it > **Properties** > **Permissions** > **Is executable**, or
-   `chmod +x HardCorpsUprising-v*-x86_64.AppImage`.
+   `chmod +x HardCorpsUprisingRecompiled-v*-x86_64.AppImage`.
 3. Run it. The launcher opens.
 4. On the **Play** page click **Install from package...** and pick your package. The game files are copied into a
    `game` folder next to the AppImage.
@@ -110,7 +110,7 @@ Vulkan GPU plugin from source the first time and whenever the patches change
 ([docs/rexglue-runtime-patch.md](rexglue-runtime-patch.md) lists the extra packages and the network access this
 needs), builds the `linux-amd64-release` preset, checks
 that the AppDir holds no game files, packages, saves, logs or local paths, and writes
-`dist/HardCorpsUprising-v<version>-x86_64.AppImage` with its `.sha256` (`--out-dir DIR` writes them to DIR instead of `dist`). It publishes nothing.
+`dist/HardCorpsUprisingRecompiled-v<version>-x86_64.AppImage` with its `.sha256` (`--out-dir DIR` writes them to DIR instead of `dist`). It publishes nothing.
 
 For a plain build without packaging, with the SDK extracted into `tools/rexglue/linux-amd64`, `tools/build.sh`
 (`release`, `relwithdebinfo` or `debug`) builds the patched ReXGlue libraries when they are missing or out of date and
