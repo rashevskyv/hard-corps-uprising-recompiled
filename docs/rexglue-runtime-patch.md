@@ -50,6 +50,7 @@ virtual function goes after all the others, and a new member must not move one t
 | [0032-vulkan-resolve-deferred-writeback](../patches/rexglue-sdk/0032-vulkan-resolve-deferred-writeback.linux.patch) | Linux | GPU plugin | the deferral and the later writes in the Vulkan render target and texture caches |
 | [0033-stop-title-threads](../patches/rexglue-sdk/0033-stop-title-threads.patch) | both | runtime | title termination and `Runtime::Shutdown` stop every guest thread of the title before anything is torn down (`kernel_state.cpp`, `runtime.cpp`, the kernel waits in `xobject.cpp` and `xthread.cpp`) |
 | [0034-spirv-texture-exp-adjust](../patches/rexglue-sdk/0034-spirv-texture-exp-adjust.linux.patch) | Linux | GPU plugin | the SPIR-V texture fetch takes the exponent bias from fetch constant word 3, as the DXBC one does (`spirv_translator_fetch.cpp`) |
+| [0035-cache-vulkan-swapchain-paint-pipeline](../patches/rexglue-sdk/0035-cache-vulkan-swapchain-paint-pipeline.linux.patch) | Linux | runtime | the Vulkan presenter records the format its swapchain paint pipeline was created for, so it is reused instead of recreated after a GPU wait on every frame (`vulkan_presenter.cpp`, [ReXGlue issue #507](https://github.com/rexglue/rexglue-sdk/issues/507)) |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
@@ -84,6 +85,7 @@ backend. A "not needed" is a statement about the platform, not about the API it 
 | UI drawn with the next guest frame (0029) | common; vertical blank ticks without guest frames | common; display refresh limit without guest frames |
 | Resolve memory written only when needed (0030) | 0031 | 0032 |
 | Texture fetch exponent bias from word 3 | already correct in the DXBC translator | 0034 |
+| Swapchain paint pipeline kept while the format is unchanged | not applicable: the D3D12 presenter has no such cache | 0035 |
 
 The POSIX wait on several handles (`WaitMultiple` in `threading_posix.cpp`) polls with 1 ms sleeps; Windows waits in the
 kernel. 0021 only removes its spin on lock contention; the polling stays, since a notification scheme across the
