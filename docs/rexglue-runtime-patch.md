@@ -49,6 +49,7 @@ virtual function goes after all the others, and a new member must not move one t
 | [0031-d3d12-resolve-deferred-writeback](../patches/rexglue-sdk/0031-d3d12-resolve-deferred-writeback.windows.patch) | Windows | GPU plugin | the deferral and the later writes in the D3D12 render target and texture caches |
 | [0032-vulkan-resolve-deferred-writeback](../patches/rexglue-sdk/0032-vulkan-resolve-deferred-writeback.linux.patch) | Linux | GPU plugin | the deferral and the later writes in the Vulkan render target and texture caches |
 | [0033-stop-title-threads](../patches/rexglue-sdk/0033-stop-title-threads.patch) | both | runtime | title termination and `Runtime::Shutdown` stop every guest thread of the title before anything is torn down (`kernel_state.cpp`, `runtime.cpp`, the kernel waits in `xobject.cpp` and `xthread.cpp`) |
+| [0034-spirv-texture-exp-adjust](../patches/rexglue-sdk/0034-spirv-texture-exp-adjust.linux.patch) | Linux | GPU plugin | the SPIR-V texture fetch takes the exponent bias from fetch constant word 3, as the DXBC one does (`spirv_translator_fetch.cpp`) |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
@@ -82,6 +83,7 @@ backend. A "not needed" is a statement about the platform, not about the API it 
 | Host samples of 2x MSAA logged (0028) | common | common |
 | UI drawn with the next guest frame (0029) | common; vertical blank ticks without guest frames | common; display refresh limit without guest frames |
 | Resolve memory written only when needed (0030) | 0031 | 0032 |
+| Texture fetch exponent bias from word 3 | already correct in the DXBC translator | 0034 |
 
 The POSIX wait on several handles (`WaitMultiple` in `threading_posix.cpp`) polls with 1 ms sleeps; Windows waits in the
 kernel. 0021 only removes its spin on lock contention; the polling stays, since a notification scheme across the
@@ -104,9 +106,9 @@ initialized` in the log and RenderDoc's overlay without having attached anything
   and still returns the API when RenderDoc was injected or preloaded. macOS keeps returning `nullptr` before any
   lookup. This does not change what the GPU does, and nothing here is evidence about CPU or GPU load.
 - **Test.** `tests/renderdoc_detect_tests.cpp` (CMake target `hcu_renderdoc_detect_tests`, Linux, not part of the
-  default build) puts a fake `librenderdoc.so` on the loader path and checks that `CreateIfConnected` returns
-  `nullptr` without loading it, that it finds the API when the library was loaded on purpose, and that the library
-  unloads once its last owner is gone.
+  default build) checks that `CreateIfConnected` returns `nullptr` and loads nothing when no RenderDoc is around, and
+  when a fake `librenderdoc.so` is on the loader path but not loaded; that it finds the API when the library was
+  loaded on purpose; and that the library unloads once its last owner is gone.
 
 ## Why 0009
 
@@ -457,6 +459,13 @@ a SIGSEGV on Linux a few seconds after "Execution complete" under CPU load.
   run after the main thread has finished. A last case adds a thread that never reaches a kernel wait, for which the
   runtime must end the process instead.
 
+## Why 0034
+
+The texture fetch's result exponent bias, `exp_adjust`, is a signed 6-bit field at bit 13 of fetch constant word 3. The
+SPIR-V translator read bits 13:18 of word 4, which belong to the LOD bias, so the Vulkan backend scaled a fetch by a
+wrong power of two wherever the two differ, which can darken an image or lose a glow. The DXBC translator (D3D12)
+already reads word 3, and Windows does not build the SPIR-V translator, so the patch is Linux only.
+
 ## Windows-only patches
 
 - 0011, 0012, 0013 and 0014 are the D3D12 halves of 0003, 0005, 0007 and 0008 (submissions and occlusion queries,
@@ -510,8 +519,9 @@ Both scripts check the source is exactly the pinned commit, stop if a patch no l
 ## What the build verifies
 
 The scripts record the installed files in `rexruntime-patch.txt` next to the SDK: the source commit, the fingerprint
-of everything the files are built from (the SDK version, tag and commit, the compiler flags, targets and
-configurations in `tools\rexruntime-patch.ps1`, and every patch's name and hash in name order), and the SHA-256 of
+of everything the files are built from (the SDK version, tag and commit, the platform, the clang and MSVC toolset
+versions, the compiler flags, targets and configurations in `tools\rexruntime-patch.ps1`, and every patch's name and
+hash in name order), and the SHA-256 of
 each installed file, the runtime and the GPU plugin included. The check (`Test-PatchedRuntime`) fails if the
 fingerprint differs from the current one, if any recorded file does not match, or if one of them is the stock release
 file; it names what changed, for example `patches added: ...`. Timestamps are not used.
@@ -522,20 +532,31 @@ next to the executable when they differ, then fails unless the executable exists
 byte-identical to the installed ones and the stamp matches. The same check runs once more before `-Run` starts the
 game, and a failure prints the expected and the actual file.
 
+Builds that do not go through `build.ps1` (a preset, an IDE) check the same: the `hcu_rexglue_check` target runs
+`build-patched-rexruntime.ps1 -Check` (Linux: `build-patched-rexruntime.sh --check`) before the program is built, and
+`hcu_rexglue_staging` copies the configuration's runtime and GPU plugin next to it and checks them with `-Staged`
+(`--staged`). In Debug only the staged copies are checked. A failure names the remedy, `tools\build.ps1` or
+`tools/build.sh`.
+
 `tools/package-release.ps1` builds through `build.ps1`, then accepts the runtime and the GPU plugin only if the check
 passes; the packaged DLLs must also be identical to the installed ones. With `-SkipBuild` it does not update the
 runtime and fails when it is out of date.
 
 On Linux the stamp (`rexruntime-patch.txt`) has the same fields (`inputs_sha256` over the SDK version, tag and commit,
-the compiler flags, the RUNPATH, the targets, the configurations and every Linux patch's name and hash; `patch_sha256`;
+the platform, the clang version, the compiler flags, the RUNPATH, the targets, the configurations and every Linux
+patch's name and hash; `patch_sha256`;
 `patches`) and the SHA-256 of the four libraries. `tools/build-patched-rexruntime.sh --check` fails if the
 fingerprint differs, if a library does not match the stamp or if one is the stock file, and names what changed
-(for example `patches added: ...`). `tools/package-linux.sh` runs that check, rebuilds when it fails, and then checks
-that the libraries next to the built program are byte-identical to the installed ones. The project build relinks the
-program when `lib/librexruntime*.so` or `lib/librexgpu-xenos*.so` in `tools/rexglue/linux-amd64` change (`LINK_DEPENDS`
-in `CMakeLists.txt`), so the post-build copies cannot leave a stale library beside it. The AppDir check also fails on
-any file named like RenderDoc or a Vulkan layer, any JSON file or symbolic link, and any of the three binaries linking
-RenderDoc, besides the exact file list it already enforces.
+(for example `patches added: ...`). `tools/build.sh` and `tools/package-linux.sh` run that check and rebuild when it
+fails; `package-linux.sh` then checks with `--staged` that the libraries next to the built program and in the AppDir
+are byte-identical to the installed ones. The build also refuses a GPU plugin that does not link the runtime or
+export `rex_gpu_abi_version` and `rex_gpu_create`, and a Release library that names the source, SDK or project
+folder. The project build relinks the program when `lib/librexruntime*.so` or `lib/librexgpu-xenos*.so` in
+`tools/rexglue/linux-amd64` change (`LINK_DEPENDS` in `CMakeLists.txt`), so the post-build copies cannot leave a stale
+library beside it. The AppDir check also fails on
+any file named like RenderDoc or a Vulkan layer (in any case, including `implicit_layer.d` and `explicit_layer.d`), any
+JSON file or symbolic link, and any of the three binaries linking RenderDoc, besides the exact file list it already
+enforces.
 
 ## Allocator stress test
 
@@ -548,15 +569,17 @@ fails. With the stock runtime it fails; with the patched one it passes.
 .\tools\build-patched-rexruntime.ps1 -StressTest -SkipBuild    # test the installed runtime
 ```
 
-On Linux: `tools/build-patched-rexruntime.sh --stress <sdk dir> <build dir>`, with a configured project build in
-`<build dir>`. To compare, run `-Restore` first and repeat the test with the stock runtime.
+On Linux: `tools/build-patched-rexruntime.sh --stress <sdk dir> <build dir>`, with a configured Release project
+build in `<build dir>`. Both run the test beside the installed runtime. To compare, run `-Restore` first and repeat
+the test with the stock runtime.
 
 ## RenderDoc detection test
 
-On Linux, with a configured project build in `<build dir>` and the patched runtime installed:
+On Linux, with a configured Release project build in `<build dir>` and the patched runtime installed:
 
 ```bash
 tools/build-patched-rexruntime.sh --loader-test <sdk dir> <build dir>
 ```
 
-It prints one `ok`/`FAIL` line per check and `PASS` at the end.
+It runs the test beside the installed runtime, which must print `PASS`, and then beside the stock runtime from the SDK
+download kept next to `<sdk dir>`, which must fail by loading the fake RenderDoc; that shows the test detects the bug.

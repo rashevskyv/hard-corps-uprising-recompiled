@@ -112,6 +112,34 @@ else()
         endif()
     endforeach()
 endif()
+# Every build checks that tools/rexglue holds the runtime and GPU plugin built from this branch's patches, and that
+# the copies next to the program are those; tools/build.ps1 and tools/build.sh rebuild them when they are not.
+if(WIN32)
+    # Windows PowerShell has a fixed path, unlike a Store pwsh; the module path a parent pwsh sets breaks it.
+    find_program(HCU_WINDOWS_POWERSHELL NAMES powershell REQUIRED)
+    set(HCU_REXGLUE_CHECK "${CMAKE_COMMAND}" -E env --unset=PSModulePath
+        "${HCU_WINDOWS_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-patched-rexruntime.ps1" -Check -Config $<CONFIG>)
+    set(HCU_REXGLUE_STAGED -Staged)
+else()
+    find_program(HCU_BASH bash REQUIRED)
+    set(HCU_REXGLUE_CHECK "${HCU_BASH}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/build-patched-rexruntime.sh"
+        --check "${HCU_SDK_DIR}" --config $<CONFIG>)
+    set(HCU_REXGLUE_STAGED --staged)
+endif()
+get_property(_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT _multi_config AND NOT CMAKE_BUILD_TYPE MATCHES "^(Debug|RelWithDebInfo|Release)$")
+    message(FATAL_ERROR "Set CMAKE_BUILD_TYPE to Debug, RelWithDebInfo or Release (the presets and tools/build.ps1 "
+        "do): the ReXGlue runtime and GPU plugin are checked per configuration")
+endif()
+add_custom_target(hcu_rexglue_check COMMAND ${HCU_REXGLUE_CHECK} VERBATIM)
+add_dependencies(hard_corps_uprising hcu_rexglue_check)
+add_custom_target(hcu_rexglue_staging ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:rex::runtime>" "$<TARGET_FILE:rex::gpu-xenos>"
+        "$<TARGET_FILE_DIR:hard_corps_uprising>"
+    COMMAND ${HCU_REXGLUE_CHECK} ${HCU_REXGLUE_STAGED} "$<TARGET_FILE_DIR:hard_corps_uprising>"
+    VERBATIM
+)
+add_dependencies(hcu_rexglue_staging hard_corps_uprising)
 # ThinLTO in Release and RelWithDebInfo (the default of tools/build.ps1); the runtime and GPU plugin are
 # prebuilt. Debug compiles at -O0, which marks every function optnone, so LTO would optimize nothing there.
 function(hcu_enable_thinlto target)
@@ -251,15 +279,17 @@ endif()
 
 # RenderDoc detection test (Linux), not part of the default build: cmake --build <dir> --target hcu_renderdoc_detect_tests
 if(UNIX AND NOT APPLE)
+    # The fake librenderdoc.so goes into renderdoc/, out of reach of the runtime's $ORIGIN RUNPATH.
     add_library(hcu_fake_renderdoc SHARED EXCLUDE_FROM_ALL tests/fake_renderdoc.cpp)
-    set_target_properties(hcu_fake_renderdoc PROPERTIES OUTPUT_NAME renderdoc)
+    set_target_properties(hcu_fake_renderdoc PROPERTIES OUTPUT_NAME renderdoc
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/renderdoc")
     add_executable(hcu_renderdoc_detect_tests EXCLUDE_FROM_ALL tests/renderdoc_detect_tests.cpp)
     target_link_libraries(hcu_renderdoc_detect_tests PRIVATE rex::runtime rex::renderdoc ${CMAKE_DL_LIBS})
+    target_compile_options(hcu_renderdoc_detect_tests PRIVATE -Wall -Wextra)
     add_dependencies(hcu_renderdoc_detect_tests hcu_fake_renderdoc)
     add_custom_command(TARGET hcu_renderdoc_detect_tests POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:rex::runtime>"
-            "$<TARGET_FILE:hcu_fake_renderdoc>"
             "$<TARGET_FILE_DIR:hcu_renderdoc_detect_tests>"
         VERBATIM
     )

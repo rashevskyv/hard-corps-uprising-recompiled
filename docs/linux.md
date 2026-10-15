@@ -95,6 +95,7 @@ needs), builds the `linux-amd64-release` preset, checks
 that the AppDir holds no game files, packages, saves, logs or local paths, and writes
 `dist/HardCorpsUprising-v<version>-linux-x86_64.AppImage` with its `.sha256`. It publishes nothing.
 
-For a plain build without packaging, `cmake --preset linux-amd64-release` and
-`cmake --build --preset linux-amd64-release` (also `linux-amd64-debug` and `linux-amd64-relwithdebinfo`) build
-into `out/build/<preset>`, with `tools/rexglue/linux-amd64` holding the SDK.
+For a plain build without packaging, with the SDK extracted into `tools/rexglue/linux-amd64`, `tools/build.sh`
+(`release`, `relwithdebinfo` or `debug`) builds the patched ReXGlue libraries when they are missing or out of date and
+then the `linux-amd64-<config>` preset into `out/build/<preset>`. Building a preset directly works too, but stops if
+the SDK does not hold the patched libraries.

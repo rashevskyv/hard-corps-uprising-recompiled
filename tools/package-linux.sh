@@ -75,11 +75,11 @@ XEX="$ROOT/game/extracted/default.xex"
 echo "$XEX_SHA256  $XEX" | sha256sum -c --status - || fail "unsupported $XEX"
 
 echo "== Source -> $WORK"
-mkdir -p "$WORK/game/extracted" "$WORK/third_party"
-for f in CMakeLists.txt CMakePresets.json hard_corps_uprising_manifest.toml LICENSE; do
+mkdir -p "$WORK/game/extracted" "$WORK/third_party" "$WORK/tools"
+for f in CMakeLists.txt CMakePresets.json hard_corps_uprising_manifest.toml LICENSE tools/build-patched-rexruntime.sh; do
   rsync -a "$ROOT/$f" "$WORK/$f"
 done
-for d in config src tests generated packaging third_party/trg-launcher; do
+for d in config src tests generated packaging patches/rexglue-sdk third_party/trg-launcher; do
   mkdir -p "$WORK/$d"
   rsync -a --delete --exclude .git "$ROOT/$d/" "$WORK/$d/"
 done
@@ -103,10 +103,11 @@ fi
 [ "$("$SDK/bin/rexglue" --version | tr -d '[:space:]')" = "$SDK_VERSION" ] || fail "tools/rexglue/linux-amd64 is not ReXGlue $SDK_VERSION"
 
 echo "== Patched ReXGlue runtime and GPU plugin"
-if ! bash "$ROOT/tools/build-patched-rexruntime.sh" --check "$SDK" >/dev/null 2>&1; then
-  bash "$ROOT/tools/build-patched-rexruntime.sh" "$SDK" "$WORK/rexglue-sdk-src"
+PATCHED="$ROOT/tools/build-patched-rexruntime.sh"
+if ! bash "$PATCHED" --check "$SDK" >/dev/null 2>&1; then
+  bash "$PATCHED" "$SDK" "$WORK/rexglue-sdk-src"
 fi
-bash "$ROOT/tools/build-patched-rexruntime.sh" --check "$SDK"
+bash "$PATCHED" --check "$SDK"
 
 echo "== Build ($PRESET)"
 BIN="$WORK/out/build/$PRESET"
@@ -115,8 +116,7 @@ BIN="$WORK/out/build/$PRESET"
 for f in hard_corps_uprising librexruntime.so librexgpu-xenos.so hard_corps_uprising.toml; do
   [ -f "$BIN/$f" ] || fail "build output is missing $f"
 done
-cmp -s "$BIN/librexruntime.so" "$SDK/lib/librexruntime.so" || fail "librexruntime.so is not the patched runtime"
-cmp -s "$BIN/librexgpu-xenos.so" "$SDK/lib/librexgpu-xenos.so" || fail "librexgpu-xenos.so is not the patched GPU plugin"
+bash "$PATCHED" --check "$SDK" --staged "$BIN" || fail "the build folder does not hold the patched ReXGlue libraries"
 
 echo "== AppDir"
 APPDIR="$WORK/AppDir"
@@ -155,6 +155,7 @@ chmod 755 "$APPDIR/AppRun" "$APPDIR/usr/bin/hard_corps_uprising"
 chmod 644 "$APPDIR/"*.desktop "$APPDIR/"*.png "$APPDIR/.DirIcon" "$APPDIR/usr/bin/"*.so \
   "$APPDIR/usr/bin/hard_corps_uprising.toml" "$APPDIR/usr/lib/"* "$DOC/"*
 find "$THEME" -type f -exec chmod 644 {} +
+bash "$PATCHED" --check "$SDK" --staged "$APPDIR/usr/bin" || fail "the AppDir does not hold the patched ReXGlue libraries"
 
 echo "== Release check"
 problems=0
@@ -166,7 +167,9 @@ while IFS= read -r -d '' item; do
     default.xex | DataXENON | game | game-install-temp | game-install-backup | user_data | user_data.migrating | content | cache | logs | \
       settings.toml | settings.toml.bak | ArcadeInfo.xml | nxeart | 58410A18) problem "forbidden name: $rel" ;;
     *.xex | *.log | *.dmp | *.pdb | *.xsh | *.xpso | *.bak | *.tmp | *.sav) problem "forbidden file type: $rel" ;;
-    *[Rr]ender[Dd]oc* | *VkLayer* | *.json) problem "RenderDoc or Vulkan layer file: $rel" ;;
+  esac
+  case "${base,,}" in
+    *renderdoc* | *vklayer* | *.json | implicit_layer.d | explicit_layer.d) problem "RenderDoc or Vulkan layer file: $rel" ;;
   esac
   [ -L "$item" ] && problem "symbolic link: $rel"
   if [ -f "$item" ]; then
@@ -201,7 +204,7 @@ usr/share/icons/hicolor/48x48/apps/hard_corps_uprising.png
 usr/share/icons/hicolor/512x512/apps/hard_corps_uprising.png
 usr/share/icons/hicolor/64x64/apps/hard_corps_uprising.png
 usr/share/icons/hicolor/scalable/apps/hard_corps_uprising.svg"
-ACTUAL="$(cd "$APPDIR" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
+ACTUAL="$(cd "$APPDIR" && find . ! -type d | sed 's|^\./||' | LC_ALL=C sort)"
 [ "$ACTUAL" = "$EXPECTED" ] || { problem "unexpected AppDir contents:"; diff <(echo "$EXPECTED") <(echo "$ACTUAL") >&2 || true; }
 grep -qxF "StartupWMClass=$APP_ID" "$APPDIR/$APP_ID.desktop" || problem "StartupWMClass in $APP_ID.desktop is not $APP_ID"
 grep -qaF "$APP_ID" "$APPDIR/usr/bin/hard_corps_uprising" || problem "the program does not contain the application id $APP_ID"

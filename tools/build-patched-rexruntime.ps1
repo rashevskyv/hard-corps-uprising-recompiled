@@ -15,12 +15,17 @@
 
 .EXAMPLE
   .\tools\build-patched-rexruntime.ps1                  # build and install the patched runtime and GPU plugin
+  .\tools\build-patched-rexruntime.ps1 -Check -Config Release -Staged build-release   # verify only (the CMake build does)
   .\tools\build-patched-rexruntime.ps1 -StressTest      # ... then run the allocator stress test
   .\tools\build-patched-rexruntime.ps1 -StressTest -SkipBuild   # test whatever runtime is installed
   .\tools\build-patched-rexruntime.ps1 -Restore         # put the stock runtime and GPU plugin back (the next build.ps1 patches them again)
 #>
 param(
     [string]$WorkDir,     # ReXGlue source and build folder; default: out\rexglue-sdk-src (a short path is safer)
+    [switch]$Check,       # only verify tools\rexglue, and with -Staged the DLLs of -Config in that build folder
+    [ValidateSet('Debug', 'RelWithDebInfo', 'Release')]
+    [string]$Config = 'Release',
+    [string]$Staged,
     [switch]$Restore,     # reinstall the stock runtime and GPU plugin from the SDK download and exit
     [switch]$StressTest,  # run tests\physical_heap_stress.cpp against the installed runtime
     [switch]$SkipBuild,   # with -StressTest: do not build the runtime first
@@ -39,16 +44,28 @@ $StampPath = Join-Path $Sdk $RuntimeStampName
 
 if (-not (Test-Path (Join-Path $Sdk 'lib\cmake\rexglue'))) { throw 'Missing tools\rexglue (run tools\codegen.ps1 first)' }
 
+if ($Check) {
+    # The Debug files stay stock, so only their staged copies are checked.
+    $problems = @()
+    if ($Config -ne 'Debug') { $problems += @(Test-PatchedRuntime $Sdk) }
+    if ($Staged) {
+        $stagedDir = if ([IO.Path]::IsPathRooted($Staged)) { $Staged } else { Join-Path $Root $Staged }
+        $problems += @(Test-StagedRuntime $Sdk $stagedDir $Config)
+    }
+    if (-not $problems.Count) { exit 0 }
+    Write-Host "ReXGlue: tools\rexglue or the build folder does not match this branch ($Config):"
+    foreach ($problem in $problems) { Write-Host "  $problem" }
+    Write-Host 'Run .\tools\build.ps1, which rebuilds the runtime and GPU plugin and stages them.'
+    exit 1
+}
+
 function Invoke-Native([string]$What, [scriptblock]$Command) {
     & $Command
     if ($LASTEXITCODE) { throw "$What failed ($LASTEXITCODE)" }
 }
 
 function Import-VsEnvironment {
-    $vsRoot = $null
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path $vswhere) { $vsRoot = "$(& $vswhere -latest -products * -property installationPath)".Trim() }
-    if (-not $vsRoot) { $vsRoot = 'C:\Program Files\Microsoft Visual Studio\18\Community' }
+    $vsRoot = Get-VisualStudioRoot
     $vsDevCmd = Join-Path $vsRoot 'Common7\Tools\VsDevCmd.bat'
     $llvmBin = Join-Path $vsRoot 'VC\Tools\Llvm\x64\bin'
     $cmakeBin = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
@@ -105,8 +122,9 @@ function Install-PatchedRuntime {
         if (Test-Path -LiteralPath $target -PathType Leaf) { Copy-Item -LiteralPath $target $file -Force }
     }
 
-    Invoke-Native 'git checkout' { git -C $src checkout -- src include tests }
-    Invoke-Native 'git clean' { git -C $src clean -fdq -- src include tests }
+    # Another branch may have left other patches in the tree, in any tracked file.
+    Invoke-Native 'git checkout' { git -C $src checkout -- . }
+    Invoke-Native 'git clean' { git -C $src clean -fdq -- src include tests cmake }
     $patches = Get-RuntimePatchFiles
     foreach ($patch in $patches) {
         & git -C $src apply --check $patch.FullName
@@ -155,10 +173,14 @@ function Invoke-StressTest {
     if (-not (Test-Path (Join-Path $buildDir 'build.ninja'))) { throw 'Run tools\build.ps1 -Config Release -BuildDir build-release first' }
     Import-VsEnvironment
     Invoke-Native 'stress test build' { cmake --build $buildDir --target hcu_physical_heap_stress }
-    $exe = Join-Path $buildDir 'hcu_physical_heap_stress.exe'
+    # Run beside the installed runtime, not the copy the build left in $buildDir, which may be stale.
+    $stage = Join-Path $buildDir 'physical_heap_stress'
+    New-Item -ItemType Directory -Force $stage | Out-Null
+    Copy-Item -LiteralPath (Join-Path $buildDir 'hcu_physical_heap_stress.exe') $stage -Force
+    Copy-Item -LiteralPath (Join-Path $Sdk 'bin\rexruntime.dll') $stage -Force
     $log = Join-Path $buildDir 'physical_heap_stress.log'
-    Push-Location $buildDir
-    try { & $exe *> $log; $code = $LASTEXITCODE } finally { Pop-Location }
+    Push-Location $stage
+    try { & .\hcu_physical_heap_stress.exe *> $log; $code = $LASTEXITCODE } finally { Pop-Location }
     Get-Content $log | Where-Object { $_ -match '^(view|PASS|FAIL)' } | ForEach-Object { Write-Host $_ }
     if ($code) { throw "Allocator stress test failed ($code): the runtime in tools\rexglue is not the patched one, or the patch is not effective" }
 }

@@ -7,9 +7,30 @@ $RuntimeStampName = 'rexruntime-patch.txt'
 $RuntimeFiles = @('bin/rexruntime.dll', 'bin/rexruntimerd.dll', 'lib/rexruntime.lib', 'lib/rexruntimerd.lib',
                   'bin/rexgpu-xenos.dll', 'bin/rexgpu-xenosrd.dll')
 # How the patched files are built; part of the fingerprint, so changing them invalidates the installed files.
+$RuntimePlatform = 'windows'
 $RuntimeBuildFlags = '-march=x86-64-v2'
 $RuntimeBuildTargets = @('rexruntime', 'rexgpu-xenos')
 $RuntimeBuildConfigs = @('RelWithDebInfo', 'Release')
+
+function Get-VisualStudioRoot {
+    $vsRoot = $null
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path $vswhere) { $vsRoot = "$(& $vswhere -latest -products * -property installationPath)".Trim() }
+    if (-not $vsRoot) { $vsRoot = 'C:\Program Files\Microsoft Visual Studio\18\Community' }
+    return $vsRoot
+}
+
+# The clang and MSVC toolset versions ReXGlue is built with.
+$script:RuntimeCompiler = $null
+function Get-RuntimeCompiler {
+    if (-not $script:RuntimeCompiler) {
+        $vsRoot = Get-VisualStudioRoot
+        $clang = "$(& (Join-Path $vsRoot 'VC\Tools\Llvm\x64\bin\clang++.exe') --version | Select-Object -First 1)".Trim()
+        $msvc = "$(Get-Content -LiteralPath (Join-Path $vsRoot 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -TotalCount 1)".Trim()
+        $script:RuntimeCompiler = "$clang; MSVC $msvc"
+    }
+    return $script:RuntimeCompiler
+}
 
 function Read-RuntimeBaseline {
     $values = @{}
@@ -34,7 +55,7 @@ function Get-TextSha256([string]$Text) {
 $RuntimePatchNamePattern = '^(?<number>[0-9]{4})-[a-z0-9]+(-[a-z0-9]+)*(\.(?<platform>windows|linux))?\.patch$'
 
 # The patches this platform applies, in the order they are applied (by ordinal name).
-function Get-RuntimePatchFiles([string]$Platform = 'windows') {
+function Get-RuntimePatchFiles([string]$Platform = $RuntimePlatform) {
     $files = @{}
     $numbers = @{}
     foreach ($file in Get-ChildItem -LiteralPath $RuntimePatchDir -Filter '*.patch' -File) {
@@ -56,11 +77,12 @@ function Get-RuntimePatchSetSha256 {
     return Get-TextSha256 ((Get-RuntimePatchFiles | ForEach-Object { "$($_.Name) $(Get-FileSha256 $_.FullName)" }) -join "`n")
 }
 
-# The fingerprint of everything the patched files are built from: the ReXGlue baseline, the build settings
-# and the ordered patch set.
+# The fingerprint of everything the patched files are built from: the ReXGlue baseline, the platform, the compiler,
+# the build settings and the ordered patch set.
 function Get-RuntimeInputsSha256 {
     $baseline = Read-RuntimeBaseline
     $lines = @("sdk_version=$($baseline.SDK_VERSION)", "sdk_tag=$($baseline.SDK_TAG)", "sdk_commit=$($baseline.SDK_COMMIT)",
+               "platform=$RuntimePlatform", "compiler=$(Get-RuntimeCompiler)",
                "build_flags=$RuntimeBuildFlags", "build_targets=$($RuntimeBuildTargets -join ',')",
                "build_configs=$($RuntimeBuildConfigs -join ',')")
     $lines += @(Get-RuntimePatchFiles | ForEach-Object { "patch $($_.Name) $(Get-FileSha256 $_.FullName)" })
@@ -82,7 +104,7 @@ function Get-OfficialRuntimeHashes($Baseline) {
 function Write-RuntimeStamp([string]$SdkDir, [string]$InputsSha256) {
     $baseline = Read-RuntimeBaseline
     $lines = @("sdk_version=$($baseline.SDK_VERSION)", "sdk_commit=$($baseline.SDK_COMMIT)", "inputs_sha256=$InputsSha256",
-               "patch_sha256=$(Get-RuntimePatchSetSha256)",
+               "compiler=$(Get-RuntimeCompiler)", "patch_sha256=$(Get-RuntimePatchSetSha256)",
                "patches=$((Get-RuntimePatchFiles | ForEach-Object { $_.Name }) -join ',')")
     foreach ($leaf in $RuntimeFiles) { $lines += "$(Get-FileSha256 (Join-Path $SdkDir $leaf))  $leaf" }
     [IO.File]::WriteAllText((Join-Path $SdkDir $RuntimeStampName), (($lines -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
@@ -109,6 +131,7 @@ function Get-RuntimeInputsChange($StampValues) {
     $removed = @($old | Where-Object { $current -notcontains $_ })
     if ($added.Count) { $changes += "patches added: $($added -join ', ')" }
     if ($removed.Count) { $changes += "patches removed or renamed: $($removed -join ', ')" }
+    if ($StampValues['compiler'] -ne (Get-RuntimeCompiler)) { $changes += "compiler changed: $(Get-RuntimeCompiler)" }
     if (-not $changes.Count) {
         $changes += $(if ($StampValues['patch_sha256'] -ne (Get-RuntimePatchSetSha256)) { 'a patch changed' } else { 'ReXGlue baseline or build settings changed' })
     }
