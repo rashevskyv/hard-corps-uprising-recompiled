@@ -6,7 +6,8 @@
 #   tools/package-linux.sh --clean    clean Release build first
 #
 # Needs clang-20, clang++-20, lld-20, cmake 3.25+, ninja, rsync, git, wget or curl, unzip or python3, binutils and the
-# GCC 13+ C++ runtime. Release builds are made on Ubuntu 22.04: the AppImage needs the build machine's glibc.
+# GCC 13+ C++ runtime. Release builds are made on Ubuntu 20.04 (tools/setup-linux-build-env.sh prepares one): the AppImage
+# needs the build machine's glibc.
 # The ReXGlue runtime and Vulkan GPU plugin are built from source with the project's patches
 # (tools/build-patched-rexruntime.sh) the first time and whenever the patches change, which also needs network
 # access and the packages in docs/rexglue-runtime-patch.md.
@@ -18,6 +19,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # On the Linux filesystem: much faster than a Windows drive under /mnt, and case-sensitive.
 WORK="${HCU_WORK:-$HOME/hcu-linux-build}"
 PRESET=linux-amd64-release
+MAX_GLIBC=2.31
 
 SDK_VERSION=0.10.0
 SDK_SHA256=0388edb3f8fb1444f1b0ad5d440cb02d9690ac20a76b04fd6b7dcc19f59328a6
@@ -100,7 +102,9 @@ if [ ! -x "$SDK/bin/rexglue" ]; then
     chmod +x "$SDK/bin/rexglue"
   fi
 fi
-[ "$("$SDK/bin/rexglue" --version | tr -d '[:space:]')" = "$SDK_VERSION" ] || fail "tools/rexglue/linux-amd64 is not ReXGlue $SDK_VERSION"
+# The stock rexglue tool needs a newer glibc than the build baseline, so the version is read from the CMake package.
+grep -qF "set(PACKAGE_VERSION \"$SDK_VERSION\")" "$SDK/lib/cmake/rexglue/rexglueConfigVersion.cmake" ||
+  fail "tools/rexglue/linux-amd64 is not ReXGlue $SDK_VERSION"
 
 echo "== Patched ReXGlue runtime and GPU plugin"
 PATCHED="$ROOT/tools/build-patched-rexruntime.sh"
@@ -108,6 +112,16 @@ if ! bash "$PATCHED" --check "$SDK" >/dev/null 2>&1; then
   bash "$PATCHED" "$SDK" "$WORK/rexglue-sdk-src"
 fi
 bash "$PATCHED" --check "$SDK"
+
+if ! "$SDK/bin/rexglue" --version >/dev/null 2>&1; then
+  echo "== rexglue code generator (the stock one needs a newer glibc than this machine has)"
+  GEN_SRC="$WORK/rexglue-sdk-src"
+  GEN_BUILD="$GEN_SRC/out/build/linux-amd64"
+  cmake -S "$GEN_SRC" -B "$GEN_BUILD" "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath,'\$ORIGIN/../lib'" >/dev/null
+  cmake --build "$GEN_BUILD" --config Release --target rexglue --parallel
+  cp "$GEN_SRC/out/linux-amd64/Release/rexglue" "$SDK/bin/rexglue"
+  [ "$("$SDK/bin/rexglue" --version | tr -d '[:space:]')" = "$SDK_VERSION" ] || fail "the built rexglue is not ReXGlue $SDK_VERSION"
+fi
 
 echo "== Build ($PRESET)"
 BIN="$WORK/out/build/$PRESET"
@@ -216,9 +230,12 @@ missing="$(ldd "$APPDIR/usr/bin/hard_corps_uprising" | grep 'not found' || true)
 [ -z "$missing" ] || problem "unresolved libraries: $missing"
 [ "$problems" = 0 ] || fail "the AppDir holds files that must not be released"
 echo "  clean"
-for f in hard_corps_uprising librexruntime.so librexgpu-xenos.so; do
-  glibc="$(objdump -T "$APPDIR/usr/bin/$f" | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
+for f in usr/bin/hard_corps_uprising usr/bin/librexruntime.so usr/bin/librexgpu-xenos.so usr/lib/libstdc++.so.6 usr/lib/libgcc_s.so.1; do
+  glibc="$(readelf --dyn-syms -W "$APPDIR/$f" | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
   echo "  $f needs $glibc"
+  [ "$(printf '%s
+' "${glibc#GLIBC_}" "$MAX_GLIBC" | sort -V | tail -1)" = "$MAX_GLIBC" ] ||
+    fail "$f needs $glibc, above the glibc $MAX_GLIBC baseline"
 done
 
 echo "== AppImage"

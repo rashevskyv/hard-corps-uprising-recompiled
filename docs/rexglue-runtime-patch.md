@@ -504,7 +504,7 @@ It applies the patches that apply to Windows (the shared and the `.windows.patch
 plugin into `out\rexglue-sdk-src` (use `-WorkDir` for a shorter path) and replaces them in `tools\rexglue\win-amd64`.
 The Debug files stay stock. After `-Restore`, the next `build.ps1` patches them again.
 
-Linux (Ubuntu 22.04, see [linux.md](linux.md)): `tools/package-linux.sh` runs `tools/build-patched-rexruntime.sh`
+Linux (Ubuntu 20.04, see [linux.md](linux.md)): `tools/package-linux.sh` runs `tools/build-patched-rexruntime.sh`
 itself the first time and whenever the check described below fails. The script applies the patches that apply to
 Linux (the shared and the `.linux.patch` ones, in name order; `--list` prints them with the fingerprint) and builds
 `librexruntime.so` and `librexgpu-xenos.so`, the Vulkan GPU plugin, which is a separate library on Linux as well. The

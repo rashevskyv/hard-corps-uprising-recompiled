@@ -15,7 +15,7 @@ brightness fix has not been confirmed on a real Linux PC or Steam Deck yet.
 
 ## Requirements
 
-- 64-bit x86 Linux (x86_64) with glibc 2.35 or newer, such as Ubuntu 22.04 or later (`ldd --version` shows it)
+- 64-bit x86 Linux (x86_64) with glibc 2.31 or newer, such as Ubuntu 20.04 or later (`ldd --version` shows it)
 - A Vulkan driver (Mesa RADV on a Steam Deck and most AMD and Intel PCs)
 - An X11 or Wayland desktop (the runtime loads `libX11`, `libX11-xcb`, `libxcb` and `libwayland-client`)
 - `zenity` or `kdialog` for the package picker, and `xdg-open` for the About page's folder buttons
@@ -86,11 +86,23 @@ It needs `clang-20`, `clang++-20`, `lld-20` (the game links with ThinLTO), CMake
 unzip or python3, binutils, the GCC 13 or newer C++ runtime and headers, and the X11/Wayland client libraries
 (`libx11-6`, `libx11-xcb1`, `libxcb1`, `libwayland-client0`), which the SDK's `rexglue` code generator loads.
 
-The AppImage needs the glibc of the machine that built it, so releases are built on Ubuntu 22.04 (glibc 2.35, the
-same baseline as the ReXGlue Linux libraries). The script warns when the build machine's glibc is newer. On
-Ubuntu 22.04, clang 20 comes from [apt.llvm.org](https://apt.llvm.org) and the GCC 13 runtime from the
-`ubuntu-toolchain-r/test` PPA, as `libstdc++-13-dev`. CMake 3.25+ comes from Kitware's release, because 22.04
-ships 3.22.
+The AppImage needs the glibc of the machine that built it, so releases are built on Ubuntu 20.04 (glibc 2.31). The
+script warns when the build machine's glibc is newer and stops if any packaged library needs more than 2.31.
+`tools/setup-linux-build-env.sh` prepares a clean Ubuntu 20.04 machine for it, as root: clang 20 from
+[apt.llvm.org](https://apt.llvm.org), the GCC 13 runtime from the `ubuntu-toolchain-r/test` PPA, CMake 3.31.8 and the
+SDK's build dependencies. libdecor 0.2.2 and PipeWire 0.3.48 are not packaged for 20.04, so the script builds them
+from their pinned commits into `/usr/local`; SDL loads both at run time and needs only their headers to build the
+Wayland decoration and PipeWire audio backends, so the AppImage does not carry them. To make the environment in WSL:
+
+```sh
+wsl --import HcuFocalBuild <folder> ubuntu-base-20.04.5-base-amd64.tar.gz
+wsl -d HcuFocalBuild -u root -- bash tools/setup-linux-build-env.sh
+```
+
+The base image is `ubuntu-base-20.04.5-base-amd64.tar.gz` from cdimage.ubuntu.com (SHA-256
+`60e216b60947653dc8989be3821380268315b99b2959c29882781541bfe5a426`); a Docker `ubuntu:20.04` container works the same
+way. The SDK's stock `rexglue` tool needs glibc 2.35, so `tools/package-linux.sh` builds it from the patched source on
+this baseline.
 
 The script copies the sources to `~/hcu-linux-build` (set `HCU_WORK` to change it), downloads the pinned ReXGlue
 SDK, appimagetool and AppImage runtime with their SHA-256 checks, builds the project's patched ReXGlue runtime and
