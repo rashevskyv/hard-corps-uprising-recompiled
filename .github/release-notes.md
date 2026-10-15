@@ -1,28 +1,29 @@
-## Hard Corps: Uprising PC Port v0.5.2 - Linux Startup and AppImage Fixes
+## Hard Corps: Uprising PC Port v0.5.3 - Linux Launcher Compatibility Fix
 
-v0.5.2 is a small technical patch release focused on Linux and AppImage compatibility. Gameplay is unchanged, and the features and performance of v0.5.1 are unchanged.
+v0.5.3 is a small technical patch release for Linux and the AppImage. Gameplay is unchanged from v0.5.2. The one real change is how the Linux build starts when Vulkan graphics cannot start. Windows has no functional change.
 
 ### Highlights
-- **Linux graphics failure window.** When the Vulkan graphics system cannot start, Linux now shows a self-contained error window created directly with SDL.
-- **Recompiled Linux branding.** The Linux desktop and AppImage name is now **Hard Corps: Uprising Recompiled**, and the download is `HardCorpsUprisingRecompiled-v0.5.2-x86_64.AppImage`.
+- **Software fallback launcher.** When Vulkan graphics initialization fails on Linux, the game now opens a 640x400 launcher window instead of showing an error dialog first. It is drawn in software with SDL, so it needs no Vulkan, GPU renderer, `zenity` or GTK.
+- **Graphics error only on Play.** Pressing **PLAY** without a working Vulkan driver still shows the graphics error window, and closing it returns you to the launcher.
 
 ### Linux / Steam Deck
-- **Graphics failure window.** Previously the error was shown with `SDL_ShowSimpleMessageBox`, which could depend on `zenity`. In some X11 and Xvfb-style environments that left the process running for more than 30 seconds with no visible window. The error window is now created by the game itself, so no `zenity`, GTK or shell helper is needed, and it can be shown even after Vulkan graphics initialization has failed. Dismissing it exits the game cleanly with a nonzero result.
-- **Name and file names.** The desktop entry is now named Hard Corps: Uprising Recompiled. The AppImage is `HardCorpsUprisingRecompiled-v0.5.2-x86_64.AppImage` and its checksum file is `HardCorpsUprisingRecompiled-v0.5.2-x86_64.sha256`. The v0.5.1 asset, `HardCorpsUprising-v0.5.1-x86_64.AppImage`, is unchanged and keeps its name.
-- **Compatibility baseline.** As in v0.5.1, the AppImage is built on Ubuntu 20.04 (glibc 2.31) and its ELF files need `GLIBC_2.30` or older. The system's glibc is still used; it is not bundled.
+- **Fallback launcher.** The window shows the game name and icon, the state of your game files and of graphics (for example "Game files: Setup required" and "Graphics: Vulkan setup required"), and **PLAY** and **QUIT** buttons. It stays open normally and no error dialog appears by itself. Installing game files and changing settings still need the full launcher, which needs Vulkan.
+- **The graphics error stays explicit.** The game still needs a working Vulkan driver. Pressing **PLAY** without one opens the existing error window, which says the graphics system could not start and points to the `logs` folder. Dismissing it returns to the fallback launcher.
+- **Systems with a working Vulkan driver** open the normal launcher, as before.
+- **Compatibility baseline.** As in v0.5.2, the AppImage is built on Ubuntu 20.04 (glibc 2.31) and its ELF files need `GLIBC_2.30` or older. The system's glibc is still used; it is not bundled.
 - Linux support remains experimental.
 
 ### Windows
-The Windows build has the same gameplay and features as v0.5.1. These Linux changes do not affect it; the only change that reaches it is the version number, so there is no need to update from v0.5.1 unless you want the current release version.
+Gameplay and Windows runtime behavior are unchanged from v0.5.2. The release version number is new, and the game window title now reads Hard Corps: Uprising Recompiled. The Windows file names are unchanged, and there is no need to update from v0.5.2 unless you want the current release version.
 
 ### Downloads
-**Windows**: **HardCorpsUprising-v0.5.2-windows-x64.zip**
+**Windows**: **HardCorpsUprising-v0.5.3-windows-x64.zip**
 1. Unzip it anywhere you can write to. To keep your settings, saves and game files when updating, extract it over the previous version, or move `user_data` and `game` across.
 2. Run **hard_corps_uprising.exe**.
 3. On the launcher's **Play** page click **Install from package...** and pick your own Hard Corps: Uprising Xbox Live Arcade package (not needed again if the game is already installed).
 4. Press **PLAY**.
 
-**Linux and Steam Deck (experimental)**: **HardCorpsUprisingRecompiled-v0.5.2-x86_64.AppImage**
+**Linux and Steam Deck (experimental)**: **HardCorpsUprisingRecompiled-v0.5.3-x86_64.AppImage**
 1. Put it in a folder you can write to and mark it executable (right-click > **Properties** > **Permissions** > **Is executable**, or `chmod +x`).
 2. Run it and install your own package from the **Play** page, as on Windows. The game files go in a `game` folder next to the AppImage.
 3. On a Steam Deck, do this in **Desktop Mode**, then add the AppImage with **Games > Add a Non-Steam Game to My Library** and play it from **Game Mode**.
@@ -46,9 +47,9 @@ Requirements:
 If the game does not start or crashes, please open an [issue](https://github.com/saulob/hard-corps-uprising-recompiled/issues) and attach the newest `hard_corps_uprising_*.log` file from the `logs` folder next to the program (next to the AppImage on Linux), with a line about what you were doing. For Linux reports, please also say your distribution and graphics card.
 
 ### Checksums
-SHA-256 files are published with the release for both downloads: `HardCorpsUprising-v0.5.2-windows-x64.sha256` and `HardCorpsUprisingRecompiled-v0.5.2-x86_64.sha256`.
+SHA-256 files are published with the release for both downloads: `HardCorpsUprising-v0.5.3-windows-x64.sha256` and `HardCorpsUprisingRecompiled-v0.5.3-x86_64.sha256`.
 
 | File | SHA-256 |
 | --- | --- |
-| `HardCorpsUprising-v0.5.2-windows-x64.zip` | `baeeb1e67adbcbc38257807adfeabea093a4aca6a35257fb5be0c29a7312469f` |
-| `HardCorpsUprisingRecompiled-v0.5.2-x86_64.AppImage` | `fd85c154b835389a16d631c1d6a3c7adb533bd46ade2686eb261d49fbafa8e77` |
+| `HardCorpsUprising-v0.5.3-windows-x64.zip` | `fcae5d5a099f0107788244df0761fe9fd560f30c695bc77ffac0382b61b9db69` |
+| `HardCorpsUprisingRecompiled-v0.5.3-x86_64.AppImage` | `f3a25f6b244352eee17578126e646f88a2df44aa80403a4b33253f6a2f2a5f94` |
