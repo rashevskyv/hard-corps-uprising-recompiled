@@ -577,7 +577,8 @@ void ReportGraphicsFailure() {
   int atlas_height = 0;
   atlas.GetTexDataAsAlpha8(&atlas_pixels, &atlas_width, &atlas_height);
 
-  SDL_Window* window = SDL_CreateWindow("Hard Corps: Uprising", kGraphicsFailureWidth, kGraphicsFailureHeight, 0);
+  SDL_Window* window =
+      SDL_CreateWindow("Hard Corps: Uprising Recompiled", kGraphicsFailureWidth, kGraphicsFailureHeight, 0);
   if (!window) {
     REXLOG_ERROR("Could not create the graphics error window: {}", SDL_GetError());
     return;
