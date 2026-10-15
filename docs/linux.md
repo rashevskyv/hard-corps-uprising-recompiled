@@ -8,6 +8,11 @@ The Linux build uses the same code as the Windows build: ReXGlue SDK 0.10.0's Li
 plugin's Vulkan backend, both built with the project's patches, and the same TRG launcher. It ships as one
 AppImage, which is also the Steam Deck build.
 
+v0.5.0 fixes three problems that showed on Linux: incorrect texture brightness in the Vulkan renderer, which could
+darken images and lose glow effects (Windows was not affected); Exit Game hangs (reported from SteamOS Game Mode) and
+shutdown crashes; and a Vulkan presenter that rebuilt its output pipeline, waiting for the GPU, on every frame. The
+brightness fix has not been confirmed on a real Linux PC or Steam Deck yet.
+
 ## Requirements
 
 - 64-bit x86 Linux (x86_64) with glibc 2.35 or newer, such as Ubuntu 22.04 or later (`ldd --version` shows it)

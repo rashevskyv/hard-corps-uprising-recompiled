@@ -102,7 +102,8 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 | | Anti-aliasing | `swap_post_effect` |
 | | Multisampling | `hcu_msaa_compatibility` |
 | | Texture filtering | `anisotropic_override` |
-| Gameplay | Frame rate in title | `hcu_show_fps` |
+| Gameplay | Skip intro | `hcu_skip_intro` |
+| | Frame rate in title | `hcu_show_fps` |
 |  | Frame counter | `hcu_show_frame_counter` |
 | Cheats | Infinite Health | `hcu_cheat_health` |
 | | Infinite Lives | `hcu_cheat_lives` |
@@ -135,6 +136,16 @@ Shader compilation is not a launcher setting; the game uses ReXGlue's default, `
 - Keyboard keys are listed read-only on the Controls page.
 - An Xbox controller drives the launcher through XInput: Start plays; A, B, the D-pad and the left stick navigate. ReXGlue's input system only starts with the game.
 - The accent is a neon green (`kAccent`) with a dark emerald for the ready card, both in `src/launcher.cpp` with the header gradient. Amber is kept only for the "game files" warning, which is a status colour.
+
+### Gameplay
+
+| Control | Cvar | Values (default) |
+| --- | --- | --- |
+| Skip intro | `hcu_skip_intro` | `false` Off, `true` On (`false`) |
+| Frame rate in title | `hcu_show_fps` | `false` Off, `true` On (`true`) |
+| Frame counter | `hcu_show_frame_counter` | `false` Hidden, `true` Shown (`false`) |
+
+- **Skip intro** starts directly at the title screen: the game's boot sequence starts at its last step, so the startup logos, the opening movie and the notices are not shown, and the game then reaches the title screen through its own transition. It applies only to the startup presentation of each start; nothing is written to the game files or the save data. The hook is in `src/skip_intro.cpp`; `hcu_skip_intro_tests` checks the setting, its launcher row and the step choice without game memory.
 
 ### Cheats
 

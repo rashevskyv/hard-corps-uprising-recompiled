@@ -16,9 +16,10 @@
 
 ## Features
 
-- **Major performance improvements on Windows and Linux** (v0.4.0): far less CPU busy-waiting on the GPU, and less render-target and EDRAM transfer work in the D3D12 (Windows) and Vulkan (Linux) renderers, with no change to gameplay.
+- **Performance work on Windows and Linux**: far less CPU busy-waiting on the GPU and less render-target and EDRAM transfer work (v0.4.0). v0.5.0 adds further frame-pacing and GPU-side optimizations: each game frame is presented once, the present wakes at the vertical blank, and resolves need less GPU work, especially above the Original render resolution. No change to gameplay.
 - **Native static recompilation**: the game's own code, not an emulator. Native Windows build, plus an experimental Linux / Steam Deck AppImage
-- **TRG launcher** with a game package installer, optional **DLC characters** (Harley Daniels, Sayuri, Leviathan) and graphics and display options.
+- **TRG launcher** with a game package installer, optional **DLC characters** (Harley Daniels, Sayuri, Leviathan), graphics and display options, and an optional **Skip intro** that starts at the title screen.
+- **High-performance GPU by default**: on PCs with integrated and dedicated graphics the game prefers the dedicated GPU. A GPU chosen in Windows' graphics settings, or on Linux with a selection variable such as `DRI_PRIME`, still takes precedence.
 - **Cheats**: press **F10** in game for a cheat menu with Infinite Health, Infinite Lives, Rapid Fire, Jump Height 2x, Keep Weapons on Hit, Movement Speed 2x and Super Armor. Changes made in the menu last for the session.
 - **In-game FPS counter**: frame rate and frame time in the corner, enabled from the launcher and toggled with **F2**. The frame rate can also be shown in the window title, as a separate option.
 - **Offline achievements and local leaderboards**, with no Xbox Live connection.
@@ -43,7 +44,7 @@ The launcher checks the Title ID and content type when you pick the package, and
 
 ## Installing
 
-1. Download **HardCorpsUprising-v0.4.0-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
+1. Download **HardCorpsUprising-v0.5.0-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
 2. Run **hard_corps_uprising.exe**. The launcher opens.
 3. On the **Play** page click **Install from package...** and pick your package. It is one file with a long hexadecimal name and no extension. On an Xbox 360 drive it is in `Content\0000000000000000\58410A18\000D0000\`.
 4. Wait until **Ready to play** appears. The game files (about 1 GB) are copied into the `game` folder next to the program. The package file itself is not copied there.
@@ -65,7 +66,7 @@ Installed DLC is stored in the `user_data` folder next to the program (see [docs
 
 ### Linux and Steam Deck
 
-**Experimental.** This is a native Linux build (ReXGlue's patched Linux runtime and Vulkan GPU plugin, with the same performance work as Windows where it applies), not Proton. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware.
+**Experimental.** This is a native Linux build (ReXGlue's patched Linux runtime and Vulkan GPU plugin, with the same performance work as Windows where it applies), not Proton. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware. v0.5.0 fixes Linux/Vulkan texture brightness and glow rendering issues and improves Exit Game stability.
 
 1. Download **HardCorpsUprising-v…-linux-x86_64.AppImage** from the release and mark it executable (right-click > **Properties** > **Permissions** > **Is executable**, or `chmod +x`).
 2. Run it, then install your package from the **Play** page as above. The game files go in a `game` folder next to the AppImage.
@@ -100,10 +101,11 @@ Window size, monitor and VSync take effect when you press **PLAY**. If one diffe
 ### Graphics
 - **Render resolution**: Original (1280×720), 2x (2560×1440, recommended for 1440p), 3x (3840×2160) or 4x (5120×2880)
 - **Anti-aliasing**: Off, FXAA or FXAA Extreme
-- **Multisampling**: 2x MSAA, or 4x MSAA (Compatibility) if 2x shows graphics problems
+- **Multisampling**: 2x MSAA (default), or 4x MSAA (Compatibility) if 2x shows graphics problems on your GPU or driver
 - **Texture filtering**: Game, Off, 2x, 4x, 8x or 16x
 
 ### Gameplay
+- **Skip intro**: starts directly at the title screen, without the startup logos and intro. Off by default.
 - **Frame rate in title**: shows the frame rate in the window title, for example `Hard Corps: Uprising | FPS: 60.00`
 - **Frame counter**: shows the frame rate and frame time (`60 FPS  16.7 ms`) in the top-right corner, above the cheat menu. Hidden by default. Press **F2** while playing to show or hide it for the session; the saved setting is not changed.
 
@@ -167,7 +169,7 @@ In an existing clone, run `git submodule update --init --recursive`.
 4. `.\tools\build.ps1` builds `build\hard_corps_uprising.exe`. `.\tools\build.ps1 -Run` also starts it. It first checks that ReXGlue's runtime and Xenos GPU plugin in `tools\rexglue` were built from this project's patches (`patches\rexglue-sdk`) and rebuilds them from the v0.10.0 source when they were not (network access the first time), and afterwards that the DLLs next to the program are those files; it does not start the game otherwise. See [docs/rexglue-runtime-patch.md](docs/rexglue-runtime-patch.md).
 5. `.\tools\package-release.ps1` makes the release ZIP in `dist\`. It builds the same way, refuses to package a runtime that does not match the patches, and publishes nothing. Release and RelWithDebInfo builds (the default) link the game and its recompiled code with ThinLTO.
 
-The Linux AppImage is built on Linux or WSL with `tools/package-linux.sh`, after the steps above have generated the C++. See [docs/linux.md](docs/linux.md).
+The Linux AppImage is built on Linux or WSL with `tools/package-linux.sh`, after the steps above have generated the C++, and `tools/build.sh` makes a plain Linux build without packaging. See [docs/linux.md](docs/linux.md).
 
 How the launcher, settings and installer work is described in [docs/launcher.md](docs/launcher.md). The other technical notes are in [docs/](docs/).
 
