@@ -17,6 +17,8 @@
 
 #include "trg/settings.h"
 
+#include "graphics_adapters.h"
+#include "internal_render_scale.h"
 #include "legacy_settings.h"
 #include "multisampling.h"
 #include "retired_settings.h"
@@ -36,6 +38,8 @@ REXCVAR_DEFINE_BOOL(hcu_msaa_compatibility, false, "Hard Corps",
                     "native 2x MSAA misrenders (sets native_2x_msaa)");
 REXCVAR_DEFINE_STRING(hcu_aspect_ratio, "16:9", "Hard Corps",
                       "Aspect ratio chosen in the launcher: 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4");
+REXCVAR_DEFINE_STRING(hcu_graphics_adapter, "auto", "Hard Corps",
+                      "Graphics card: auto, or the index d3d12_adapter takes (applied at start)");
 REXCVAR_DEFINE_INT32(hcu_launcher_x, 0, "Hard Corps", "Launcher window left edge, written by the launcher");
 REXCVAR_DEFINE_INT32(hcu_launcher_y, 0, "Hard Corps", "Launcher window top edge, written by the launcher");
 REXCVAR_DEFINE_INT32(hcu_launcher_width, 0, "Hard Corps", "Launcher window restored width, written by the launcher");
@@ -55,8 +59,10 @@ const std::vector<std::string> kGameSettingKeys = {
     "window_height",
     "monitor",
     kTearingSetting,
+    "hcu_graphics_adapter",
     "hcu_aspect_ratio",
     "resolution_scale",
+    "hcu_internal_render_scale",
     "swap_post_effect",
     "hcu_msaa_compatibility",
     "anisotropic_override",
@@ -78,6 +84,7 @@ const std::vector<std::string> kWindowKeys = {
     "window_height",
     "monitor",
     kTearingSetting,
+    "hcu_graphics_adapter",
 };
 
 bool IsWindowKey(std::string_view key) {
@@ -330,6 +337,7 @@ void GameSettings::Apply() const {
     rex::cvar::SetFlagByName(key, value);
   }
   ApplyAspectRatio();
+  ApplyInternalRenderPath();
   ApplyMultisampling();
 }
 
@@ -337,6 +345,39 @@ void GameSettings::Apply() const {
 void ApplyMultisampling() {
   rex::cvar::SetFlagByName("native_2x_msaa",
                            Native2xMsaaFor(REXCVAR_GET(hcu_msaa_compatibility)) ? "true" : "false");
+}
+
+void ApplyInternalRenderPath() {
+#if defined(_WIN32)
+  const std::optional<std::string_view> path = RequiredRenderTargetPath(
+      std::atoi(rex::cvar::GetFlagByName("hcu_internal_render_scale").c_str()),
+      rex::cvar::GetFlagByName("render_target_path_d3d12"));
+  if (path && rex::cvar::SetFlagByName("render_target_path_d3d12", *path)) {
+    REXLOG_INFO("Internal render resolution: using D3D12 host render targets");
+  }
+#endif
+}
+
+void ApplyGraphicsAdapter() {
+#if defined(_WIN32)
+  const std::string setting = REXCVAR_GET(hcu_graphics_adapter);
+  if (!ParseGraphicsAdapter(setting)) {
+    REXLOG_INFO("Graphics card: Automatic");
+    return;
+  }
+  const std::vector<GraphicsAdapter> adapters = ListGraphicsAdapters();
+  const int index = ResolveGraphicsAdapter(setting, adapters);
+  if (index < 0) {
+    REXLOG_WARN("Graphics card {} is not available, using Automatic", setting);
+    return;
+  }
+  rex::cvar::SetFlagByName("d3d12_adapter", std::to_string(index));
+  for (const GraphicsAdapter& adapter : adapters) {
+    if (adapter.index == index) {
+      REXLOG_INFO("Graphics card: {} (adapter {})", adapter.name, index);
+    }
+  }
+#endif
 }
 
 void GameSettings::MarkWindowCreated() {

@@ -1,10 +1,13 @@
 #pragma once
 
+#include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 
+#include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
@@ -15,9 +18,11 @@
 #include <rex/ui/windowed_app_context.h>
 
 #include "achievements_overlay.h"
+#include "aspect_ratio.h"
 #include "cheat_menu.h"
 #include "frame_counter.h"
 #include "game_files.h"
+#include "internal_render_scale.h"
 #include "launcher.h"
 #include "live_fix.h"
 #include "local_stats.h"
@@ -75,6 +80,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
       REXLOG_INFO("{}", message.text);
     }
     hcu::LoadPlayerSettings(hcu::PlayerSettingsPath(user_data_root()));
+    hcu::ApplyGraphicsAdapter();
   }
 
   void OnConfigureFonts(ImFontAtlas* atlas) override {
@@ -103,6 +109,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     if (!show_launcher_) {
       hcu::ApplyMultisampling();
       hcu::ApplyAspectRatio();
+      hcu::ApplyInternalRenderPath();
       return defaults;
     }
     if (!imgui_drawer()) {
@@ -141,6 +148,10 @@ class HardCorpsUprisingApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    REXLOG_INFO("{}", hcu::DescribeInternalRenderResolution(
+                          std::max(1, std::atoi(rex::cvar::GetFlagByName("resolution_scale").c_str())),
+                          std::atoi(rex::cvar::GetFlagByName("hcu_internal_render_scale").c_str()),
+                          hcu::GuestWidth(hcu::ParseAspectRatio(rex::cvar::GetFlagByName("hcu_aspect_ratio")))));
 #if defined(_WIN32)
     REXLOG_INFO("Scheduling: {}", trg::TuneProcessScheduling());
 #endif

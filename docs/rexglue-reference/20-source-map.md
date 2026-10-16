@@ -32,7 +32,7 @@ and git-ignored. Test executables are CMake targets `hcu_*` marked `EXCLUDE_FROM
 - Linux patches: `0016-0019`, `0021`, `0024`, `0032`, `0034`, `0035`: [05](05-platform-linux.md)
 
 ## Graphics
-- `patches/rexglue-sdk/0026-*`, `0027-*`, `0028-*`, `0034-*`, `0035-*`, `0010-*`, `src/multisampling.h`, `tests/multisampling_tests.cpp`: [06](06-graphics-vulkan.md)
+- `patches/rexglue-sdk/0026-*`, `0027-*`, `0028-*`, `0034-*`, `0035-*`, `0010-*`, `src/multisampling.h`, `tests/multisampling_tests.cpp`, `0036-*`, `0037-*`, `0038-*`, `src/internal_render_scale.h`, `src/graphics_adapters.*`, `tests/internal_render_scale_tests.cpp`, `tests/graphics_adapter_tests.cpp`: [06](06-graphics-vulkan.md)
 
 ## Display, window, frame pacing
 - `src/window_host.*` (F11, title, cursor auto-hide), `src/window_placement.h`, `src/frame_counter.*`

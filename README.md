@@ -96,10 +96,12 @@ The launcher opens before the game. Your choices are saved to `settings.toml` in
 - **VSync** on or off
 - **Aspect Ratio**: one dropdown on the Display page (16:9 Original, 16:10, 21:9 Ultrawide, 32:9 Super Ultrawide, 4:3, 5:4). It sets the game's target rendering format, and Window size follows it
 
-Window size, monitor and VSync take effect when you press **PLAY**. If one differs from the launcher's window, the game restarts once in a new window.
+Window size, monitor, VSync and graphics card take effect when you press **PLAY**. If one differs from the launcher's window, the game restarts once in a new window.
 
 ### Graphics
+- **Graphics card** (Windows): Automatic (recommended) or a specific GPU
 - **Render resolution**: Original (1280×720 at 16:9), 2x (2560×1440, recommended for 1440p), 3x (3840×2160) or 4x (5120×2880)
+- **Internal render resolution**: 100% Native, 75% Performance or 50% Low-end. The GPU draws the game at that share of the Render resolution and the picture is scaled up to it, which lowers the GPU work at some cost in sharpness
 - **Anti-aliasing**: Off, FXAA or FXAA Extreme
 - **Multisampling**: 2x MSAA (default), or 4x MSAA (Compatibility) if 2x shows graphics problems on your GPU or driver
 - **Texture filtering**: Game, Off, 2x, 4x, 8x or 16x

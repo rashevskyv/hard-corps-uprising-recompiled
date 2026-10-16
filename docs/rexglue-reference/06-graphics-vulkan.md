@@ -115,6 +115,7 @@ All are ReXGlue cvars surfaced in the launcher; the defaults equal what the game
 | Option | Cvar | Notes |
 | --- | --- | --- |
 | Render resolution 1x to 4x | `resolution_scale` | The launcher labels (1280x720, 2560x1440, 3840x2160, 5120x2880) are fixed and come from measured presented output, independent of the guest video mode; the driver may lower a scale it cannot support and the game logs a warning. Applied at GPU start, not a relaunch trigger |
+| Internal render resolution | `hcu_internal_render_scale` = 100, 75, 50 | Percent of the render resolution the host render targets are drawn at (SDK patches 0036 to 0038); see [rexglue-runtime-patch.md](../rexglue-runtime-patch.md). Applied at GPU start |
 | Anti-aliasing | `swap_post_effect` = `none`, `fxaa`, `fxaa_extreme` | SDK post effect on the presented image |
 | Texture filtering | `anisotropic_override` = -1 (game), 0, 2, 3, 4, 5 | launcher default `3` |
 | Aspect ratio | `present_letterbox` | Letterbox 16:9 or Stretch; HEAD has no native-aspect work |

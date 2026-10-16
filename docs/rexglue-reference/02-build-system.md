@@ -310,6 +310,7 @@ receive `HCU_SRC_DIR` so a test can read source text (guard-style tests).
 | `hcu_cheats_tests` | `tests/cheats_tests.cpp` | cheat guards ([16-reusable-game-features.md](16-reusable-game-features.md)) |
 | `hcu_frame_counter_tests`, `hcu_window_host_tests`, `hcu_window_placement_tests` | `tests/frame_counter_tests.cpp`, `window_host_tests.cpp`, `window_placement_tests.cpp` | display and window logic ([07-display-window-frame-pacing.md](07-display-window-frame-pacing.md)) |
 | `hcu_skip_intro_tests`, `hcu_multisampling_tests` | `tests/skip_intro_tests.cpp`, `multisampling_tests.cpp` | launcher settings |
+| `hcu_internal_render_scale_tests`, `hcu_graphics_adapter_tests` | `tests/internal_render_scale_tests.cpp`, `graphics_adapter_tests.cpp` | Internal render resolution and Graphics card settings ([06-graphics-vulkan.md](06-graphics-vulkan.md)) |
 | `hcu_live_tests`, `hcu_user_data_tests` | `tests/live_tests.cpp`, `user_data_tests.cpp` | offline services and user data ([10-user-data-settings-migration.md](10-user-data-settings-migration.md), [11-offline-services-profile-achievements.md](11-offline-services-profile-achievements.md)) |
 | `hcu_physical_heap_stress` | `tests/physical_heap_stress.cpp` | links `rex::runtime`; must fail on stock, pass on patched ([13-crash-hardening-threading-memory.md](13-crash-hardening-threading-memory.md)) |
 | `hcu_shutdown_order_tests`, `hcu_title_thread_shutdown_tests` | `tests/shutdown_order_tests.cpp`, `tests/title_thread_shutdown_tests.cpp` | runtime teardown (patch 0033) |

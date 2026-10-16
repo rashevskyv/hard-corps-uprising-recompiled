@@ -10,7 +10,7 @@ The pre-game launcher is [TRG Launcher](https://github.com/TekRantGaming/trg-lau
   1. `SetupEnvironment` loads `hard_corps_uprising.toml`; `OnPostInitLogging` loads the player's `settings.toml` over it. The Xenos GPU plugin is not loaded here. ReXGlue loads it in `SetupPresentation`, and the Graphics cvars it registers take the player's values from the file.
   2. `OnPreSetup` records the saved game settings and decides whether the launcher shows. If it does, `PrepareLauncherWindow` sets the window for the launcher. Then the window settings this process creates its window with are recorded. Graphics keys are not registered yet, so they are recorded as unregistered.
   3. `SetupPresentation` creates the window and loads the GPU plugin. `OnFinalizePaths` calls `CaptureLateRegistered`, which takes the Graphics values now that they are registered, then shows the launcher and returns `nullopt`; the runtime is not built yet. A key the player has already edited in this process is never overwritten.
-  4. **Play** (mouse, Enter or Xbox Start) calls `RequestPlay`, which is the only save: if it fails, the launcher stays open with "Could not save the settings." and nothing starts. On success it shows "Settings saved. Starting game..." at full brightness for 0.4 s, timed with ImGui and without sleeping. The launcher's controls are dimmed and disabled during that time, and its keyboard, gamepad and mouse input is released each frame, so Play, Save, Ctrl+S, Esc and the D-pad do nothing. Then, if the window size, monitor or VSync differs from this process's window, the game is relaunched once and this process quits (`StartGame` does not save). Otherwise the pending settings are applied and the runtime starts.
+  4. **Play** (mouse, Enter or Xbox Start) calls `RequestPlay`, which is the only save: if it fails, the launcher stays open with "Could not save the settings." and nothing starts. On success it shows "Settings saved. Starting game..." at full brightness for 0.4 s, timed with ImGui and without sleeping. The launcher's controls are dimmed and disabled during that time, and its keyboard, gamepad and mouse input is released each frame, so Play, Save, Ctrl+S, Esc and the D-pad do nothing. Then, if the window size, monitor, VSync or graphics card differs from this process's window, the game is relaunched once and this process quits (`StartGame` does not save). Otherwise the pending settings are applied and the runtime starts.
   5. **Relaunched copy**: `--hcu_skip_launcher=true` skips the launcher, and the window is created natively with the saved settings.
 
 ## Settings
@@ -36,7 +36,7 @@ The launcher window and the game window are separate.
 
 | Setting | When it takes effect |
 | --- | --- |
-| Window size, Monitor, VSync | Play. If any differs from the launcher's window, the game restarts once in a new window. |
+| Window size, Monitor, VSync, Graphics card | Play. If any differs from the launcher's window, the game restarts once in a new window. |
 | Display mode | Play. In the launcher's window when the window already matches, otherwise in the new window. |
 | Aspect Ratio, graphics, frame counter, keyboard | Play, in the same window |
 
@@ -100,7 +100,9 @@ The presented output is the render base scaled by Render resolution. At 16:9 it 
 | | Monitor | `monitor` |
 | | VSync | `d3d12_allow_variable_refresh_rate_and_tearing` (inverted) |
 | | Aspect Ratio | `hcu_aspect_ratio` |
-| Graphics | Render resolution | `resolution_scale` |
+| Graphics | Graphics card (Windows) | `hcu_graphics_adapter` |
+| | Render resolution | `resolution_scale` |
+| | Internal render resolution | `hcu_internal_render_scale` |
 | | Anti-aliasing | `swap_post_effect` |
 | | Multisampling | `hcu_msaa_compatibility` |
 | | Texture filtering | `anisotropic_override` |
@@ -120,7 +122,9 @@ The presented output is the render base scaled by Render resolution. At 16:9 it 
 
 | Control | Cvar | Values (default) |
 | --- | --- | --- |
+| Graphics card (Windows) | `hcu_graphics_adapter`, sets `d3d12_adapter` | `auto` Automatic (Recommended), or the DXGI adapter index (`auto`) |
 | Render resolution | `resolution_scale` (integer 1–8, the launcher offers 1–4) | `1` Original, `2`, `3`, `4` (`1`) |
+| Internal render resolution | `hcu_internal_render_scale` (percent of the render resolution) | `100` 100% Native, `75` 75% Performance, `50` 50% Low-end (`100`) |
 | Anti-aliasing | `swap_post_effect` | `none` Off, `fxaa`, `fxaa_extreme` (`none`) |
 | Multisampling | `hcu_msaa_compatibility` | `false` 2x MSAA, `true` 4x MSAA (Compatibility) (`false`) |
 | Texture filtering | `anisotropic_override` | `-1` Game (no override), `0` Off, `2` 2x, `3` 4x, `4` 8x, `5` 16x (`3`, 4x) |
@@ -129,9 +133,24 @@ Multisampling only decides how the render targets the game itself draws with 2x 
 
 Shader compilation is not a launcher setting; the game uses ReXGlue's default, `async_shader_compilation = true`.
 
+- **Graphics card** lists Automatic and the hardware GPUs Windows reports that can create a Direct3D 12 device, by the names DXGI gives them; software adapters are not listed. It is shown on Windows only.
+  - **Automatic** is the default, also for settings files without the key. It leaves `d3d12_adapter` at -1, which prefers the high-performance GPU (or the power saving one when Windows is set to that for the game).
+  - A listed GPU overrides automatic selection: its DXGI index, counted as ReXGlue counts for `d3d12_adapter` (`EnumAdapters1` order), is passed as `d3d12_adapter`. A saved GPU that is no longer present falls back to Automatic.
+  - The graphics device is created before the launcher shows, so a change restarts the game once on Play, like a window change.
+  - The log shows the choice (`Graphics card: Automatic` or `Graphics card: <name> (adapter N)`) and, from ReXGlue, the GPU actually used (`DXGI adapter: <name>`).
+  - Linux has no such row: `vulkan_device` indexes the instance ReXGlue creates, which the launcher cannot reproduce reliably, and Vulkan keeps its automatic discrete-GPU preference.
 - **Render resolution** labels show the presented output at each scale for the chosen Aspect Ratio: at 16:9, Original 1280×720, 2x 2560×1440, 3x 3840×2160, 4x 5120×2880. They do not depend on Window size. 2x is a natural match for 1440p displays. The recommendation is informational only, and the default stays Original. Higher scales cost more GPU time.
 - The game takes the render resolution when its GPU starts, after Play, so a change applies to the game that Play starts. The GPU driver can lower a scale it cannot support; the game logs a warning when it does.
 - Render resolution is not a relaunch trigger. It never changes the window.
+
+Internal render resolution is the resolution the GPU draws the game at before the picture is scaled to the selected Render resolution. Render resolution keeps selecting the target; this setting only reduces the work behind it, and says nothing about the window.
+
+- **100% Native** is the current behavior, unchanged: the game is drawn at the Render resolution. A missing or unknown value is 100%.
+- **75% Performance** is the recommended choice for a GPU that is too slow at the Render resolution. **50% Low-end** is meant for low-end hardware. Lower values are less sharp. No frame rate gain is claimed; measure it on the GPU in question.
+- The internal size is the Render resolution times the percentage, in the chosen Aspect Ratio's render base, so the ratio is kept: at 16:9, 1280×720 at 75% is 960×540, at 50% 640×360; 2x is 1920×1080 and 1280×720; 3x is 2880×1620 and 1920×1080; 4x is 3840×2160 and 2560×1440; at 21:9 the 1680×720 base gives 1260×540 at 75% and 840×360 at 50%. The game logs one line with it at start, for example `Internal render resolution: 75% 960x540 -> 1280x720`.
+- On Windows a value below 100% also makes the D3D12 render target path the host one (`render_target_path_d3d12 = rtv`) when that setting is empty, which replaces the rasterizer-ordered path Intel GPUs use by default; the game logs `Internal render resolution: using D3D12 host render targets`. 100% leaves the path selection alone, and a `render_target_path_d3d12` set by hand is never overridden.
+- Like Render resolution, the game takes it when its GPU starts, after Play; it is not a relaunch trigger and never changes the window, the guest video mode, the aspect ratio or VSync.
+- It is a separate setting from `resolution_scale`; Texture filtering, Anti-aliasing and Multisampling are independent of it. The runtime patches that implement it (and the cases where it draws at the full Render resolution instead) are in [rexglue-runtime-patch.md](rexglue-runtime-patch.md#why-0036-0037-and-0038).
 
 - Every default is the value the game already used.
 - VSync controls tearing only. The D3D12 presenter always presents with sync interval 0; frame pacing comes from the guest `vsync` cvar, which the launcher does not touch.

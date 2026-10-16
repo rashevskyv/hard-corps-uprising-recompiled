@@ -23,6 +23,8 @@
 
 #include "aspect_ratio.h"
 #include "game_files.h"
+#include "graphics_adapters.h"
+#include "internal_render_scale.h"
 #include "launcher_achievements.h"
 #include "platform.h"
 #include "settings.h"
@@ -142,7 +144,8 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
         cb_(std::move(callbacks)),
         settings_(settings),
         game_files_(CheckAndLogGameFiles(paths_.game_dir)),
-        monitors_(ListMonitors()) {
+        monitors_(ListMonitors()),
+        graphics_adapters_(ListGraphicsAdapters()) {
     dlc_ = ListInstalledDlc(paths_.user_dir);
     launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
     if (WindowFullscreen()) {
@@ -938,11 +941,27 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
     }
   }
 
-  void PageGraphics(trg::Ui& ui) const {
+  void PageGraphics(trg::Ui& ui) {
+    if (!graphics_adapters_.empty()) {
+      std::vector<trg::Option> adapters;
+      for (const auto& [value, label] :
+           GraphicsAdapterOptions(graphics_adapters_, settings_.Get("hcu_graphics_adapter", kGraphicsAdapterAuto))) {
+        adapters.push_back({value, label});
+      }
+      ui.Combo("Graphics card",
+               "Selects which GPU renders the game. Automatic uses the recommended high-performance GPU. "
+               "A GPU chosen here overrides automatic selection and restarts the game window.",
+               "hcu_graphics_adapter", kGraphicsAdapterAuto, adapters);
+    }
     ui.Combo("Render resolution",
              "Draws the game at a multiple of its own picture, then scales it to the window. Higher is sharper and "
              "costs more GPU time. Window size is separate.",
              "resolution_scale", "1", RenderResolutionOptions(SelectedAspectRatio()));
+    ui.Combo("Internal render resolution",
+             "Renders the game internally at a lower resolution, then scales it to the selected render resolution. "
+             "Lower values improve GPU performance but reduce image sharpness.",
+             "hcu_internal_render_scale", "100",
+             {{"100", "100% Native"}, {"75", "75% Performance"}, {"50", "50% Low-end"}});
     ui.Choice("Anti-aliasing", "Smooths jagged edges after the frame is drawn. Extreme is softer but cleaner.",
               "swap_post_effect", "none", {{"none", "Off"}, {"fxaa", "FXAA"}, {"fxaa_extreme", "FXAA Extreme"}});
     ui.Toggle("Multisampling",
@@ -1068,6 +1087,7 @@ class LauncherDialog final : public rex::ui::ImGuiDialog {
   GameSettings& settings_;
   GameFiles game_files_;
   std::vector<MonitorInfo> monitors_;
+  std::vector<GraphicsAdapter> graphics_adapters_;
   std::unique_ptr<trg::Launcher> launcher_;
   LauncherGamepad gamepad_;
   bool nav_taken_ = false;

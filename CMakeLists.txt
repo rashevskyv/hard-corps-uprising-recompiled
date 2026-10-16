@@ -57,6 +57,7 @@ set(HCU_SOURCES
     src/frame_counter.cpp
     src/game_files.cpp
     src/gpu_fence_wait.cpp
+    src/graphics_adapters.cpp
     src/launcher.cpp
     src/launcher_achievements.cpp
     src/legacy_settings.cpp
@@ -87,7 +88,7 @@ endif()
 rexglue_setup_target(hard_corps_uprising GPU_PLUGINS xenos)
 target_link_libraries(hard_corps_uprising PRIVATE trg::launcher)
 if(WIN32)
-    target_link_libraries(hard_corps_uprising PRIVATE shcore synchronization)
+    target_link_libraries(hard_corps_uprising PRIVATE shcore synchronization dxgi)
     # The SDK stages its DLLs only when the program links, so a rebuilt runtime or GPU plugin has to
     # make it link again; tools/build.ps1 also checks the staged copies.
     foreach(_sdk_dll rexruntime rexruntimed rexruntimerd rexgpu-xenos rexgpu-xenosd rexgpu-xenosrd)
@@ -209,6 +210,22 @@ add_executable(hcu_aspect_ratio_tests EXCLUDE_FROM_ALL tests/aspect_ratio_tests.
 target_include_directories(hcu_aspect_ratio_tests PRIVATE src)
 target_compile_definitions(hcu_aspect_ratio_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+# Internal render resolution tests, not part of the default build:
+# cmake --build <dir> --target hcu_internal_render_scale_tests
+add_executable(hcu_internal_render_scale_tests EXCLUDE_FROM_ALL tests/internal_render_scale_tests.cpp)
+target_include_directories(hcu_internal_render_scale_tests PRIVATE src)
+target_link_libraries(hcu_internal_render_scale_tests PRIVATE trg::launcher)
+target_compile_definitions(hcu_internal_render_scale_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Graphics card setting tests, not part of the default build: cmake --build <dir> --target hcu_graphics_adapter_tests
+add_executable(hcu_graphics_adapter_tests EXCLUDE_FROM_ALL tests/graphics_adapter_tests.cpp src/graphics_adapters.cpp)
+target_include_directories(hcu_graphics_adapter_tests PRIVATE src)
+target_link_libraries(hcu_graphics_adapter_tests PRIVATE trg::launcher)
+if(WIN32)
+    target_link_libraries(hcu_graphics_adapter_tests PRIVATE dxgi d3d12)
+endif()
+target_compile_definitions(hcu_graphics_adapter_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 # Cursor auto-hide tests, not part of the default build: cmake --build <dir> --target hcu_window_host_tests
 add_executable(hcu_window_host_tests EXCLUDE_FROM_ALL tests/window_host_tests.cpp)
 target_include_directories(hcu_window_host_tests PRIVATE src)
@@ -240,7 +257,7 @@ target_include_directories(hcu_user_data_tests PRIVATE src)
 target_include_directories(hcu_user_data_tests SYSTEM PRIVATE "${HCU_SDK_DIR}/include" "${_trg_dir}/include")
 
 # The tests that compile game code are built like the game.
-foreach(_test installer cheats frame_counter skip_intro multisampling window_host window_placement live user_data)
+foreach(_test installer cheats frame_counter skip_intro multisampling internal_render_scale graphics_adapter window_host window_placement live user_data)
     hcu_enable_thinlto(hcu_${_test}_tests)
 endforeach()
 

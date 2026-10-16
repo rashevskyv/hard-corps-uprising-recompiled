@@ -51,6 +51,9 @@ virtual function goes after all the others, and a new member must not move one t
 | [0033-stop-title-threads](../patches/rexglue-sdk/0033-stop-title-threads.patch) | both | runtime | title termination and `Runtime::Shutdown` stop every guest thread of the title before anything is torn down (`kernel_state.cpp`, `runtime.cpp`, the kernel waits in `xobject.cpp` and `xthread.cpp`) |
 | [0034-spirv-texture-exp-adjust](../patches/rexglue-sdk/0034-spirv-texture-exp-adjust.linux.patch) | Linux | GPU plugin | the SPIR-V texture fetch takes the exponent bias from fetch constant word 3, as the DXBC one does (`spirv_translator_fetch.cpp`) |
 | [0035-cache-vulkan-swapchain-paint-pipeline](../patches/rexglue-sdk/0035-cache-vulkan-swapchain-paint-pipeline.linux.patch) | Linux | runtime | the Vulkan presenter records the format its swapchain paint pipeline was created for, so it is reused instead of recreated after a GPU wait on every frame (`vulkan_presenter.cpp`, [ReXGlue issue #507](https://github.com/rexglue/rexglue-sdk/issues/507)) |
+| [0036-internal-render-scale](../patches/rexglue-sdk/0036-internal-render-scale.patch) | both | GPU plugin | the `hcu_internal_render_scale` cvar and the split of the render resolution into the host render target scale (quarters of a guest pixel) and the whole scale of the EDRAM, resolves and textures; sizes, viewport and scissor of the host render targets; the pixel position of the shader translators (render target cache base, `draw.cpp`, texture cache base, DXBC and SPIR-V translators) |
+| [0037-d3d12-internal-render-scale](../patches/rexglue-sdk/0037-d3d12-internal-render-scale.windows.patch) | Windows | GPU plugin | host render target sizes, transfers, clears and viewport at the host scale, and the EDRAM dump taking its samples from the smaller render targets in the D3D12 render target cache and command processor |
+| [0038-vulkan-internal-render-scale](../patches/rexglue-sdk/0038-vulkan-internal-render-scale.linux.patch) | Linux | GPU plugin | the same for the Vulkan render target cache and command processor |
 
 Pins: [patches/rexglue-sdk/baseline.env](../patches/rexglue-sdk/baseline.env) holds the tag, the commit and the stock
 file hashes.
@@ -85,6 +88,7 @@ backend. A "not needed" is a statement about the platform, not about the API it 
 | UI drawn with the next guest frame (0029) | common; vertical blank ticks without guest frames | common; display refresh limit without guest frames |
 | Resolve memory written only when needed (0030) | 0031 | 0032 |
 | Texture fetch exponent bias from word 3 | already correct in the DXBC translator | 0034 |
+| Host render targets smaller than the draw resolution (0036) | 0037 | 0038 |
 | Swapchain paint pipeline kept while the format is unchanged | not applicable: the D3D12 presenter has no such cache | 0035 |
 
 The POSIX wait on several handles (`WaitMultiple` in `threading_posix.cpp`) polls with 1 ms sleeps; Windows waits in the
@@ -468,6 +472,51 @@ SPIR-V translator read bits 13:18 of word 4, which belong to the LOD bias, so th
 wrong power of two wherever the two differ, which can darken an image or lose a glow. The DXBC translator (D3D12)
 already reads word 3, and Windows does not build the SPIR-V translator, so the patch is Linux only.
 
+## Why 0036, 0037 and 0038
+
+The launcher's Internal render resolution draws the host render targets at 100%, 75% or 50% of the Render resolution
+(`resolution_scale`, `hcu_internal_render_scale`). ReXGlue's draw resolution scale is a whole number everywhere: the
+EDRAM buffer holds `scale * scale` host samples for each guest sample, a resolve writes `scale * scale` texels for each
+guest texel into the scaled resolve memory, which is laid out in guest pages times `scale * scale`, the texture cache
+and the resolve and texture load shaders (bytecode only, built without their sources) take the scale in bit fields, and
+a scale of 1 means no scaling at all. 1x at 75% and 50% would even be smaller than the guest picture. So the scale is
+not made fractional; it is split in two instead.
+
+- **Host scale.** The host render targets, the viewport, the scissor, the clears, the transfers between render targets
+  and the pixel position seen by pixel shaders are `host_scale_quarters / 4` of the guest picture
+  (`RenderTargetCache::host_scale_quarters_x()`, `GuestToHostX`). The 80x16 sample EDRAM tile and the 8 pixel
+  resolve granularity stay whole numbers of host pixels at every quarter.
+- **Draw resolution scale.** The EDRAM buffer, the resolves and the textures keep a whole scale, the smallest one that
+  holds the host render targets: `ceil(host_scale)`. At 100%, and wherever the host scale is a whole number, the
+  two are equal and nothing differs from before: 4x at 75% is a 3x draw scale, 4x at 50% 2x and 2x at 50% 1x.
+  `TextureCache::GetConfigInternalRenderScale` makes the split.
+- **Where they meet.** The dump of the host render targets into the EDRAM buffer, which every resolve starts with,
+  takes the value of the host pixel that contains the center of each EDRAM sample, per axis, from the in-tile pixel and
+  sample index (also for 2x and 4x MSAA and for depth, stencil and 64bpp). That is the only place the two scales
+  meet: the transfers between render targets sample render targets of the same scale.
+
+| Internal render resolution | Render resolution | Host render targets | Draw resolution scale |
+| --- | --- | --- | --- |
+| 100% | 1x, 2x, 3x, 4x | 1280x720, 2560x1440, 3840x2160, 5120x2880 | 1x, 2x, 3x, 4x |
+| 75% | 1x, 2x, 3x, 4x | 960x540, 1920x1080, 2880x1620, 3840x2160 | 1x, 2x, 3x, 3x |
+| 50% | 1x, 2x, 3x, 4x | 640x360, 1280x720, 1920x1080, 2560x1440 | 1x, 1x, 2x, 2x |
+
+What does not follow the host scale, on purpose:
+
+- **Resolve copy into textures and deferred writeback (0022 to 0024, 0030 to 0032)** copy the render target into a
+  texture of the draw resolution scale, so they only run while the two scales are equal.
+- **Host depth (`IsHostDepthEncodingDifferent`)** is stored in the EDRAM buffer at the draw resolution scale and is
+  not used while the host render targets are smaller; depth is converted on every transfer then.
+- **Memory export** only picks one host pixel for each guest pixel at whole host scales above 1.
+- **Rasterizer-ordered views (D3D12 on Intel by default or `render_target_path_d3d12 = rov`) and fragment shader
+  interlock (Vulkan `render_target_path_vulkan = fsi`)** draw into the EDRAM buffer itself, at the draw resolution
+  scale. They draw at that scale instead and log a warning. The game avoids this on D3D12: below 100% it sets
+  `render_target_path_d3d12 = rtv` (`ApplyInternalRenderPath`, when the game starts) unless the player set a path.
+
+The pixel position (`ps_param_gen`) is divided by the host scale, the resolve fill, texture offsets and scaled texture
+coordinates keep the draw resolution scale. The viewport is rounded outward to whole host pixels and the vertex
+transform follows the rounded edges, the scissor is rounded outward as well.
+
 ## Windows-only patches
 
 - 0011, 0012, 0013 and 0014 are the D3D12 halves of 0003, 0005, 0007 and 0008 (submissions and occlusion queries,
@@ -475,6 +524,7 @@ already reads word 3, and Windows does not build the SPIR-V translator, so the p
 - 0015 is the high-resolution waitable timer of `threading_win.cpp` (see 0006).
 - 0023 and 0031 are the D3D12 halves of 0022 and 0030 (0024 and 0032 are the Vulkan ones), and 0027 the D3D12
   counterpart of 0026.
+- 0037 is the D3D12 half of 0036 (0038 is the Vulkan one).
 
 ## Building the patched runtime
 
