@@ -1,29 +1,56 @@
-## Hard Corps: Uprising PC Port v0.5.3 - Linux Launcher Compatibility Fix
+## Hard Corps: Uprising PC Port v0.6.0 - Native Aspect Ratios and Performance Scaling
 
-v0.5.3 is a small technical patch release for Linux and the AppImage. Gameplay is unchanged from v0.5.2. The one real change is how the Linux build starts when Vulkan graphics cannot start. Windows has no functional change.
+v0.6.0 is a feature release for the graphics and display options. It adds native aspect ratios, an internal render resolution option for slower GPUs, and graphics card selection on Windows. Gameplay is unchanged from v0.5.3.
 
 ### Highlights
-- **Software fallback launcher.** When Vulkan graphics initialization fails on Linux, the game now opens a 640x400 launcher window instead of showing an error dialog first. It is drawn in software with SDL, so it needs no Vulkan, GPU renderer, `zenity` or GTK.
-- **Graphics error only on Play.** Pressing **PLAY** without a working Vulkan driver still shows the graphics error window, and closing it returns you to the launcher.
+- **Native aspect ratios.** The game now renders in the format you choose, from 4:3 and 5:4 up to 21:9 and 32:9, instead of stretching a 16:9 picture.
+- **Internal render resolution.** Draw the game at 75% or 50% of the render resolution to lower the GPU work on slower graphics hardware.
+- **Graphics card selection (Windows).** Pick the GPU the game uses, or leave it on Automatic.
+- **Reduced resolution on Intel GPUs.** Internal render resolution now also works on Intel GPUs that need a different rendering path.
 
-### Linux / Steam Deck
-- **Fallback launcher.** The window shows the game name and icon, the state of your game files and of graphics (for example "Game files: Setup required" and "Graphics: Vulkan setup required"), and **PLAY** and **QUIT** buttons. It stays open normally and no error dialog appears by itself. Installing game files and changing settings still need the full launcher, which needs Vulkan.
-- **The graphics error stays explicit.** The game still needs a working Vulkan driver. Pressing **PLAY** without one opens the existing error window, which says the graphics system could not start and points to the `logs` folder. Dismissing it returns to the fallback launcher.
-- **Systems with a working Vulkan driver** open the normal launcher, as before.
-- **Compatibility baseline.** As in v0.5.2, the AppImage is built on Ubuntu 20.04 (glibc 2.31) and its ELF files need `GLIBC_2.30` or older. The system's glibc is still used; it is not bundled.
-- Linux support remains experimental.
+### Native aspect ratios
+Choose **Aspect Ratio** on the launcher's **Display** page:
+- **16:9 Original** (default)
+- **16:10**
+- **21:9 Ultrawide**
+- **32:9 Super Ultrawide**
+- **4:3**
+- **5:4**
 
-### Windows
-Gameplay and Windows runtime behavior are unchanged from v0.5.2. The release version number is new, and the game window title now reads Hard Corps: Uprising Recompiled. The Windows file names are unchanged, and there is no need to update from v0.5.2 unless you want the current release version.
+This changes the game's own rendering format rather than stretching the 16:9 image, and Window size follows the chosen format. Wider formats can show more of the sides of the scene. It also covers displays such as a 4:3 CRT or a 16:10 screen such as the Steam Deck's.
+
+Menus and videos were made for 16:9 and are not redesigned for every format, so some HUD, menu or cutscene compositions may not look as intended outside 16:9.
+
+### Performance options
+On the launcher's **Graphics** page:
+- **Render resolution** (Original, 2x, 3x, 4x) sets the target resolution of the picture, as before. It is separate from Window size, which only sets the size of the game window.
+- **Internal render resolution** sets how much of that resolution the GPU actually draws before the picture is scaled up to it:
+  - **100% Native** (default)
+  - **75% Performance**
+  - **50% Low-end**
+
+75% and 50% reduce the internal GPU rendering resolution, which can improve performance on slower GPUs. Image quality decreases as expected. 50% is intentionally a low-end mode and can look noticeably softer or pixelated.
+
+The internal size follows the selected aspect ratio. For example, 16:9 at 50% draws 640x360 for a 1280x720 output, and 21:9 at 75% draws 1260x540 for a 1680x720 output.
+
+### Graphics card selection
+**Windows only.** The **Graphics card** setting on the **Graphics** page offers:
+- **Automatic (Recommended)**, which keeps preferring the high-performance GPU, as before
+- Each compatible Direct3D 12 graphics card found on your PC
+
+An explicit choice overrides Automatic. It is useful on systems with both integrated and dedicated graphics. It takes effect when you press **PLAY**, and the game restarts once if the choice needs a new window.
+
+### Linux
+Linux remains **experimental**. The AppImage and the Vulkan build compile and pass automated validation. The new internal render resolution path for Vulkan has not been tested in real gameplay on Linux or Steam Deck hardware for this release. Graphics card selection is Windows only.
 
 ### Downloads
-**Windows**: **HardCorpsUprising-v0.5.3-windows-x64.zip**
+**Windows**: **HardCorpsUprising-v0.6.0-windows-x64.zip**
 1. Unzip it anywhere you can write to. To keep your settings, saves and game files when updating, extract it over the previous version, or move `user_data` and `game` across.
 2. Run **hard_corps_uprising.exe**.
 3. On the launcher's **Play** page click **Install from package...** and pick your own Hard Corps: Uprising Xbox Live Arcade package (not needed again if the game is already installed).
 4. Press **PLAY**.
 
-**Linux and Steam Deck (experimental)**: **HardCorpsUprisingRecompiled-v0.5.3-x86_64.AppImage**
+**Linux and Steam Deck (experimental)**: **HardCorpsUprisingRecompiled-v0.6.0-x86_64.AppImage**
 1. Put it in a folder you can write to and mark it executable (right-click > **Properties** > **Permissions** > **Is executable**, or `chmod +x`).
 2. Run it and install your own package from the **Play** page, as on Windows. The game files go in a `game` folder next to the AppImage.
 3. On a Steam Deck, do this in **Desktop Mode**, then add the AppImage with **Games > Add a Non-Steam Game to My Library** and play it from **Game Mode**.
@@ -41,15 +68,11 @@ Requirements:
 
 ### Notes / Known Limitations
 - **Linux status: experimental.** The Linux build is a native x86_64 program on the ReXGlue 0.10.0 Linux runtime with its Vulkan graphics backend, not a Proton or Wine build. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware, so rendering, audio, controllers and the Steam Deck flow may still have problems. Running on glibc 2.31 or newer is the build baseline, not a guarantee for every such system. See [docs/linux.md](https://github.com/saulob/hard-corps-uprising-recompiled/blob/main/docs/linux.md).
+- Aspect ratios other than 16:9 change the rendering format only. Menus and videos are not redesigned for them.
 - Everything else listed for v0.5.0 and v0.5.1 still applies.
 
 ### Reporting Problems
 If the game does not start or crashes, please open an [issue](https://github.com/saulob/hard-corps-uprising-recompiled/issues) and attach the newest `hard_corps_uprising_*.log` file from the `logs` folder next to the program (next to the AppImage on Linux), with a line about what you were doing. For Linux reports, please also say your distribution and graphics card.
 
 ### Checksums
-SHA-256 files are published with the release for both downloads: `HardCorpsUprising-v0.5.3-windows-x64.sha256` and `HardCorpsUprisingRecompiled-v0.5.3-x86_64.sha256`.
-
-| File | SHA-256 |
-| --- | --- |
-| `HardCorpsUprising-v0.5.3-windows-x64.zip` | `fcae5d5a099f0107788244df0761fe9fd560f30c695bc77ffac0382b61b9db69` |
-| `HardCorpsUprisingRecompiled-v0.5.3-x86_64.AppImage` | `f3a25f6b244352eee17578126e646f88a2df44aa80403a4b33253f6a2f2a5f94` |
+SHA-256 files are published with the release for both downloads: `HardCorpsUprising-v0.6.0-windows-x64.sha256` and `HardCorpsUprisingRecompiled-v0.6.0-x86_64.sha256`. The hashes are added when the release files are built.

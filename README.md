@@ -16,6 +16,9 @@
 
 ## Features
 
+- **Native Aspect Ratio** (v0.6.0): 16:9 Original, 16:10, 21:9 Ultrawide, 32:9 Super Ultrawide, 4:3 and 5:4. The game renders in the chosen format instead of stretching a 16:9 picture, so wider formats can show more of the sides of the scene. Menus and videos made for 16:9 are not redesigned for every format.
+- **Render resolution and Internal render resolution**: Render resolution (1x to 4x) sets the target resolution of the picture. Internal render resolution (100% Native, 75% Performance, 50% Low-end) lowers the resolution the GPU draws at before the picture is scaled up to it, trading sharpness for performance on slower GPUs. These are separate from the Window size, which only sets the host window.
+- **Graphics card selection** (Windows): Automatic (recommended) or a specific compatible GPU, useful on PCs with integrated and dedicated graphics.
 - **Performance work on Windows and Linux**: far less CPU busy-waiting on the GPU and less render-target and EDRAM transfer work (v0.4.0). v0.5.0 adds further frame-pacing and GPU-side optimizations: each game frame is presented once, the present wakes at the vertical blank, and resolves need less GPU work, especially above the Original render resolution. No change to gameplay.
 - **Native static recompilation**: the game's own code, not an emulator. Native Windows build, plus an experimental Linux / Steam Deck AppImage
 - **TRG launcher** with a game package installer, optional **DLC characters** (Harley Daniels, Sayuri, Leviathan), graphics and display options, and an optional **Skip intro** that starts at the title screen.
@@ -44,7 +47,7 @@ The launcher checks the Title ID and content type when you pick the package, and
 
 ## Installing
 
-1. Download **HardCorpsUprising-v0.5.3-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
+1. Download **HardCorpsUprising-v0.6.0-windows-x64.zip** from the [latest release](https://github.com/saulob/hard-corps-uprising-recompiled/releases/latest) and extract it anywhere you can write to.
 2. Run **hard_corps_uprising.exe**. The launcher opens.
 3. On the **Play** page click **Install from package...** and pick your package. It is one file with a long hexadecimal name and no extension. On an Xbox 360 drive it is in `Content\0000000000000000\58410A18\000D0000\`.
 4. Wait until **Ready to play** appears. The game files (about 1 GB) are copied into the `game` folder next to the program. The package file itself is not copied there.
@@ -66,7 +69,7 @@ Installed DLC is stored in the `user_data` folder next to the program (see [docs
 
 ### Linux and Steam Deck
 
-**Experimental.** This is a native Linux build (ReXGlue's patched Linux runtime and Vulkan GPU plugin, with the same performance work as Windows where it applies), not Proton. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware. v0.5.0 fixes Linux/Vulkan texture brightness and glow rendering issues and improves Exit Game stability. v0.5.1 broadens Linux compatibility (the AppImage is built on Ubuntu 20.04 and needs glibc 2.31 or newer) and shows an error window when the Vulkan graphics system cannot start. v0.5.2 makes that error window self-contained (it no longer depends on zenity, so it also appears in minimal X11 environments) and renames the Linux AppImage to Hard Corps: Uprising Recompiled. v0.5.3 opens a software-drawn fallback launcher when Vulkan cannot start and shows the graphics error only when you press Play; gameplay is unchanged. It needs 64-bit x86 Linux, a Vulkan driver and an X11 or Wayland desktop.
+**Experimental.** This is a native Linux build (ReXGlue's patched Linux runtime and Vulkan GPU plugin, with the same performance work as Windows where it applies), not Proton. A SteamOS tester has run it, but it has not been broadly tested on real Linux PCs or Steam Deck hardware. v0.5.0 fixes Linux/Vulkan texture brightness and glow rendering issues and improves Exit Game stability. v0.5.1 broadens Linux compatibility (the AppImage is built on Ubuntu 20.04 and needs glibc 2.31 or newer) and shows an error window when the Vulkan graphics system cannot start. v0.5.2 makes that error window self-contained (it no longer depends on zenity, so it also appears in minimal X11 environments) and renames the Linux AppImage to Hard Corps: Uprising Recompiled. v0.5.3 opens a software-drawn fallback launcher when Vulkan cannot start and shows the graphics error only when you press Play. v0.6.0 adds the native aspect-ratio and internal-render-resolution support shared with the Windows graphics work, but Linux/Vulkan remains experimental: it builds and passes automated tests, and the new Vulkan reduced-resolution path has not been validated on real Linux GPU hardware or a Steam Deck during this release cycle. It needs 64-bit x86 Linux, a Vulkan driver and an X11 or Wayland desktop.
 
 1. Download **HardCorpsUprisingRecompiled-v…-x86_64.AppImage** from the release and mark it executable (right-click > **Properties** > **Permissions** > **Is executable**, or `chmod +x`).
 2. Run it, then install your package from the **Play** page as above. The game files go in a `game` folder next to the AppImage.

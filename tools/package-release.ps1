@@ -14,7 +14,7 @@
   .\tools\package-release.ps1              # incremental Release build, then package
   .\tools\package-release.ps1 -Clean       # clean Release build first
   .\tools\package-release.ps1 -SkipBuild   # package the existing build-release\ output
-  .\tools\package-release.ps1 -VerifyOnly dist\HardCorpsUprising-v0.5.3-windows-x64
+  .\tools\package-release.ps1 -VerifyOnly dist\HardCorpsUprising-v0.6.0-windows-x64
 #>
 param(
     [switch]$Clean,

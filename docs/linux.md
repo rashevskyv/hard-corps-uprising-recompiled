@@ -13,6 +13,10 @@ darken images and lose glow effects (Windows was not affected); Exit Game hangs 
 shutdown crashes; and a Vulkan presenter that rebuilt its output pipeline, waiting for the GPU, on every frame. The
 brightness fix has not been confirmed on a real Linux PC or Steam Deck yet.
 
+v0.6.0 adds Aspect Ratio and Internal render resolution, shared with the Windows graphics work. The AppImage builds and
+the automated tests pass, but the Vulkan reduced-resolution path has not been tested in real gameplay on a Linux GPU or
+Steam Deck. The graphics card selection is Windows only.
+
 ## Requirements
 
 - 64-bit x86 Linux (x86_64) with glibc 2.31 or newer, such as Ubuntu 20.04 or later (`ldd --version` shows it)
