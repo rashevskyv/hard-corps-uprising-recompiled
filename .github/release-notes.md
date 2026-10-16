@@ -51,5 +51,5 @@ SHA-256 files are published with the release for both downloads: `HardCorpsUpris
 
 | File | SHA-256 |
 | --- | --- |
-| `HardCorpsUprising-v0.6.1-windows-x64.zip` | `pending` |
-| `HardCorpsUprisingRecompiled-v0.6.1-x86_64.AppImage` | `pending` |
+| `HardCorpsUprising-v0.6.1-windows-x64.zip` | `5fb7ed009e3afc2f5e775f4da1b19fac8eddcefa40367669251aeef12fd7fae0` |
+| `HardCorpsUprisingRecompiled-v0.6.1-x86_64.AppImage` | `b732f6b885249fbdd5d909b544fbc64d1b44ee71454f05658fe39fc4b8ab3852` |
