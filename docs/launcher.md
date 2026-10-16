@@ -38,7 +38,7 @@ The launcher window and the game window are separate.
 | --- | --- |
 | Window size, Monitor, VSync | Play. If any differs from the launcher's window, the game restarts once in a new window. |
 | Display mode | Play. In the launcher's window when the window already matches, otherwise in the new window. |
-| Aspect ratio, graphics, frame counter, keyboard | Play, in the same window |
+| Aspect Ratio, graphics, frame counter, keyboard | Play, in the same window |
 
 ### Window position
 
@@ -53,12 +53,14 @@ Why a restart: ReXGlue 0.10.0 has no API to resize or move an open window (its `
 - Display mode is switched in place only when the window already matches the game's size, monitor and VSync. Otherwise it is applied by the relaunched copy, so the Windowed size F11 restores is always the game's.
 - The launcher's 1280×720 target is capped to the usable desktop, so on a display where it does not fit (for example 2560×1440 at 225%, where it becomes 1024×576) the launcher is smaller.
 - Sizes that cannot fit the current display at its scaling are hidden from the Window size list, except the current one.
+- **Aspect Ratio** (Display page, after Monitor) is the game's target rendering format, in one dropdown: 16:9 Original (default), 16:10, 21:9 Ultrawide, 32:9 Super Ultrawide, 4:3 and 5:4. It applies when Play starts the game. The Window size list shows the sizes of the chosen format; changing the format moves Window size to that format's default unless the current size already belongs to it. The value is saved as `hcu_aspect_ratio` in `settings.toml`; a file without it means 16:9 Original.
+- A `present_letterbox` line from an older `settings.toml` is removed when the game starts. The presenter always letterboxes the chosen format, so there is no Stretch mode.
 
-### Guest video mode
+### Aspect Ratio and the guest picture
 
-The guest video mode is fixed at 853×480 (`video_mode_*` in `config/hard_corps_uprising.toml`). It does not follow the window size. Window size changes only the host window; the game renders the same guest picture and ReXGlue scales it into the window.
+The game renders 720 lines at the chosen format's width: 1280 at 16:9, 1152 at 16:10, 1680 at 21:9, 2560 at 32:9, 960 at 4:3 and 900 at 5:4. The guest video mode is 480 lines at the same ratio: 853×480 at 16:9, 1120×480 at 21:9. Window size changes only the host window.
 
-The guest video mode is not the render output. Xenos presents at a measured 1280×720 base, which Render resolution scales. Measured presented output: 3840×2160 at scale 3 and 5120×2880 at scale 4.
+The presented output is the render base scaled by Render resolution. At 16:9 it is measured as 1280×720, 3840×2160 at scale 3 and 5120×2880 at scale 4.
 
 ### Relaunch rule and loop prevention
 
@@ -97,7 +99,7 @@ The guest video mode is not the render output. Xenos presents at a measured 1280
 | | Window size | `window_width`, `window_height` |
 | | Monitor | `monitor` |
 | | VSync | `d3d12_allow_variable_refresh_rate_and_tearing` (inverted) |
-| | Aspect ratio | `present_letterbox` |
+| | Aspect Ratio | `hcu_aspect_ratio` |
 | Graphics | Render resolution | `resolution_scale` |
 | | Anti-aliasing | `swap_post_effect` |
 | | Multisampling | `hcu_msaa_compatibility` |
@@ -127,7 +129,7 @@ Multisampling only decides how the render targets the game itself draws with 2x 
 
 Shader compilation is not a launcher setting; the game uses ReXGlue's default, `async_shader_compilation = true`.
 
-- **Render resolution** labels show the presented output measured at each scale: Original 1280×720, 2x 2560×1440, 3x 3840×2160, 4x 5120×2880. The labels are fixed and do not depend on `video_mode_*` or Window size. 2x is a natural match for 1440p displays. The recommendation is informational only, and the default stays Original. Higher scales cost more GPU time.
+- **Render resolution** labels show the presented output at each scale for the chosen Aspect Ratio: at 16:9, Original 1280×720, 2x 2560×1440, 3x 3840×2160, 4x 5120×2880. They do not depend on Window size. 2x is a natural match for 1440p displays. The recommendation is informational only, and the default stays Original. Higher scales cost more GPU time.
 - The game takes the render resolution when its GPU starts, after Play, so a change applies to the game that Play starts. The GPU driver can lower a scale it cannot support; the game logs a warning when it does.
 - Render resolution is not a relaunch trigger. It never changes the window.
 

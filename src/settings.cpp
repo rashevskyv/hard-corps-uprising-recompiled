@@ -6,6 +6,8 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -17,6 +19,7 @@
 
 #include "legacy_settings.h"
 #include "multisampling.h"
+#include "retired_settings.h"
 
 #include "platform.h"
 
@@ -31,6 +34,8 @@ REXCVAR_DEFINE_BOOL(hcu_show_frame_counter, false, "Hard Corps",
 REXCVAR_DEFINE_BOOL(hcu_msaa_compatibility, false, "Hard Corps",
                     "Draw the game's 2x MSAA render targets with 4x MSAA, for GPUs or drivers whose "
                     "native 2x MSAA misrenders (sets native_2x_msaa)");
+REXCVAR_DEFINE_STRING(hcu_aspect_ratio, "16:9", "Hard Corps",
+                      "Aspect ratio chosen in the launcher: 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4");
 REXCVAR_DEFINE_INT32(hcu_launcher_x, 0, "Hard Corps", "Launcher window left edge, written by the launcher");
 REXCVAR_DEFINE_INT32(hcu_launcher_y, 0, "Hard Corps", "Launcher window top edge, written by the launcher");
 REXCVAR_DEFINE_INT32(hcu_launcher_width, 0, "Hard Corps", "Launcher window restored width, written by the launcher");
@@ -50,7 +55,7 @@ const std::vector<std::string> kGameSettingKeys = {
     "window_height",
     "monitor",
     kTearingSetting,
-    "present_letterbox",
+    "hcu_aspect_ratio",
     "resolution_scale",
     "swap_post_effect",
     "hcu_msaa_compatibility",
@@ -168,12 +173,47 @@ void RepairLegacyPlayerSettings(const std::filesystem::path& path) {
   REXLOG_INFO("Repaired {} legacy on/off value(s) in {} (original kept as {})", repaired, Utf8(path), Utf8(backup));
 }
 
+namespace {
+
+// Stretch has no launcher control any more: the presenter always letterboxes the chosen format.
+void RemoveRetiredPlayerSettings(const std::filesystem::path& path) {
+  constexpr std::string_view kRetired = "present_letterbox";
+  std::ifstream in(path, std::ios::binary);
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  in.close();
+  const std::string kept = RemoveSettingLines(text, kRetired);
+  if (kept == text) {
+    return;
+  }
+
+  std::filesystem::path temp = path;
+  temp += ".tmp";
+  {
+    std::ofstream out(temp, std::ios::binary);
+    out << kept;
+    if (!out) {
+      REXLOG_ERROR("Cannot write the player settings without {} to {}", kRetired, Utf8(temp));
+      return;
+    }
+  }
+  std::error_code ec;
+  std::filesystem::rename(temp, path, ec);
+  if (ec) {
+    REXLOG_ERROR("Cannot replace {} with the player settings without {}", Utf8(path), kRetired);
+    return;
+  }
+  REXLOG_INFO("Removed the retired {} setting from {}", kRetired, Utf8(path));
+}
+
+}  // namespace
+
 void LoadPlayerSettings(const std::filesystem::path& path) {
   std::error_code ec;
   if (!std::filesystem::exists(path, ec)) {
     return;
   }
   RepairLegacyPlayerSettings(path);
+  RemoveRetiredPlayerSettings(path);
   rex::cvar::LoadConfig(path);
   REXLOG_INFO("Player settings: {}", Utf8(path));
 }
@@ -289,6 +329,7 @@ void GameSettings::Apply() const {
     }
     rex::cvar::SetFlagByName(key, value);
   }
+  ApplyAspectRatio();
   ApplyMultisampling();
 }
 

@@ -102,6 +102,7 @@ class HardCorpsUprisingApp : public rex::ReXApp {
     }
     if (!show_launcher_) {
       hcu::ApplyMultisampling();
+      hcu::ApplyAspectRatio();
       return defaults;
     }
     if (!imgui_drawer()) {

@@ -50,6 +50,7 @@ set(HCU_SOURCES
     src/main.cpp
     src/achievement_alias.cpp
     src/achievements_overlay.cpp
+    src/aspect_render.cpp
     src/cheat_menu.cpp
     src/cheats.cpp
     src/crt_native.cpp
@@ -202,6 +203,11 @@ target_compile_definitions(hcu_skip_intro_tests PRIVATE HCU_SRC_DIR="${CMAKE_CUR
 add_executable(hcu_multisampling_tests EXCLUDE_FROM_ALL tests/multisampling_tests.cpp)
 target_include_directories(hcu_multisampling_tests PRIVATE src)
 target_compile_definitions(hcu_multisampling_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Aspect Ratio tests, not part of the default build: cmake --build <dir> --target hcu_aspect_ratio_tests
+add_executable(hcu_aspect_ratio_tests EXCLUDE_FROM_ALL tests/aspect_ratio_tests.cpp)
+target_include_directories(hcu_aspect_ratio_tests PRIVATE src)
+target_compile_definitions(hcu_aspect_ratio_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 # Cursor auto-hide tests, not part of the default build: cmake --build <dir> --target hcu_window_host_tests
 add_executable(hcu_window_host_tests EXCLUDE_FROM_ALL tests/window_host_tests.cpp)

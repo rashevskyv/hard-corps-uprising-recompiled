@@ -44,6 +44,9 @@ void LoadPlayerSettings(const std::filesystem::path& path);
 // has registered its cvars and before emulation starts.
 void ApplyMultisampling();
 
+// Sets the guest video mode and the presenter letterbox for hcu_aspect_ratio. Call with ApplyMultisampling.
+void ApplyAspectRatio();
+
 // The launcher window placement loaded from the player file.
 WindowPlacement SavedLauncherPlacement();
 bool SavedLauncherFullscreen();

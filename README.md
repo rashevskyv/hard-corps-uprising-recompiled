@@ -94,12 +94,12 @@ The launcher opens before the game. Your choices are saved to `settings.toml` in
 - **Display mode**: Windowed or Borderless Fullscreen. Press **F11** while playing to switch between them.
 - **Window size** and **Monitor**. The launcher reopens at its last position and size, maximized or in its own F11 fullscreen if it was. This is separate from the game's Display mode.
 - **VSync** on or off
-- **Aspect ratio**: Letterbox 16:9 keeps the game's picture on any window shape; Stretch fills the window
+- **Aspect Ratio**: one dropdown on the Display page (16:9 Original, 16:10, 21:9 Ultrawide, 32:9 Super Ultrawide, 4:3, 5:4). It sets the game's target rendering format, and Window size follows it
 
 Window size, monitor and VSync take effect when you press **PLAY**. If one differs from the launcher's window, the game restarts once in a new window.
 
 ### Graphics
-- **Render resolution**: Original (1280×720), 2x (2560×1440, recommended for 1440p), 3x (3840×2160) or 4x (5120×2880)
+- **Render resolution**: Original (1280×720 at 16:9), 2x (2560×1440, recommended for 1440p), 3x (3840×2160) or 4x (5120×2880)
 - **Anti-aliasing**: Off, FXAA or FXAA Extreme
 - **Multisampling**: 2x MSAA (default), or 4x MSAA (Compatibility) if 2x shows graphics problems on your GPU or driver
 - **Texture filtering**: Game, Off, 2x, 4x, 8x or 16x
