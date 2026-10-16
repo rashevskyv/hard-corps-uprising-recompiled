@@ -246,7 +246,7 @@ when the window is created. (GENERIC_REXGLUE limitation, CONFIRMED by the doc; d
   (`SDL_GetDisplays()[N-1]`); the doc notes this was checked against SDL 3.4.10 source while the SDK ships 3.5.0, so the
   Windows order is LIKELY but not proven for 3.5.0. A startup warning (`CheckWindowDisplay`, Windows) logs when the
   window did not open on the named display.
-- Aspect ratio row: `present_letterbox` (Letterbox 16:9 vs Stretch). Graphics rows: `hcu_graphics_adapter` (Windows), `resolution_scale`,
+- Aspect Ratio row (Display page, after Monitor): `hcu_aspect_ratio`. Graphics rows: `hcu_graphics_adapter` (Windows), `resolution_scale`,
   `hcu_internal_render_scale`, `swap_post_effect`, `hcu_msaa_compatibility`, `anisotropic_override` (see `docs/launcher.md`).
 - Guest video mode (`video_mode_*` in `config/hard_corps_uprising.toml`) is fixed and not tied to the window size
   (GAME_ADAPTATION; see [07](07-display-window-frame-pacing.md)).

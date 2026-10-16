@@ -142,7 +142,7 @@ build integration), `dc6feb8` (per-platform patch suffixes, Linux parity), `430f
 `NNNN-name.patch` applies on both platforms; `.windows.patch` / `.linux.patch` only there. Both scripts reject names
 that do not match `^[0-9]{4}-[a-z0-9]+(-[a-z0-9]+)*(\.(windows|linux))?\.patch$` and reject duplicate numbers; patches
 apply in ordinal name order. Only the current platform's patches enter its fingerprint, so editing a Linux patch does
-not stale the Windows runtime. Current stack: 34 files (0001..0035, 0020 absent), 25 apply on Windows and 26 on Linux
+not stale the Windows runtime. Current stack: 37 files (0001..0038, 0020 absent), 27 apply on Windows and 28 on Linux
 (release notes v0.5.0 give the same counts; see [01-rexglue-core.md](01-rexglue-core.md) for content).
 
 History worth knowing: debug patches were once part of the numbered stack (`0006-debug-saulo-gpu-thread-stats` in

@@ -118,7 +118,7 @@ All are ReXGlue cvars surfaced in the launcher; the defaults equal what the game
 | Internal render resolution | `hcu_internal_render_scale` = 100, 75, 50 | Percent of the render resolution the host render targets are drawn at (SDK patches 0036 to 0038); see [rexglue-runtime-patch.md](../rexglue-runtime-patch.md). Applied at GPU start |
 | Anti-aliasing | `swap_post_effect` = `none`, `fxaa`, `fxaa_extreme` | SDK post effect on the presented image |
 | Texture filtering | `anisotropic_override` = -1 (game), 0, 2, 3, 4, 5 | launcher default `3` |
-| Aspect ratio | `present_letterbox` | Letterbox 16:9 or Stretch; HEAD has no native-aspect work |
+| Aspect ratio | `hcu_aspect_ratio` | 16:9, 16:10, 21:9, 32:9, 4:3 or 5:4; the presenter always letterboxes the chosen format ([07](07-display-window-frame-pacing.md)) |
 | VSync | Windows: `d3d12_allow_variable_refresh_rate_and_tearing` (inverted); Linux: `vulkan_allow_present_mode_immediate` | selected by `kTearingSetting` in `src/settings.h`. VSync controls tearing only; on Linux Off allows an immediate present mode, On uses mailbox or FIFO. Guest `vsync` is untouched |
 | Multisampling | `hcu_msaa_compatibility` | see above |
 

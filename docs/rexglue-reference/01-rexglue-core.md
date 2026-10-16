@@ -37,17 +37,17 @@ class the game code does not use (not verified beyond a search of `src/`; the ru
 app touches"). Verify by running the unpatched-header
 game against the patched library, which is what every build of this repository does.
 
-## 2. Patch inventory (34 patches)
+## 2. Patch inventory (37 patches)
 
-34 patch files exist: numbers 0001 to 0035 with 0020 absent. 0020 never appears in this repository's git history
+37 patch files exist: numbers 0001 to 0038 with 0020 absent. 0020 never appears in this repository's git history
 (`git log --all` over `patches/rexglue-sdk`): it was never committed, so what it contained is `UNCERTAIN`. The only
 removed numbered patch in history is `0010-debug-saulo-gpu-thread-stats` (added `e950ca3`, deleted `bbd02f2`, numbering
 reused by the RenderDoc patch in `3020c32`), a debug-instrumentation patch; a debug patch is the most likely identity of
 the missing 0020 (inferred from that precedent, not proven).
 
-Counts, verified by listing the directory: 34 files = 17 unsuffixed (0001-0010, 0022, 0025, 0026, 0028, 0029, 0030,
-0033) + 8 `.windows` (0011-0015, 0023, 0027, 0031) + 9 `.linux` (0016-0019, 0021, 0024, 0032, 0034, 0035). A Windows
-build therefore applies 17 + 8 = 25 patches and a Linux build 17 + 9 = 26. Do not add the families by hand elsewhere;
+Counts, verified by listing the directory: 37 files = 18 unsuffixed (0001-0010, 0022, 0025, 0026, 0028, 0029, 0030,
+0033, 0036) + 9 `.windows` (0011-0015, 0023, 0027, 0031, 0037) + 10 `.linux` (0016-0019, 0021, 0024, 0032, 0034, 0035, 0038). A Windows
+build therefore applies 18 + 9 = 27 patches and a Linux build 18 + 10 = 28. Do not add the families by hand elsewhere;
 re-derive from `Get-RuntimePatchFiles` (Windows) or `tools/build-patched-rexruntime.sh --list` (Linux) when a count is needed.
 
 Platform column: B both, W Windows (D3D12 / Win32), L Linux (Vulkan / POSIX). Subsystem: RT runtime library
@@ -92,6 +92,9 @@ Platform column: B both, W Windows (D3D12 / Win32), L Linux (Vulkan / POSIX). Su
 | 0033 | `0033-stop-title-threads.patch` | RT, `kernel_state`, `runtime.cpp`, `xobject`, `xthread` | B | Stop every title guest thread before teardown; parked, never killed | GENERIC_REXGLUE, correctness | test `title_thread_shutdown_tests`; see [13](13-crash-hardening-threading-memory.md) |
 | 0034 | `0034-spirv-texture-exp-adjust.linux.patch` | GPU, SPIR-V translator | L | `exp_adjust` read from fetch constant word 3 instead of word 4 | GENERIC_REXGLUE, PLATFORM_LINUX | none; no automated test |
 | 0035 | `0035-cache-vulkan-swapchain-paint-pipeline.linux.patch` | RT, `vulkan_presenter.cpp` | L | Store the swapchain format after creating the paint pipeline so it is reused | GENERIC_REXGLUE, PLATFORM_LINUX | upstream rexglue-sdk issue 507 |
+| 0036 | `0036-internal-render-scale.patch` | GPU, render target cache base, texture cache base, `draw.cpp`, DXBC and SPIR-V translators | B | `hcu_internal_render_scale` and the split of the render resolution into the host render target scale (quarters of a guest pixel) and the whole scale of the EDRAM, resolves and textures | GAME_ADAPTATION | tests `hcu_internal_render_scale_tests` |
+| 0037 | `0037-d3d12-internal-render-scale.windows.patch` | GPU, D3D12 | W | Host-scale render targets, transfers, clears, viewport and the EDRAM dump in the D3D12 render target cache and command processor | PLATFORM_WINDOWS | needs 0036 |
+| 0038 | `0038-vulkan-internal-render-scale.linux.patch` | GPU, Vulkan | L | The same for the Vulkan render target cache and command processor | PLATFORM_LINUX | needs 0036; not run on a Linux GPU |
 
 Library column note: 0006, 0010, 0015, 0021, 0026, 0027, 0029, 0033 and 0035 change files of `rexruntime`; the others
 are in `rexgpu-xenos`. Headers shared by both targets (0024, 0033) change both libraries. This matters because the

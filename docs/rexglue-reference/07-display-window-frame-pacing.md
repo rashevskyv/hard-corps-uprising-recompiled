@@ -15,12 +15,11 @@ Read this first. Several features exist only outside the checked-out history, an
 | Saved launcher window placement | `src/window_placement.h`, `src/platform.cpp` | HEAD IMPLEMENTATION | yes |
 | Title-bar FPS and F2 frame counter | `src/window_host.cpp`, `src/frame_counter.*` | HEAD IMPLEMENTATION | yes |
 | Present-once and vblank-wake pacing | SDK patches 0006, 0015, 0025, 0029 | HEAD IMPLEMENTATION | yes |
-| Aspect ratio: "Letterbox 16:9 / Stretch" (`present_letterbox`) | `src/launcher.cpp`, `src/settings.cpp` | HEAD IMPLEMENTATION | yes |
-| Aspect ratio: native 16:10 / 21:9 / 32:9 / 4:3 / 5:4 rendering | git stash `4b3fde6` ("aspect-ratio-waiting-feedback", base `a0189f4`) plus untracked-files commit `cb72ff5` | EXPERIMENTAL BRANCH (stash, never committed to a branch) | no |
+| Aspect Ratio: native 16:9 / 16:10 / 21:9 / 32:9 / 4:3 / 5:4 rendering (`hcu_aspect_ratio`) | `src/aspect_ratio.h`, `src/aspect_render.cpp`, `src/launcher.cpp`, `src/settings.cpp` | HEAD IMPLEMENTATION (`release/next`) | yes |
 | FPS unlock 120/144 with fixed 60 Hz logic and interpolation | git stash `404bc74` ("WIP experimental high-frame-rate interpolation", base `f3ac390`) plus untracked-files commit `d6ac7ee` | EXPERIMENTAL BRANCH (stash) | no |
 | Full-gameplay telemetry (F9 markers, render/window DEBUG_SAULO) | branch `debug/full-gameplay-telemetry` (`6806845`, `4a8f369`, `dd633c8`) | TEMPORARY DIAGNOSTICS | no |
 
-Why the branch names mislead (CONFIRMED, `git merge-base --is-ancestor`): `feature/native-aspect-ratio` points at `a0189f4` (the v0.5.0 release) and `feature/high-frame-rate` points at `f3ac390` (an offline-achievements commit). Both are ancestors of HEAD, so "merged" is true, but neither branch tip contains the aspect-ratio or frame-rate code. That code was stashed with `git stash -u` and exists only as stashes `stash@{0}` and `stash@{1}` of this local clone. A reader who finds the branch names and assumes "merged feature" is wrong. `perf/stage2-frame-pacing` (`cf6eee1`) is a real merged commit and is HEAD IMPLEMENTATION.
+Why the branch name misleads (CONFIRMED, `git merge-base --is-ancestor`): `feature/high-frame-rate` points at `f3ac390` (an offline-achievements commit). It is an ancestor of HEAD, so "merged" is true, but the branch tip does not contain the frame-rate code. That code was stashed with `git stash -u` and exists only as a stash of this local clone. A reader who finds the branch names and assumes "merged feature" is wrong. `perf/stage2-frame-pacing` (`cf6eee1`) is a real merged commit and is HEAD IMPLEMENTATION.
 
 Porting note: stashes are not pushed. Anything below marked EXPERIMENTAL BRANCH can only be recovered from this clone's stash list; the useful design is summarized here so it survives.
 
@@ -86,7 +85,7 @@ See [08-input-gamepad-mouse.md](08-input-gamepad-mouse.md) for input and [03-lau
 - The guest video mode is set explicitly in `config/hard_corps_uprising.toml` (`video_mode_width = 853`, `video_mode_height = 480`) and does not follow the window size. Without it ReXGlue takes the mode from the window size, which would change what the game believes its display is when the player picks a window size. `HARD_CORPS_SPECIFIC` value, `GENERIC_REXGLUE` lesson: **pin the guest video mode when the window size is a player option**.
 - The Xenos plugin presents a 1280x720 base scaled by `resolution_scale`; measured outputs are in `docs/launcher.md` (3840x2160 at scale 3, 5120x2880 at scale 4). Window size scales this picture into the host window.
 - The D3D12 presenter always presents with sync interval 0. The launcher's "VSync" is only the tearing permission (`d3d12_allow_variable_refresh_rate_and_tearing` on Windows, `vulkan_allow_present_mode_immediate` on Linux, `kTearingSetting` in `src/settings.h`), inverted for the UI. Real frame pacing comes from the guest's own `vsync` cvar and the guest vblank. CONFIRMED (`docs/launcher.md`). Pitfall: do not describe the launcher VSync as a frame limiter.
-- HEAD letterboxes by default: `present_letterbox` (launcher "Aspect ratio": Letterbox 16:9 / Stretch). That is a presenter viewport choice, i.e. it **stretches or pillarboxes the same 16:9 image**; it does not render more of the world. This is distinct from the experimental native aspect ratio in section 6.
+- The presenter always letterboxes the format the player chose (`present_letterbox` is forced on and a stored line of it is removed from `settings.toml`). A different window shape therefore shows bars, not a distorted picture. What the format itself renders is section 6.
 
 ## 3. Hook used for the frame counter
 
@@ -156,30 +155,28 @@ Known limitations stated by the author: some animations and effects still step a
 - Dependencies: 0025 (vblank wake), 0029 (single present) and the high-resolution sleep 0015 are all prerequisites for clean pacing and are already in HEAD.
 - Pitfalls: any title with frame-counted timers will drift if their callers run once per presented frame instead of once per step; the 24-unit cut threshold is a per-game guess (LIKELY, tuned to ~0.6 units walking, under 2 dashing).
 
-## 6. Aspect ratio and ultrawide (EXPERIMENTAL BRANCH, stash)
+## 6. Aspect ratio and ultrawide (HEAD IMPLEMENTATION)
 
-Label: **EXPERIMENTAL BRANCH** for native rendering; **HEAD IMPLEMENTATION** for Letterbox/Stretch.
+Label: **HEAD IMPLEMENTATION** on `release/next`. Replaces the old `present_letterbox` Letterbox/Stretch choice.
 
-### 6.1 What HEAD does
+### 6.1 What it does
 
-Launcher "Aspect ratio" is `present_letterbox`: Letterbox 16:9 (default) keeps the 16:9 picture on any window shape; Stretch fills the window. This is viewport handling only. A 21:9 monitor in HEAD shows black bars (or a distorted image in Stretch), never extra world.
+- Setting `hcu_aspect_ratio`: 16:9 (default), 16:10, 21:9, 32:9, 4:3, 5:4 (`src/aspect_ratio.h`). A table maps each format to its guest width at the game's 720-line canvas (1280, 1152, 1680, 2560, 960, 900) and its guest video mode at 480 lines (853, 768, 1120, 1707, 640, 600). Window-size choices in the launcher are filtered by format; changing the format selects that format's default window size.
+- Applied in `ApplyAspectRatio()` (`src/aspect_render.cpp`) on the launcher Play path and on the launcher-skipped start: sets `video_mode_width`/`video_mode_height` and `present_letterbox`.
+- Game hooks (HARD_CORPS_SPECIFIC, do not reuse addresses): the routine that copies the display-mode struct into the device (writes the width), the routine that reads the display-mode argument and sets the render surfaces (width +56, height +60), and the routine that computes the canvas factor, re-set to `target_ratio / (device_width / device_height)`. The game renders 720 lines at every format and recomputes its own canvas, so the picture is not a stretched 16:9 frame; a wider format shows the game's world further to the sides as far as the game draws it. At 16:9 the hooks do nothing.
+- Menus and videos the game composes for 16:9 are not reworked by this feature. The presenter letterboxes the whole picture to the chosen format.
+- Render resolution labels in the launcher are per format (`GuestWidth(aspect) * scale`); Internal render resolution derives from the same width.
+- Retired setting: the `present_letterbox` line is removed from `settings.toml` by `RemoveSettingLines` (byte-preserving); there is no Stretch mode.
 
-### 6.2 What the experiment does (stash `4b3fde6`, untracked commit `cb72ff5`)
+### 6.2 Validation
 
-Status: implemented statically; **not visually verified**; name of the stash is "aspect-ratio-waiting-feedback" (awaiting user feedback). Hence UNCERTAIN end to end.
-
-- Distinguishing the two approaches: the experiment **renders more horizontal world** (the game draws a wider backbuffer and recomputes its canvas) instead of stretching a 16:9 viewport. The presenter is forced to letterbox the chosen format (`present_letterbox` is set true, and the old setting line is removed from user settings by `RemoveSettingLines`, i.e. there is no Stretch mode any more).
-- Setting `hcu_aspect_ratio`: 16:9 (default), 16:10, 21:9, 32:9, 4:3, 5:4. A table maps each format to its guest width at the game's 720-line canvas (1280, 1152, 1680, 2560, 960, 900) and its guest video mode at 480 lines (853, 768, 1120, ...). Window-size choices in the launcher are filtered by format; changing the format selects that format's default window size.
-- Applied in `ApplyAspectRatio()` (`src/aspect_render.cpp`), called with `ApplyMultisampling` both on the launcher Play path and the launcher-skipped start: sets `video_mode_width`/`video_mode_height` and `present_letterbox`.
-- Game hooks (HARD_CORPS_SPECIFIC, do not reuse addresses): the routine that copies the display-mode struct into the device (write width), the routine that reads the display-mode argument and sets the render surfaces (width +56, height +60), and the routine that computes the canvas factor, re-set to `target_ratio / (device_width / device_height)`. The game renders 720 lines at every format; the guest video mode keeps 480 lines.
-- Render resolution labels in the launcher become per-format (`GuestWidth(aspect) * scale`).
-- Left unresolved in the notes: the 4:3 game-side record and the 16:9 descriptor path (UNCERTAIN); a DEBUG_SAULO canvas trace is still in `src/aspect_render.cpp` and must be removed before any release.
-- Validation: automated (stash only) `hcu_aspect_ratio_tests` (`tests/aspect_ratio_tests.cpp`: format table, parsing, window sizes, widths/canvas factor, retired-setting removal, setting/launcher/render wiring). manual: none recorded. pending: visual check in the game at each format, HUD/UI placement at 32:9 and 4:3, menu screens, the pause menu, and cutscene video.
+- automated: `hcu_aspect_ratio_tests` (`tests/aspect_ratio_tests.cpp`: format table, parsing, window sizes, widths and canvas factor, retired-setting removal, setting/launcher/render wiring).
+- manual (by the author, real game): 16:9, 21:9 and 4:3 work, also together with Internal render resolution. Not recorded per screen: 16:10, 32:9, 5:4, HUD and menu placement, the pause menu and cutscene video.
 
 ### 6.3 Porting notes
 
 - Adapt, investigate first. The reusable idea is a three-part change: (1) guest video mode ratio, (2) the title's render-surface size, (3) the title's own projection/canvas factor, with the presenter letterboxing whatever the guest produces. The first and last are SDK-level; the middle two are always per-title and must be located in that title's display-mode setup code.
-- Risks: widening the camera frustum shows level geometry that was never meant to be seen (spawn pop-in, empty edges), UI anchored to the 16:9 canvas, post effects and render targets sized to a hard-coded width, and gameplay advantage in ultrawide. These are untested here (pending).
+- Risks: widening the camera frustum shows level geometry that was never meant to be seen (spawn pop-in, empty edges), UI anchored to the 16:9 canvas, post effects and render targets sized to a hard-coded width, and gameplay advantage in ultrawide.
 
 ## 7. High refresh rate and monitor behaviour summary
 
@@ -193,8 +190,8 @@ Status: implemented statically; **not visually verified**; name of the stash is 
 2. Prove how the title counts frames before promising an FPS counter or unlock; the swap routine may not call `VdSwap` every iteration.
 3. Count presented frames at one place only; permanent ImGui dialogs cause a second present unless 0029-style gating exists.
 4. Windowed to fullscreen toggling is cheap (SDL borderless) but resize is not; plan a relaunch.
-5. Do not treat a branch name as proof that a feature shipped. In this repository the two display features with the biggest names are stashes.
+5. Do not treat a branch name as proof that a feature shipped. In this repository the 120/144 FPS work is a stash although a branch carries its name.
 
 ## 9. Origin commits
 
-`8d6558b` (F11, title FPS), `e064dd9` (launcher window state, cursor hide, launcher F11; merge `d645080`), `274ee61` (frame counter, F2), `cf6eee1` (stage 2 frame pacing: 0021-0032, crt natives, ThinLTO), `3b4a229` (0035), stash `404bc74` / `d6ac7ee` (frame-rate experiment), stash `4b3fde6` / `cb72ff5` (aspect-ratio experiment), `6806845` / `4a8f369` / `dd633c8` (telemetry, TEMPORARY DIAGNOSTICS). Release-wise: v0.3.2 added the window state and counter; v0.5.0 added the pacing patches. Cross-links: [08-input-gamepad-mouse.md](08-input-gamepad-mouse.md), [12-performance.md](12-performance.md), [16-reusable-game-features.md](16-reusable-game-features.md), [18-change-history.md](18-change-history.md).
+`8d6558b` (F11, title FPS), `e064dd9` (launcher window state, cursor hide, launcher F11; merge `d645080`), `274ee61` (frame counter, F2), `cf6eee1` (stage 2 frame pacing: 0021-0032, crt natives, ThinLTO), `3b4a229` (0035), stash `404bc74` / `d6ac7ee` (frame-rate experiment), `release/next` (native aspect ratio, internal render resolution, graphics card), `6806845` / `4a8f369` / `dd633c8` (telemetry, TEMPORARY DIAGNOSTICS). Release-wise: v0.3.2 added the window state and counter; v0.5.0 added the pacing patches. Cross-links: [08-input-gamepad-mouse.md](08-input-gamepad-mouse.md), [12-performance.md](12-performance.md), [16-reusable-game-features.md](16-reusable-game-features.md), [18-change-history.md](18-change-history.md).

@@ -141,6 +141,7 @@ void TestWiring() {
   CHECK(Has(render, "hcu::CanvasFactor(aspect, width, height)"));
   CHECK(Has(render, "SetFlagByName(\"present_letterbox\", \"true\")"));
   CHECK(Has(render, "SetFlagByName(\"video_mode_width\""));
+  CHECK(!Has(render, "DEBUG_SAULO"));
 
   const std::string launcher = ReadSource("launcher.cpp");
   CHECK(Has(launcher, "ui.Combo(\"Aspect Ratio\""));

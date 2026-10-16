@@ -14,12 +14,12 @@ Tags: `GENERIC_REXGLUE`, `REUSABLE_INFRASTRUCTURE`, `PLATFORM_WINDOWS`, `PLATFOR
 | FPS counter (title bar, F2 overlay) | HEAD IMPLEMENTATION | `8d6558b`, `274ee61` |
 | Skip intro | HEAD IMPLEMENTATION | `50b7948` |
 | Multisampling choice (2x / 4x compatibility) | HEAD IMPLEMENTATION | `cf6eee1` |
-| Native aspect ratio (16:10 / 21:9 / 32:9 / 4:3 / 5:4) | EXPERIMENTAL BRANCH (stash `4b3fde6`; not in HEAD) | see 07 |
+| Native aspect ratio (16:10 / 21:9 / 32:9 / 4:3 / 5:4) | HEAD IMPLEMENTATION (`release/next`) | see 07 |
 | FPS unlock 120/144 with interpolation | EXPERIMENTAL BRANCH (stash `404bc74`; not in HEAD) | see 07 |
 | Rumble | none in HEAD; diagnostics only on `investigate/controller-rumble` (`66e229d`), TEMPORARY DIAGNOSTICS | see 08 |
 | Full-gameplay telemetry (F9 markers etc.) | TEMPORARY DIAGNOSTICS, branch `debug/full-gameplay-telemetry` | `6806845`, `4a8f369`, `dd633c8` |
 
-Branch caution: `feature/native-aspect-ratio` and `feature/high-frame-rate` are ancestors of HEAD but their tips contain none of this work (CONFIRMED with `git merge-base --is-ancestor` plus reading the tips); the code is in stashes.
+Branch caution: `feature/high-frame-rate` is an ancestor of HEAD but its tip contains none of this work (CONFIRMED with `git merge-base --is-ancestor` plus reading the tip); the code is in a stash.
 
 ## 1. Hook patterns used throughout (`REUSABLE_INFRASTRUCTURE`)
 
@@ -79,7 +79,7 @@ Every numeric constant (cooldown rule, `0.656` speeds, state ids, offsets such a
 ## 4. Runtime toggles and game-state detection
 
 - **Runtime toggles with hot application**: the frame counter (`hcu_show_frame_counter`, F2 flips the cvar through `rex::cvar::SetFlagByName`, not saved), the cursor (always on), cheats (session layer). The pattern for toggles that must apply immediately: read the cvar/override inside the hook or draw callback every time.
-- **Settings that apply only at start** (cannot be hot): window size, monitor, VSync (relaunch), render resolution (GPU start), multisampling (`ApplyMultisampling` before emulation starts), skip intro (read when the boot director starts), aspect ratio in the stash (video mode at start). Pattern: `GameSettings::Capture` records what the process started with and `Apply` sets cvars when Play is pressed. See [03](03-launcher.md), [10](10-user-data-settings-migration.md).
+- **Settings that apply only at start** (cannot be hot): window size, monitor, VSync (relaunch), render resolution (GPU start), multisampling (`ApplyMultisampling` before emulation starts), skip intro (read when the boot director starts), aspect ratio (video mode at start). Pattern: `GameSettings::Capture` records what the process started with and `Apply` sets cvars when Play is pressed. See [03](03-launcher.md), [10](10-user-data-settings-migration.md).
 - **Game-state detection in HEAD** is deliberately small: UI state is detected by `ModalDialog::AnyOpen()`; gameplay objects by vtable; the "launcher or game" split by `show_launcher_`. There is no general "is in stage" detector in HEAD.
 - **Game-state detection in the FPS experiment** (EXPERIMENTAL BRANCH, stash `404bc74`): a `GameplayGate` combining "stage scene ran", "ticked unpaused for 30 consecutive iterations" and the game's pause flags (world paused, pause menu open, task manager paused; fixed global plus offsets +104/+108/+150). Pattern `REUSABLE_INFRASTRUCTURE`, flags `HARD_CORPS_SPECIFIC`. See [07](07-display-window-frame-pacing.md#5-fps-unlock-120--144-fps-with-fixed-60-hz-logic-experimental-branch-stash).
 - Persistence of toggles: only launcher-saved settings persist (`settings.toml`, schema list `kGameSettingKeys`); in-game toggles never write.
@@ -106,11 +106,11 @@ Every numeric constant (cooldown rule, `0.656` speeds, state ids, offsets such a
 - Validation: automated `hcu_skip_intro_tests` (default, persistence and reset, gameplay row, boot gate, completion step, hook logic over fake memory).
 - Porting: **adapt** if the title has a step-based boot director; otherwise investigate first.
 
-## 7. Aspect-ratio hooks and FPS options (not in HEAD)
+## 7. Aspect-ratio hooks (HEAD) and FPS options (not in HEAD)
 
-Documented in [07](07-display-window-frame-pacing.md#6-aspect-ratio-and-ultrawide-experimental-branch-stash) and [07 section 5](07-display-window-frame-pacing.md#5-fps-unlock-120--144-fps-with-fixed-60-hz-logic-experimental-branch-stash). For feature planning only:
+Documented in [07](07-display-window-frame-pacing.md#6-aspect-ratio-and-ultrawide-head-implementation) and [07 section 5](07-display-window-frame-pacing.md#5-fps-unlock-120--144-fps-with-fixed-60-hz-logic-experimental-branch-stash). For feature planning only:
 
-- Aspect ratio design in the stash is three hooks (display-mode copy, render-surface setup, canvas factor) plus guest video mode and presenter letterbox. Reusable idea: a table of formats to guest widths and video modes, pure and unit-tested. Hooks: `HARD_CORPS_SPECIFIC`. Status: implemented statically, not visually verified, awaiting feedback.
+- Aspect ratio is three hooks (display-mode copy, render-surface setup, canvas factor) plus guest video mode and presenter letterbox. Reusable idea: a table of formats to guest widths and video modes, pure and unit-tested. Hooks: `HARD_CORPS_SPECIFIC`. Status: implemented and played by the author at 16:9, 21:9 and 4:3.
 - FPS options (120/144 labelled Experimental) need a fixed-step gate, an interpolation layer, a limiter and a present-interval override. Reusable: limiter schedule, gate, lerp-with-restore, tested without game memory. Specific: accumulator and camera/sprite offsets, pause flags. Status: runtime-proven by the author on one machine, user test pending, not shipped.
 - Conditional features: frame-rate hooks, game-speed logic and cheats are never generic; a port should list them as optional work after boot, render and input are stable.
 
@@ -121,7 +121,7 @@ Not implemented in HEAD (see [08](08-input-gamepad-mouse.md#6-rumble-complete-hi
 ## 9. Persistence and settings integration summary
 
 - Every user-visible option of these features is a `REXCVAR` in the project's cvar group, listed in `kGameSettingKeys`, rendered by the launcher page, and applied by `GameSettings::Apply` when Play is pressed.
-- Retired settings must be removed deliberately: the aspect-ratio stash removes the old `present_letterbox` line with a byte-preserving `RemoveSettingLines`; the multisampling change replaced a stored "Off" with the default and overwrote an old `native_2x_msaa = false`. Pattern `REUSABLE_INFRASTRUCTURE`; see 10.
+- Retired settings must be removed deliberately: the aspect ratio change removes the old `present_letterbox` line with a byte-preserving `RemoveSettingLines`; the multisampling change replaced a stored "Off" with the default and overwrote an old `native_2x_msaa = false`. Pattern `REUSABLE_INFRASTRUCTURE`; see 10.
 - Legacy repair: an unreleased build wrote `on/off` values that TOML rejects; they are repaired before parsing, with a `.bak` copy (see 10).
 
 ## 10. Pitfalls

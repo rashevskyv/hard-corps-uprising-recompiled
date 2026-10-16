@@ -52,7 +52,7 @@ Not MUST HAVE although tempting: every performance patch, the launcher, Linux su
 Fence-wait and CRT hook addresses (`src/gpu_fence_wait.cpp`, `src/crt_native.cpp`), cheat rules and offsets,
 the package fingerprint (size + CRC32) and `license_mask = 1`, profile and achievement schemas, DLC marketplace rules
 (`src/marketplace_rules.h`), skip-intro hooks, frame-counter hook address, `config/overrides.toml`,
-`config/discovered-functions.toml`. Not at HEAD (experimental, stash or branch only): FPS unlock, native aspect ratio,
+`config/discovered-functions.toml`. Not at HEAD (experimental, stash or branch only): FPS unlock,
 rumble diagnostics, gameplay telemetry ([07](07-display-window-frame-pacing.md), [08](08-input-gamepad-mouse.md)).
 
 ## RECOMMENDED PORT ORDER

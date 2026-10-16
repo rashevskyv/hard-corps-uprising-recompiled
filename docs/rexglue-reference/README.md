@@ -16,9 +16,10 @@ AI can understand, reproduce or port them. It is not a player README; user-facin
 | History covered | all 70 commits on HEAD (60 non-merge), `839e51b` (2026-10-09) to `f96c66e` |
 
 Not documented as implemented (not in HEAD): branches `investigate/controller-rumble` (`66e229d`) and
-`debug/full-gameplay-telemetry` (`6806845`, `4a8f369`, `dd633c8`); and the FPS-unlock and native-aspect-ratio work, which
-exists only in local stashes even though branches with those names point at older commits (details in
-[07](07-display-window-frame-pacing.md)). They are described only under explicit EXPERIMENTAL / TEMPORARY labels.
+`debug/full-gameplay-telemetry` (`6806845`, `4a8f369`, `dd633c8`); and the FPS-unlock work, which
+exists only in a local stash even though a branch with that name points at an older commit (details in
+[07](07-display-window-frame-pacing.md)). Native aspect ratio, Internal render resolution and Graphics card selection are
+implemented on `release/next`. They are described only under explicit EXPERIMENTAL / TEMPORARY labels.
 
 ## How to use these documents
 1. Read this README, [19](19-cross-project-porting-guide.md), then [17](17-porting-checklist.md).
@@ -41,7 +42,7 @@ stated per item as automated (test named), manual (repo evidence), inferred or p
 invented: the repository has almost none, and impact is described qualitatively and marked unmeasured.
 
 Path convention: paths are repository-relative. Paths such as `src/system/xmemory.cpp` next to a patch number are inside the
-ReXGlue SDK tree (tag `v0.10.0`). Patch numbers are Hard Corps numbers (34 files, 0001-0035, 0020 absent).
+ReXGlue SDK tree (tag `v0.10.0`). Patch numbers are Hard Corps numbers (37 files, 0001-0038, 0020 absent).
 
 ## Documents
 | # | Document | Content |

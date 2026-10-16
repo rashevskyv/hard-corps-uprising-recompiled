@@ -210,7 +210,7 @@ fixes, not crash fixes. Raising priority on Linux needs privileges and is not do
 | `hcu_title_thread_shutdown_tests` | `tests/title_thread_shutdown_tests.cpp` | 0033 | both | no |
 | `hcu_renderdoc_detect_tests` (+ `hcu_fake_renderdoc`) | `tests/renderdoc_detect_tests.cpp`, `tests/fake_renderdoc.cpp` | 0010 | Linux | no |
 
-The tests cover patches 0001, 0010 and 0033 (three of 34); none of the other 31 patches has an automated test. Run the narrow test for the area you changed during development; run
+The tests cover patches 0001, 0010 and 0033 (three of 37); none of the other 34 patches has an automated test. Run the narrow test for the area you changed during development; run
 all of them only in the final release review. Each of the first three uses the real runtime or SDL, so they need the
 patched runtime installed and a configured Release project build.
 

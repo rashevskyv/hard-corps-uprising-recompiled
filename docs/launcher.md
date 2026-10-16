@@ -58,7 +58,7 @@ Why a restart: ReXGlue 0.10.0 has no API to resize or move an open window (its `
 
 ### Aspect Ratio and the guest picture
 
-The game renders 720 lines at the chosen format's width: 1280 at 16:9, 1152 at 16:10, 1680 at 21:9, 2560 at 32:9, 960 at 4:3 and 900 at 5:4. The guest video mode is 480 lines at the same ratio: 853×480 at 16:9, 1120×480 at 21:9. Window size changes only the host window.
+The game renders 720 lines at the chosen format's width: 1280 at 16:9, 1152 at 16:10, 1680 at 21:9, 2560 at 32:9, 960 at 4:3 and 900 at 5:4. The guest video mode is 480 lines at the same ratio: 853×480 at 16:9, 1120×480 at 21:9. Window size changes only the host window. The game computes its own canvas for the format, so the picture is not a stretched 16:9 frame, and a wider format shows more of the game world at the sides as far as the game draws it. Menus and videos the game composes for 16:9 are not reworked; the presenter letterboxes the whole picture to the chosen format.
 
 The presented output is the render base scaled by Render resolution. At 16:9 it is measured as 1280×720, 3840×2160 at scale 3 and 5120×2880 at scale 4.
 

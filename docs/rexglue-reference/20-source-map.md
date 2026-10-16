@@ -5,7 +5,7 @@ Subsystem to implementation files (repository-relative; reusable infrastructure 
 and git-ignored. Test executables are CMake targets `hcu_*` marked `EXCLUDE_FROM_ALL`.
 
 ## ReXGlue patches and patched runtime
-- `patches/rexglue-sdk/NNNN-*.patch` (34 files, 0020 absent), `patches/rexglue-sdk/baseline.env` (pin and stock hashes): [01](01-rexglue-core.md)
+- `patches/rexglue-sdk/NNNN-*.patch` (37 files, 0020 absent), `patches/rexglue-sdk/baseline.env` (pin and stock hashes): [01](01-rexglue-core.md)
 - `tools/rexruntime-patch.ps1` (patch discovery, fingerprint, stamp, check), `tools/build-patched-rexruntime.ps1`, `tools/build-patched-rexruntime.sh`
 - `tools/build.ps1`, `tools/build.sh` (rebuild patched runtime when the check fails)
 - `CMakeLists.txt`: `hcu_rexglue_check`, `hcu_rexglue_staging`, `LINK_DEPENDS` on SDK libraries, `hcu_enable_thinlto`
