@@ -75,4 +75,9 @@ Requirements:
 If the game does not start or crashes, please open an [issue](https://github.com/saulob/hard-corps-uprising-recompiled/issues) and attach the newest `hard_corps_uprising_*.log` file from the `logs` folder next to the program (next to the AppImage on Linux), with a line about what you were doing. For Linux reports, please also say your distribution and graphics card.
 
 ### Checksums
-SHA-256 files are published with the release for both downloads: `HardCorpsUprising-v0.6.0-windows-x64.sha256` and `HardCorpsUprisingRecompiled-v0.6.0-x86_64.sha256`. The hashes are added when the release files are built.
+SHA-256 files are published with the release for both downloads: `HardCorpsUprising-v0.6.0-windows-x64.sha256` and `HardCorpsUprisingRecompiled-v0.6.0-x86_64.sha256`.
+
+| File | SHA-256 |
+| --- | --- |
+| `HardCorpsUprising-v0.6.0-windows-x64.zip` | `81b6264eb57abc3f4a69a64b895f68168d79fe446b42d9c1764c076451045db8` |
+| `HardCorpsUprisingRecompiled-v0.6.0-x86_64.AppImage` | `258b05588aa553a63ea242ef767b64abd42bea45e240db23d9d15d250db4c839` |
