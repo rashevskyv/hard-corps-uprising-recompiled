@@ -17,6 +17,11 @@ v0.6.0 adds Aspect Ratio and Internal render resolution, shared with the Windows
 the automated tests pass, but the Vulkan reduced-resolution path has not been tested in real gameplay on a Linux GPU or
 Steam Deck. The graphics card selection is Windows only.
 
+v0.6.1 fixes the AppImage not starting where the system cannot mount it with FUSE, as reported from Steam's Beta client
+on SteamOS: it now unpacks itself and runs from there
+([Steam Beta and the AppImage](#steam-beta-and-the-appimage)). Where FUSE works nothing changes. The fix is verified in a
+test environment that blocks FUSE; it is not confirmed on SteamOS yet.
+
 ## Requirements
 
 - 64-bit x86 Linux (x86_64) with glibc 2.31 or newer, such as Ubuntu 20.04 or later (`ldd --version` shows it)
@@ -40,7 +45,8 @@ is older than GCC 13.
 
 ### Steam Deck
 
-This is the intended flow. It has not been tried on a Steam Deck yet.
+This is the intended flow. A SteamOS tester on a Legion Go 2 reports that it runs from Steam's stable client, but it has
+not been tried on a Steam Deck itself.
 
 1. In **Desktop Mode**, do steps 1 to 5 above. Copy your package to the Deck first (USB stick, SD card or network).
 2. In Steam: **Games** > **Add a Non-Steam Game to My Library**, and pick the AppImage.
@@ -48,6 +54,34 @@ This is the intended flow. It has not been tried on a Steam Deck yet.
 
 Use the touchscreen or the trackpads in the launcher. A controller's **Start** button presses Play, and the D-pad,
 left stick, A and B move through the launcher.
+
+### Steam Beta and the AppImage
+
+An AppImage mounts itself with FUSE before any of its own code runs. On Steam's Beta client, a non-Steam AppImage can be
+started where that mount is not possible, in Game Mode and in Desktop Mode alike. It then stops at once, Steam's log shows
+"Cannot mount AppImage, please check your FUSE setup.", and the game writes no log because it never starts, while the same
+file started from a file manager works. Other AppImages are reported to fail the same way
+([ValveSoftware/steam-for-linux#13736](https://github.com/ValveSoftware/steam-for-linux/issues/13736)).
+
+Since v0.6.1 the AppImage deals with this itself, with nothing to set in Steam. Its runtime still tries the FUSE mount
+first. If the mount cannot be made, it unpacks the AppImage into a private folder under `/tmp` (about 70 MB), runs the game
+from there with the same arguments, returns the game's exit status and removes the folder afterwards. A restart of the game
+from the launcher starts the original AppImage again and goes through the same steps. Where FUSE works, the AppImage is
+mounted as before and nothing is unpacked. Only a failed mount triggers this: a damaged AppImage is still reported as
+damaged. `game`, `logs` and `user_data` stay next to the AppImage in both cases.
+
+Verified in a test environment that blocks FUSE (an unprivileged user namespace, where the runtime prints the same
+"No suitable fusermount binary found" lines as in Steam's log), not yet on SteamOS. In that case a line such as
+`Error: $FUSERMOUNT_PROG not set` can still appear in the terminal or Steam's log; it is expected and harmless.
+
+If an AppImage still does not start from Steam, open the game's Steam **Properties**, set **Launch Options** to
+
+```
+APPIMAGE_EXTRACT_AND_RUN=1 %command%
+```
+
+and tell us whether that changes anything. It makes the runtime unpack the AppImage without trying FUSE at all
+(`%command% --appimage-extract-and-run` does the same).
 
 ## Where things are
 
@@ -109,12 +143,40 @@ way. The SDK's stock `rexglue` tool needs glibc 2.35, so `tools/package-linux.sh
 this baseline.
 
 The script copies the sources to `~/hcu-linux-build` (set `HCU_WORK` to change it), downloads the pinned ReXGlue
-SDK, appimagetool and AppImage runtime with their SHA-256 checks, builds the project's patched ReXGlue runtime and
+SDK and appimagetool with their SHA-256 checks, builds the project's patched ReXGlue runtime and
 Vulkan GPU plugin from source the first time and whenever the patches change
 ([docs/rexglue-runtime-patch.md](rexglue-runtime-patch.md) lists the extra packages and the network access this
-needs), builds the `linux-amd64-release` preset, checks
+needs), builds the AppImage runtime (below), builds the `linux-amd64-release` preset, checks
 that the AppDir holds no game files, packages, saves, logs or local paths, and writes
 `dist/HardCorpsUprisingRecompiled-v<version>-x86_64.AppImage` with its `.sha256` (`--out-dir DIR` writes them to DIR instead of `dist`). It publishes nothing.
+It prints the commit it was run on and says when the working tree has uncommitted changes: release builds are made from the
+committed tree.
+
+### The AppImage runtime
+
+The runtime is the small program at the front of every AppImage that mounts it and starts AppRun. The project builds its
+own from the upstream [AppImage/type2-runtime](https://github.com/AppImage/type2-runtime) source, because the released
+runtime stops when FUSE cannot mount the AppImage (see [Steam Beta and the AppImage](#steam-beta-and-the-appimage)):
+
+- `patches/appimage-runtime/baseline.env` pins the upstream commit (`dd6cebe`, tag `20251108`, the revision of the
+  runtime the project used before), the Alpine 3.21.0 root file system the build runs in, and the SHA-256 of the
+  reviewed result.
+- `patches/appimage-runtime/0001-extract-and-run-when-fuse-fails.patch` is the whole change: when the FUSE mount fails
+  the runtime uses its own extract-and-run code instead (the one `APPIMAGE_EXTRACT_AND_RUN` selects); each run gets a
+  private extraction folder, termination signals reach the game, and the folder is really removed afterwards
+  (upstream's cleanup does nothing on the musl build, whose `nftw` ignores a descriptor limit of 0).
+- `tools/build-appimage-runtime.sh` fetches that commit, checks it, applies the patch and runs upstream's own chroot
+  build (needs root or sudo, git, tar and network access). The result is checked (type 2 magic, static, the version
+  string) and compared with the pinned SHA-256; with the same Alpine packages two builds give identical files. If the
+  checksum differs, packaging stops: review the new build and update `RUNTIME_SHA256`. `--check FILE` verifies a runtime or
+  a finished AppImage.
+
+A build prints, and saves next to the runtime as `<runtime>.manifest`, what produced it: the upstream commit, the patch's SHA-256,
+the Alpine version, the compiler, linker and library package versions apk resolved, and the runtime's SHA-256. The runtime's
+static components and their licenses are listed in `THIRD-PARTY-LICENSES-LINUX.txt` inside the AppImage.
+
+The runtime is rebuilt only when the pins or the patch change. Set `VERBOSE=1` when starting an AppImage to see which path it
+took: a message appears when it falls back to extracting.
 
 For a plain build without packaging, with the SDK extracted into `tools/rexglue/linux-amd64`, `tools/build.sh`
 (`release`, `relwithdebinfo` or `debug`) builds the patched ReXGlue libraries when they are missing or out of date and

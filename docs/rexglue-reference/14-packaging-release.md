@@ -61,8 +61,7 @@ download and unpack the pinned SDK zip (SHA-256 checked) and check the version f
 (because the stock `rexglue` binary may not run on the build distro); build the patched runtime if
 `--check` fails and re-check; build `rexglue` from source if the stock one cannot run; configure and build the
 `linux-amd64-release` preset; verify the staged libraries against the SDK stamp; assemble the AppDir; run the release
-check; check glibc symbol versions; download `appimagetool` and the type-2 runtime (pinned versions, SHA-256 checked),
-produce the AppImage, `chmod 755`, write `<name>.sha256`.
+check; check glibc symbol versions; download `appimagetool` (pinned, SHA-256 checked), build the AppImage runtime (section 3.4), produce the AppImage, `chmod 755`, write `<name>.sha256`.
 
 ### Artifact layout (AppDir, enforced exactly)
 
@@ -93,7 +92,8 @@ build. HARD_CORPS_SPECIFIC names, REUSABLE technique.
 `AppRun` is a short POSIX shell script. It looks up the system `libstdc++.so.6` (`ldconfig -p`, then well-known paths)
 and sets `LD_LIBRARY_PATH` to the bundled `usr/lib` **only if** the system copy lacks `GLIBCXX_3.4.32` (GCC 13). A
 newer system copy must win because graphics drivers may need it. The script then `exec`s the binary with the original
-arguments. The AppRun shell script is unchanged since `9964f82`. Class: REUSABLE_INFRASTRUCTURE. The `GLIBCXX_3.4.32`
+arguments. The script is unchanged since `9964f82`; it only runs once the AppImage runtime has mounted (or, since
+v0.6.1, unpacked) the AppImage, see section 3.4. Class: REUSABLE_INFRASTRUCTURE. The `GLIBCXX_3.4.32`
 requirement is a property of the ReXGlue Linux libraries built with GCC 13 libstdc++ headers (CONFIRMED by the
 packaging script's check that the bundled copy contains that symbol version).
 
@@ -117,6 +117,41 @@ actual symbol versions, which is the real constraint (host glibc alone does not 
 Not established in this review: that the 20.04 environment builds successfully end to end, that the resulting AppImage
 starts on 20.04, or what the minimum working system actually is (the script only proves the symbol floor, not the
 rest of the dependency chain such as Vulkan loader and X11/Wayland client libraries).
+
+### 3.4 AppImage runtime (v0.6.1)
+
+The runtime is the ELF program at the front of an AppImage; it mounts the SquashFS image through FUSE and executes
+`AppRun`. The released type-2 runtime stops when the mount fails, before `AppRun`, so a launcher that never gets to log
+(Steam Beta, issue #13) looks like a crash with no log. The project therefore builds its own (REUSABLE_INFRASTRUCTURE,
+GENERIC_APPIMAGE):
+
+- `patches/appimage-runtime/baseline.env`: upstream repository, tag `20251108`, commit `dd6cebe` (the revision of the
+  released runtime used before), Alpine 3.21.0 mini root file system with its SHA-256, and the SHA-256 of the reviewed
+  build. `patches/appimage-runtime/0001-extract-and-run-when-fuse-fails.patch` is the whole change (`.gitattributes`
+  pins LF so `git apply` works on both platforms).
+- `tools/build-appimage-runtime.sh`: fetches the commit (checked against the full hash), applies the patch, runs upstream's
+  `scripts/chroot` build in a private mount namespace (so cleaning the tree cannot touch the host `/dev`), strips the build
+  id and debug link that name the random build folder, restores the `AI` magic, checks the file and compares its
+  SHA-256. Two independent builds gave the same file. The Alpine packages are not pinned by version, so a changed
+  toolchain stops packaging until the new build is reviewed and `RUNTIME_SHA256` updated. `--check` also verifies a finished
+  AppImage; `package-linux.sh` runs it on its output.
+- Each build writes `<runtime>.manifest` (upstream commit, patch SHA-256, Alpine version, compiler, linker and library
+  package versions as resolved by apk, runtime SHA-256) from read-only queries made after the build, so recording it
+  cannot change the result. The runtime's static components (libfuse, squashfuse, zstd, zlib, mimalloc, musl, libgcc) have
+  notices in `THIRD-PARTY-LICENSES-LINUX.txt`, and `package-linux.sh` stops if one is missing.
+- Patch contents, in order: the FUSE helper process exits with a dedicated status when the kernel refuses the mount (not
+  when the image is damaged or the helper fails otherwise); the parent that sees that status, and no "mounted" signal,
+  jumps to the existing extract-and-run code instead of reporting the failure; extraction goes to a `mkdtemp` folder per
+  process (upstream uses one folder per file hash, which a restarted instance would share with its predecessor and see
+  cleaned up under it); `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` are forwarded to the application; the extraction
+  folder is removed after exit or a failed extraction; `nftw` gets a descriptor limit of 64 because musl returns at once
+  for 0, which made upstream's cleanup a no-op; the fusermount message is verbose-only.
+- `VERBOSE=1` prints "Cannot mount the AppImage through FUSE, extracting it instead" when the fallback is taken; the
+  explicit `APPIMAGE_EXTRACT_AND_RUN` path prints nothing extra. The extraction folder name (`appimage_extracted_XXXXXX`
+  versus `.mount_*` for `APPDIR`) tells the paths apart as well.
+- Validation recipe: `unshare -Ur ./App.AppImage` (user namespace, where the runtime cannot use the host's setuid
+  `fusermount`) reproduces the failure with the released runtime and starts normally with this one, without any
+  environment variable.
 
 ## 4. Icons and metadata
 
@@ -181,7 +216,10 @@ Pitfall: scanning for the *repo path* is only meaningful if the build removed it
    Limitations, Build / Developer Notes, Reporting Problems (what log to attach), Checksums (table of SHA-256 for each
    artifact).
 3. The packaging scripts only build local artifacts under `dist/` ("nothing was published"); tagging and uploading are
-   manual steps outside the repository. `dist/` is git-ignored.
+   manual steps outside the repository. `dist/` is git-ignored. Both scripts print the commit they ran on and say when the
+   working tree has uncommitted changes: release artifacts are built from the committed tree. The notes are not an input of
+   either build, so the Checksums table is filled afterwards by `tools/stamp-release-hashes.ps1` and committed on its own
+   (v0.6.0 did the same by hand in `0c52b9f`).
 4. Claims about what is fixed are carefully worded in the notes (for example the Linux brightness fix and the Exit Game
    fix are marked as not yet confirmed by the reporter or on real hardware); keep that practice.
 

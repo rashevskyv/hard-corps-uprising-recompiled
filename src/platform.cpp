@@ -27,6 +27,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 
+#include "relaunch_command.h"
 #include "window_host.h"
 
 #if defined(_WIN32)
@@ -901,24 +902,21 @@ bool RelaunchSelf(std::wstring_view extra_args) {
   for (const wchar_t c : extra_args) {
     extra += char(c);  // ASCII flags
   }
-  args.push_back(extra);
-  // Inside an AppImage, start the AppImage again: this process's mount closes when it exits.
   std::error_code ec;
-  const char* appimage = std::getenv("APPIMAGE");
-  const std::string exe =
-      appimage && *appimage ? std::string(appimage) : std::filesystem::read_symlink("/proc/self/exe", ec).string();
-  if (exe.empty() || args.size() < 2) {
+  const std::string self = std::filesystem::read_symlink("/proc/self/exe", ec).string();
+  std::optional<RelaunchCommand> command = MakeRelaunchCommand(std::move(args), std::getenv("APPIMAGE"), self, extra);
+  if (!command) {
     REXLOG_ERROR("Relaunch failed: cannot read this process's command line");
     return false;
   }
-  args.front() = exe;
   std::vector<char*> argv;
-  for (std::string& arg : args) {
+  for (std::string& arg : command->argv) {
     argv.push_back(arg.data());
   }
   argv.push_back(nullptr);
   pid_t pid = 0;
-  if (const int error = posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), environ); error != 0) {
+  if (const int error = posix_spawn(&pid, command->executable.c_str(), nullptr, nullptr, argv.data(), environ);
+      error != 0) {
     REXLOG_ERROR("Relaunch failed ({})", error);
     return false;
   }

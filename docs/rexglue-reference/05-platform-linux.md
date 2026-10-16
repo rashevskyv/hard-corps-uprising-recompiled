@@ -21,6 +21,7 @@ Evidence level is taken from the repo only. "Release notes" means `.github/relea
 | Installer / STFS tests on Linux | automated | v0.2.0 notes: "passes its installer tests" (`tests/installer_tests.cpp`) |
 | Allocator, shutdown-order, title-thread, RenderDoc-loader tests build on Linux | automated targets exist | `CMakeLists.txt` (`hcu_physical_heap_stress`, `hcu_shutdown_order_tests`, `hcu_title_thread_shutdown_tests`, `hcu_renderdoc_detect_tests`); results are described in `docs/rexglue-runtime-patch.md`, no stored run logs |
 | Played on SteamOS by an outside tester | CONFIRMED, limited | notes since v0.3.1: "A SteamOS tester has run it"; issue #6 (RenderDoc overlay, physical heap release errors around exit) and issue #9 (Exit Game hang in Game Mode). Which hardware, which display server and which GPU is not recorded |
+| AppImage start when FUSE cannot mount (v0.6.1) | CONFIRMED in a local user-namespace reproducer, UNCERTAIN on SteamOS | `unshare -Ur` fails with the released runtime and starts with the patched one, no variable; cleanup, argument, exit-status and restart cases pass; the reporter's device is untested |
 | Fixes for #6 and #9 | UNCERTAIN | v0.5.0 notes: the #9 reporter "has not confirmed the fix yet"; no confirmation of 0010 in the repo |
 | Texture brightness fix (0034) | UNCERTAIN on real Linux hardware | v0.5.0 notes: "has not been confirmed on a real Linux PC or Steam Deck yet" |
 | Steam Deck | not tested | `docs/linux.md`: "This is the intended flow. It has not been tried on a Steam Deck yet" |
@@ -104,7 +105,20 @@ from `tools/codegen.ps1` (PowerShell) in the documented flow.
   window sizes can come out larger than chosen.
 - **Relaunch.** `RelaunchSelf` reads `/proc/self/cmdline`, adds the extra argument, and `posix_spawn`s. Inside an
   AppImage it starts `$APPIMAGE` again, not `/proc/self/exe`, because the running mount disappears when this process
-  exits. Pitfall for ports: the AppImage runtime sets `APPIMAGE`; it is also what `PortFolder()` uses.
+  exits. Pitfall for ports: the AppImage runtime sets `APPIMAGE`; it is also what `PortFolder()` uses. The command is
+  built by `MakeRelaunchCommand` (`src/relaunch_command.h`, `tests/relaunch_tests.cpp`): an absolute program path and
+  the original arguments, never a shell string, independent of the working directory.
+- **Steam Beta and FUSE (v0.6.1, fixed locally, UNCERTAIN on SteamOS).** A SteamOS tester (issue #13) reported that, on
+  Steam's Beta client, the AppImage fails at once from Steam in Game Mode and in Desktop Mode and leaves no game log; direct
+  launch and the stable client work. The same week ValveSoftware/steam-for-linux#13736 reported non-Steam AppImages failing
+  on the Beta with the runtime's "No suitable fusermount binary found on the $PATH" / "Cannot mount AppImage" lines. The
+  released type-2 runtime accepts only a setuid-root `fusermount` found on `PATH`; inside a user namespace it shows as
+  owned by `nobody`, which reproduces those lines with this project's AppImage (`unshare -Ur`), and it exits before
+  `AppRun`. The AppImage now carries a patched runtime that unpacks and runs itself when the mount fails
+  ([14](14-packaging-release.md) section 3.4); `unshare -Ur ./App.AppImage` then starts the game without any variable, and
+  `APPIMAGE_EXTRACT_AND_RUN=1` still works. A restart goes through `$APPIMAGE` again and the fallback again. That the
+  reporter's failure is this one is not confirmed; if the fallback is not enough, the unpacking can be forced from Steam's
+  Launch Options for comparison.
 - **Shift to open the launcher.** Windows reads `GetAsyncKeyState`; on Linux `ShiftHeld()` pumps SDL events and reads
   `SDL_GetModState`, which is only valid after a window has focus. `ShiftHeldAfterWindowOpened()` therefore checks again
   once the window exists. Documented limitation: hold Shift until the launcher appears. This is the only Linux input
@@ -188,7 +202,8 @@ Common patches whose Linux motivation was reported or measured on Linux:
 
 | Variable | Used by | Purpose |
 | --- | --- | --- |
-| `APPIMAGE` | `PortFolder()`, `RelaunchSelf()` | folder of the AppImage file; relaunch target |
+| `APPIMAGE` | `PortFolder()`, `RelaunchSelf()` | path of the AppImage file (its folder is the port folder); relaunch target |
+| `APPIMAGE_EXTRACT_AND_RUN` | the AppImage runtime | unpack to `/tmp` instead of mounting through FUSE (the patched runtime does this by itself when the mount fails) |
 | `LD_LIBRARY_PATH` | `AppRun`; the RenderDoc test | prepend bundled `usr/lib`; steer the loader in the test |
 | `DRI_PRIME`, `MESA_VK_DEVICE_SELECT`, `VK_LOADER_DEVICE_SELECT`, `__NV_PRIME_RENDER_OFFLOAD` | patch 0026 | when set, the runtime does not apply its discrete-GPU preference |
 | `XDG_DATA_HOME` | ReXGlue default, legacy migration | pre-v0.3.2 data location |

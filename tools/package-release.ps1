@@ -14,7 +14,7 @@
   .\tools\package-release.ps1              # incremental Release build, then package
   .\tools\package-release.ps1 -Clean       # clean Release build first
   .\tools\package-release.ps1 -SkipBuild   # package the existing build-release\ output
-  .\tools\package-release.ps1 -VerifyOnly dist\HardCorpsUprising-v0.6.0-windows-x64
+  .\tools\package-release.ps1 -VerifyOnly dist\HardCorpsUprising-v0.6.1-windows-x64
 #>
 param(
     [switch]$Clean,
@@ -111,6 +111,14 @@ $ShaFile = Join-Path $Dist "$Name.sha256"
 
 Write-Host ''
 Write-Host "Hard Corps: Uprising $Version - Windows release package (local only)"
+$SourceState = (git -C $Root rev-parse --short HEAD 2>$null)
+if ($LASTEXITCODE -ne 0) { $SourceState = 'unknown' }
+else {
+    $changes = @(git -C $Root status --porcelain 2>$null)
+    if ($LASTEXITCODE -ne 0) { $SourceState += ', working tree state unknown' }
+    elseif ($changes.Count) { $SourceState += ' plus uncommitted changes' }
+}
+Write-Host "Source: $SourceState"
 
 if (-not $SkipBuild) {
     $build = @{ Config = 'Release'; BuildDir = $ReleaseBuild }
@@ -184,6 +192,7 @@ Write-Host '===================================================='
 Write-Host "  ZIP:     $Zip ($([math]::Round((Get-Item $Zip).Length / 1MB, 1)) MB)"
 Write-Host "  SHA-256: $hash"
 Write-Host "  Hash file: $ShaFile"
+Write-Host "  Source:  $SourceState"
 Write-Host '  Contents:'
 foreach ($entry in $entries) { Write-Host "    $entry" }
 Write-Host ''

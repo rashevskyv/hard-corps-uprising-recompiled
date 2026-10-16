@@ -12,6 +12,9 @@
 # The ReXGlue runtime and Vulkan GPU plugin are built from source with the project's patches
 # (tools/build-patched-rexruntime.sh) the first time and whenever the patches change, which also needs network
 # access and the packages in docs/rexglue-runtime-patch.md.
+# The AppImage runtime (the part that mounts the AppImage before AppRun runs) is built from the pinned AppImage/type2-runtime
+# source with the project's patch (tools/build-appimage-runtime.sh): that needs root or sudo, network access the first time,
+# and is skipped while the pins and patches are unchanged.
 # Needs generated/default (tools/codegen.ps1) and game/extracted/default.xex: the build re-runs codegen
 # when its inputs look changed, and it never packages either of them.
 set -euo pipefail
@@ -27,8 +30,6 @@ SDK_SHA256=0388edb3f8fb1444f1b0ad5d440cb02d9690ac20a76b04fd6b7dcc19f59328a6
 XEX_SHA256=530ede8ed5271051a2ab19c077a97fb167e4f30b094c292e8f59d37d0d2069dc
 APPIMAGETOOL_VERSION=1.9.1
 APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
-RUNTIME_VERSION=20251108
-RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
 
 CLEAN=0
 OUT_DIR="$ROOT/dist"
@@ -59,6 +60,13 @@ APP_ID="$(sed -nE 's/^[[:space:]]*constexpr char kApplicationId\[\] = "([^"]+)";
 [ -f "$ROOT/packaging/linux/$APP_ID.desktop" ] || fail "packaging/linux/$APP_ID.desktop is missing: the desktop file is named after kApplicationId"
 NAME="HardCorpsUprisingRecompiled-v$VERSION-x86_64"
 echo "Hard Corps: Uprising Recompiled $VERSION - Linux AppImage (local only)"
+SOURCE="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if CHANGES="$(git -C "$ROOT" status --porcelain 2>/dev/null)"; then
+  [ -z "$CHANGES" ] || SOURCE="$SOURCE plus uncommitted changes"
+else
+  SOURCE="$SOURCE, working tree state unknown"
+fi
+echo "Source: $SOURCE"
 
 echo "== Tools"
 for tool in clang-20 clang++-20 ld.lld-20 cmake ninja rsync sha256sum strip readelf objdump ldd; do
@@ -154,6 +162,10 @@ done
 grep -q GLIBCXX_3.4.32 "$APPDIR/usr/lib/libstdc++.so.6" || fail "the build machine's libstdc++ is older than GCC 13"
 cp "$WORK/LICENSE" "$WORK/packaging/licenses/ReXGlue-LICENSE.txt" "$WORK/packaging/licenses/THIRD-PARTY-LICENSES.txt" \
   "$WORK/packaging/licenses/THIRD-PARTY-LICENSES-LINUX.txt" "$DOC/"
+for component in type2-runtime libfuse squashfuse Zstandard zlib mimalloc musl libgcc; do
+  grep -qF "AppImage runtime: $component" "$DOC/THIRD-PARTY-LICENSES-LINUX.txt" ||
+    fail "THIRD-PARTY-LICENSES-LINUX.txt has no notice for the AppImage runtime component $component"
+done
 CXX_COPYRIGHT=/usr/share/doc/libstdc++6/copyright
 [ -f "$CXX_COPYRIGHT" ] || fail "missing $CXX_COPYRIGHT (the license of the bundled C++ runtime)"
 cp "$CXX_COPYRIGHT" "$DOC/libstdc++-copyright.txt"
@@ -245,17 +257,17 @@ echo "== AppImage"
 TOOLS="$WORK/tools/appimage"
 mkdir -p "$TOOLS"
 TOOL="$TOOLS/appimagetool-$APPIMAGETOOL_VERSION-x86_64.AppImage"
-RUNTIME="$TOOLS/runtime-$RUNTIME_VERSION-x86_64"
+RUNTIME="$TOOLS/runtime-hcu-x86_64"
 download "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage" \
   "$TOOL" "$APPIMAGETOOL_SHA256"
-download "https://github.com/AppImage/type2-runtime/releases/download/$RUNTIME_VERSION/runtime-x86_64" \
-  "$RUNTIME" "$RUNTIME_SHA256"
+bash "$ROOT/tools/build-appimage-runtime.sh" "$RUNTIME" "$WORK/appimage-runtime"
 chmod +x "$TOOL"
 mkdir -p "$OUT_DIR"
 OUT="$OUT_DIR/$NAME.AppImage"
 rm -f "$OUT"
 ARCH=x86_64 "$TOOL" --appimage-extract-and-run --no-appstream --runtime-file "$RUNTIME" "$APPDIR" "$OUT" >/dev/null
 chmod 755 "$OUT"
+bash "$ROOT/tools/build-appimage-runtime.sh" --check "$OUT"
 (cd "$OUT_DIR" && sha256sum "$NAME.AppImage" > "$NAME.sha256")
 
 echo
@@ -264,5 +276,6 @@ echo " APPIMAGE READY (nothing was published)"
 echo "===================================================="
 echo "  AppImage: $OUT ($(du -h "$OUT" | cut -f1))"
 echo "  SHA-256:  $(cut -d' ' -f1 "$OUT_DIR/$NAME.sha256")"
+echo "  Source:   $SOURCE"
 echo "  Contents:"
 echo "$EXPECTED" | sed 's/^/    /'
