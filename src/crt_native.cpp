@@ -18,6 +18,13 @@ bool IsPlainForwardCopy(uint32_t dest, uint32_t source, uint32_t size) {
 // and none of it is the GPU register window, which plain stores would bypass.
 bool IsNativeRange(uint32_t address, uint32_t size) {
   const uint64_t end = uint64_t(address) + size;
+#if defined(__SWITCH__)
+  // ponytail: physical memory (0xA0000000 and up) keeps the guest copy, whose stores mark the dirty
+  // pages the GPU write tracking reads (switch/host/memory_nx.cpp); mark the range here if it shows up hot.
+  if (end > 0xA0000000ull) {
+    return false;
+  }
+#endif
   return end <= 0x100000000ull && (address >= 0xE0000000u || end <= 0xE0000000ull) &&
          (end <= 0x7F000000ull || address >= 0x80000000u);
 }

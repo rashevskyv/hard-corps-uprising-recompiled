@@ -6,6 +6,11 @@ project(hard_corps_uprising VERSION 0.6.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(NINTENDO_SWITCH)
+    include(switch/switch.cmake)
+    return()
+endif()
+
 # Where tools/codegen.ps1 and tools/package-linux.sh unpack the pinned SDK.
 if(WIN32)
     set(HCU_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/win-amd64")
