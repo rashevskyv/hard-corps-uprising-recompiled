@@ -33,7 +33,7 @@ fi
 
 COUNT=$(git -c safe.directory="*" -C "$GIT_DIR" rev-list --count HEAD 2>/dev/null || echo 0)
 SHA=$(git -c safe.directory="*" -C "$GIT_DIR" rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
-DIRTY=$(git -c safe.directory="*" -C "$GIT_DIR" status --porcelain 2>/dev/null | grep -q . && echo "+" || true)
+DIRTY=$(git -c safe.directory="*" -c core.autocrlf=true -C "$GIT_DIR" status --porcelain 2>/dev/null | grep -q . && echo "+" || true)
 VERSION="0.$COUNT.$SHA$DIRTY"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 mkdir -p "$BUILD"
