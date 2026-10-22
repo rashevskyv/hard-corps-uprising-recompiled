@@ -9,3 +9,7 @@ packaging/linux/*.desktop text eol=lf
 # The runtime patches are applied with git apply on both platforms.
 patches/rexglue-sdk/* text eol=lf
 patches/appimage-runtime/* text eol=lf
+
+# The Switch build runs in WSL.
+switch/** text eol=lf
+tools/nro_nacp.py text eol=lf
