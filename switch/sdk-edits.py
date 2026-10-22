@@ -1039,3 +1039,10 @@ edit('src/graphics/command_processor.cpp', [
      '          rex::thread::MaybeYield();' + NL + '          ++unmatched_poll_count;' + NL),
 ])
 print('changed (hcu):', *changed, sep=NL + '  ')
+
+# 0006 RtlEnterCriticalSection spin: __builtin_arm_yield is clang's; GCC (devkitA64) takes the instruction.
+edit('src/kernel/xboxkrnl/xboxkrnl_rtl.cpp', [
+    ('#elif defined(__aarch64__)' + NL + '  __builtin_arm_yield();' + NL,
+     '#elif defined(__aarch64__)' + NL + '  __asm__ volatile("yield");' + NL),
+])
+print('changed (hcu 0006):', *changed, sep=NL + '  ')
