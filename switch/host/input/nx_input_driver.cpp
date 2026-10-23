@@ -1,5 +1,7 @@
 #include <rex/input/nx/nx_input_driver.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <rex/input/flags.h>
@@ -83,12 +85,83 @@ X_RESULT NXInputDriver::GetDeviceCapabilities(DeviceId id, uint32_t flags, X_INP
   return X_ERROR_SUCCESS;
 }
 
+// Scheduled presses from sdmc:/switch/hcu/pad.txt, one per line: "<seconds>:<BUTTON>[+BUTTON][:<hold ms>]"
+// (START BACK A B X Y LB RB LT RT UP DOWN LEFT RIGHT LS RS; the hold defaults to 200 ms), seconds
+// from the driver's start. Test automation in Eden and on the console: the keyboard in Eden needs
+// focus, this does not. A "#" starts a comment.
+void NXInputDriver::LoadSchedule() {
+  schedule_loaded_ = true;
+  t0_tick_ = armGetSystemTick();
+  FILE* fp = std::fopen("sdmc:/switch/hcu/pad.txt", "r");
+  if (!fp) return;
+  struct Name {
+    const char* name;
+    uint16_t bit;
+  };
+  static const Name names[] = {{"START", X_INPUT_GAMEPAD_START}, {"BACK", X_INPUT_GAMEPAD_BACK},
+                               {"A", X_INPUT_GAMEPAD_A},         {"B", X_INPUT_GAMEPAD_B},
+                               {"X", X_INPUT_GAMEPAD_X},         {"Y", X_INPUT_GAMEPAD_Y},
+                               {"LB", X_INPUT_GAMEPAD_LEFT_SHOULDER}, {"RB", X_INPUT_GAMEPAD_RIGHT_SHOULDER},
+                               {"UP", X_INPUT_GAMEPAD_DPAD_UP},  {"DOWN", X_INPUT_GAMEPAD_DPAD_DOWN},
+                               {"LEFT", X_INPUT_GAMEPAD_DPAD_LEFT}, {"RIGHT", X_INPUT_GAMEPAD_DPAD_RIGHT},
+                               {"LS", X_INPUT_GAMEPAD_LEFT_THUMB}, {"RS", X_INPUT_GAMEPAD_RIGHT_THUMB}};
+  char line[128];
+  while (std::fgets(line, sizeof(line), fp)) {
+    if (line[0] == '#' || line[0] == '\n') continue;
+    char* p = line;
+    double seconds = std::strtod(p, &p);
+    if (*p != ':') continue;
+    p++;
+    Scheduled s{};
+    s.start_tick = t0_tick_ + armNsToTicks(uint64_t(seconds * 1e9));
+    uint32_t hold_ms = 200;
+    char* buttons = p;
+    char* colon = std::strchr(p, ':');
+    if (colon) {
+      *colon = 0;
+      hold_ms = uint32_t(std::strtoul(colon + 1, nullptr, 10));
+    }
+    for (char* tok = std::strtok(buttons, "+ \r\n"); tok; tok = std::strtok(nullptr, "+ \r\n")) {
+      for (const Name& n : names) {
+        if (std::strcmp(tok, n.name) == 0) s.buttons |= n.bit;
+      }
+      if (std::strcmp(tok, "LT") == 0) s.left_trigger = true;
+      if (std::strcmp(tok, "RT") == 0) s.right_trigger = true;
+    }
+    s.end_tick = s.start_tick + armNsToTicks(uint64_t(hold_ms) * 1000000ull);
+    schedule_.push_back(s);
+  }
+  std::fclose(fp);
+  std::printf("[nx] pad: %zu scheduled presses from pad.txt\n", schedule_.size());
+  std::fflush(stdout);
+}
+
 X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
   if (id != kPad) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
+  if (!schedule_loaded_) LoadSchedule();
   padUpdate(&pad_);
-  const uint64_t held = padGetButtons(&pad_);
+  uint64_t held = padGetButtons(&pad_);
+  uint16_t scheduled = 0;
+  bool scheduled_lt = false, scheduled_rt = false;
+  if (!schedule_.empty()) {
+    const uint64_t now = armGetSystemTick();
+    for (Scheduled& s : schedule_) {
+      if (now >= s.start_tick && now < s.end_tick) {
+        scheduled |= s.buttons;
+        scheduled_lt |= s.left_trigger;
+        scheduled_rt |= s.right_trigger;
+        if (!s.logged) {
+          s.logged = true;
+          std::printf("[nx] pad: scheduled press buttons 0x%04X at %llu s\n", s.buttons,
+                      (unsigned long long)(armTicksToNs(now - t0_tick_) / 1000000000ull));
+          std::fflush(stdout);
+        }
+      }
+    }
+    if (scheduled || scheduled_lt || scheduled_rt) held ^= 0x8000000000000000ull;  // a change: a new packet
+  }
   const HidAnalogStickState left = padGetStickPos(&pad_, 0);
   const HidAnalogStickState right = padGetStickPos(&pad_, 1);
   if (out_state) {
@@ -97,9 +170,9 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     for (const ButtonMap& m : kButtons) {
       if (held & m.nx) buttons |= m.x360;
     }
-    out_state->gamepad.buttons = buttons;
-    out_state->gamepad.left_trigger = (held & HidNpadButton_ZL) ? 0xFF : 0;
-    out_state->gamepad.right_trigger = (held & HidNpadButton_ZR) ? 0xFF : 0;
+    out_state->gamepad.buttons = buttons | scheduled;
+    out_state->gamepad.left_trigger = (held & HidNpadButton_ZL) || scheduled_lt ? 0xFF : 0;
+    out_state->gamepad.right_trigger = (held & HidNpadButton_ZR) || scheduled_rt ? 0xFF : 0;
     out_state->gamepad.thumb_lx = ClampStick(left.x);
     out_state->gamepad.thumb_ly = ClampStick(left.y);
     out_state->gamepad.thumb_rx = ClampStick(right.x);

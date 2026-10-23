@@ -69,10 +69,12 @@ constexpr uint32_t kFrames = 2;
 constexpr uint32_t kFrameDataBytes = 24u << 20;  // vertex, index and uniform data of one frame
 constexpr uint32_t kFrameCmdBytes = 4u << 20;
 constexpr uint32_t kStagingBytes = 24u << 20;    // texture uploads of one frame
-constexpr uint32_t kImagePoolBytes = 224u << 20;
+// ponytail: a bump pool, nothing is freed (the title 132 MB, the menu 185 MB): a free list with
+// eviction of textures not bound for a while is the upgrade when a stage fills it.
+constexpr uint32_t kImagePoolBytes = 448u << 20;
 constexpr uint32_t kCodePoolBytes = 4u << 20;
 constexpr uint32_t kMaxImageDescriptors = 512;
-constexpr uint32_t kSamplerCount = 8;
+constexpr uint32_t kSamplerCount = 16;  // min filter x mag filter x wrap x x wrap y
 constexpr uint32_t kPresentWidth = 1280;
 constexpr uint32_t kPresentHeight = 720;
 constexpr uint32_t kEdramTiles = 2048;  // 10 MB of 5120-byte tiles (80 x 16 x 32 bit)
@@ -301,7 +303,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (!queue_) { Log("dkQueueCreate failed"); return false; }
     if (!code_.Create(device_, kCodePoolBytes, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code) ||
         !images_.Create(device_, kImagePoolBytes, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image) ||
-        !descriptors_.Create(device_, DK_MEMBLOCK_ALIGNMENT * 4 * kFrames + DK_MEMBLOCK_ALIGNMENT, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached) ||
+        !descriptors_.Create(device_, DK_MEMBLOCK_ALIGNMENT * 4 * kFrames + DK_MEMBLOCK_ALIGNMENT * 2, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached) ||
         !cmdmem_.Create(device_, kFrameCmdBytes * kFrames, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)) {
       Log("memory block creation failed");
       return false;
@@ -320,13 +322,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
       f.desc_offset = i * kMaxImageDescriptors * sizeof(DkImageDescriptor);
     }
     sampler_desc_offset_ = kFrames * kMaxImageDescriptors * sizeof(DkImageDescriptor);
-    // Samplers: filter (nearest, linear) x wrap x (clamp, repeat) x wrap y (clamp, repeat).
+    // Samplers: min filter (bit 3) x mag filter (bit 2) x wrap x (bit 1) x wrap y (bit 0); the text
+    // lost thin strokes when its minification took the nearest magnification filter.
     for (uint32_t i = 0; i < kSamplerCount; i++) {
       DkSampler s;
       dkSamplerDefaults(&s);
-      DkFilter filter = (i & 4) ? DkFilter_Linear : DkFilter_Nearest;
-      s.minFilter = filter;
-      s.magFilter = filter;
+      s.minFilter = (i & 8) ? DkFilter_Linear : DkFilter_Nearest;
+      s.magFilter = (i & 4) ? DkFilter_Linear : DkFilter_Nearest;
       s.mipFilter = DkMipFilter_None;
       s.wrapMode[0] = (i & 2) ? DkWrapMode_Repeat : DkWrapMode_ClampToEdge;
       s.wrapMode[1] = (i & 1) ? DkWrapMode_Repeat : DkWrapMode_ClampToEdge;
@@ -575,6 +577,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufBindVtxBufferState(cmd, buffers, buffer_count);
 
     // Textures of the pixel shader.
+    std::string bound_textures;  // for the draw-type log below
     for (const auto& tb : ps->texture_bindings()) {
       auto fetch = regs.GetTextureFetch(tb.fetch_constant);
       TextureInfo info;
@@ -588,10 +591,31 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (!tex) continue;
       uint32_t slot = DescriptorFor(f, tex, tex->from_resolve ? 0 : fetch.swizzle);
       if (slot == UINT32_MAX) continue;
-      uint32_t sampler = (fetch.mag_filter == xenos::TextureFilter::kLinear ? 4 : 0) |
+      uint32_t sampler = (fetch.min_filter == xenos::TextureFilter::kLinear ? 8 : 0) |
+                         (fetch.mag_filter == xenos::TextureFilter::kLinear ? 4 : 0) |
                          (fetch.clamp_x == xenos::ClampMode::kRepeat ? 2 : 0) | (fetch.clamp_y == xenos::ClampMode::kRepeat ? 1 : 0);
+      {
+        // Each texture's first bind, once: what the game draws with (correlates with the uploads).
+        char key[32];
+        std::snprintf(key, sizeof(key), "tex %08X", info.memory.base_address);
+        LogOnce(key, "texture at %08X: %s %ux%u %s endian %u swizzle %03X filters min %u mag %u clamp %u/%u (%u KB)%s",
+                info.memory.base_address, info.format_info()->name, info.width + 1, info.height + 1, info.is_tiled ? "tiled" : "linear",
+                uint32_t(fetch.endianness), fetch.swizzle, uint32_t(fetch.min_filter), uint32_t(fetch.mag_filter), uint32_t(fetch.clamp_x),
+                uint32_t(fetch.clamp_y), info.memory.base_size >> 10, tex->from_resolve ? " (a resolve image)" : "");
+      }
       DkResHandle handle = dkMakeTextureHandle(slot, sampler);
       dkCmdBufBindTextures(cmd, DkStage_Fragment, tb.fetch_constant, &handle, 1);
+      char t[48];
+      std::snprintf(t, sizeof(t), " tf%u=%08X(%ux%u)", tb.fetch_constant, info.memory.base_address, tex->width, tex->height);
+      bound_textures += t;
+    }
+    {
+      // Each shader pair's first draw with each texture set, once (the texture bases name the layer).
+      char key[160];
+      std::snprintf(key, sizeof(key), "pairtex %016llX %016llX%s", (unsigned long long)vs->ucode_data_hash(),
+                    (unsigned long long)ps->ucode_data_hash(), bound_textures.c_str());
+      LogOnce(key, "draw VS %016llX PS %016llX prim %u n=%u:%s", (unsigned long long)vs->ucode_data_hash(),
+              (unsigned long long)ps->ucode_data_hash(), uint32_t(prim_type), index_count, bound_textures.empty() ? " no textures" : bound_textures.c_str());
     }
 
     // Uniforms: the ALU constants and the system constants, per stage.

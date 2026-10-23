@@ -56,8 +56,9 @@ int main(int argc, char* argv[]) {
       "--fullscreen=true",
       "--log_file=sdmc:/switch/hcu/hcu_rex_log.txt",
       "--gpu_plugin=xenos",
-      // config/hard_corps_uprising.toml: the full (purchased) license, the 16:9 Original guest video mode.
-      "--license_mask=1",
+      // The full XBLA licence (the SDK's default 0 made the game run as a trial: "Not available in the trial").
+      "--license_mask=4294967295",
+      // config/hard_corps_uprising.toml: the 16:9 Original guest video mode.
       "--video_mode_width=853",
       "--video_mode_height=480",
   };
