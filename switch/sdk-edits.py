@@ -1265,3 +1265,19 @@ for f in ('src/graphics/vulkan/render_target_cache.cpp', 'src/graphics/vulkan/te
     edit(f, [('#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL,
               '#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL + '#include <atomic>' + NL)], must=False)
 print('changed (27):', *changed, sep=NL + '  ')
+
+# --- Shader::DumpUcode (the deko3d backend's shaders/missing/ dumps, --dump_shaders): absolute() of an
+# sdmc:/ path prepends "/" on newlib and create_directories then throws (std::terminate at the first
+# missing shader, HCU Eden 0.92). Keep the path as given and create the directory without throwing.
+edit('src/graphics/pipeline/shader/shader.cpp', [
+    ('    target_path = std::filesystem::absolute(target_path);' + NL +
+     '    std::filesystem::create_directories(target_path);' + NL,
+     '#if REX_PLATFORM_SWITCH' + NL +
+     '    std::error_code nx_ec;' + NL +
+     '    std::filesystem::create_directories(target_path, nx_ec);  // sdmc:/... is absolute already' + NL +
+     '#else' + NL +
+     '    target_path = std::filesystem::absolute(target_path);' + NL +
+     '    std::filesystem::create_directories(target_path);' + NL +
+     '#endif' + NL),
+])
+print('changed (DumpUcode):', *changed, sep=NL + '  ')
