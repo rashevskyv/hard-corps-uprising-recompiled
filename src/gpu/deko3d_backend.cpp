@@ -161,6 +161,7 @@ struct HostImage {
   uint32_t guest_base = 0;    // textures and resolve destinations
   uint32_t edram_base = 0, edram_pitch = 0;  // render targets
   std::unordered_map<HostImage*, uint32_t> merged;  // depth textures: piece image -> its content serial when copied in
+  uint32_t resolve_swap = 0;  // the swap count when a resolve last filled this image (0 = never)
   uint32_t merge_epoch = 0;  // depth textures: the depth resolve count when the pieces were last looked at
 };
 
@@ -622,9 +623,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
         // Each texture's first bind, once: what the game draws with (correlates with the uploads).
         char key[32];
         std::snprintf(key, sizeof(key), "tex %08X", info.memory.base_address);
-        LogOnce(key, "texture at %08X: %s %ux%u %s endian %u swizzle %03X filters min %u mag %u (instr %u/%u) clamp %u/%u (%u KB)%s",
+        LogOnce(key, "texture at %08X: %s %ux%u %s endian %u swizzle %03X exp_adjust %d filters min %u mag %u (instr %u/%u) clamp %u/%u (%u KB)%s",
                 info.memory.base_address, info.format_info()->name, info.width + 1, info.height + 1, info.is_tiled ? "tiled" : "linear",
-                uint32_t(fetch.endianness), fetch.swizzle, uint32_t(fetch.min_filter), uint32_t(fetch.mag_filter),
+                uint32_t(fetch.endianness), fetch.swizzle, int(fetch.exp_adjust), uint32_t(fetch.min_filter), uint32_t(fetch.mag_filter),
                 uint32_t(tb.fetch_instr.attributes.min_filter), uint32_t(tb.fetch_instr.attributes.mag_filter), uint32_t(fetch.clamp_x),
                 uint32_t(fetch.clamp_y), info.memory.base_size >> 10, tex->from_resolve ? " (a resolve image)" : "");
       }
@@ -1321,6 +1322,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
       dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
       resized->from_resolve = img->from_resolve;
+      resized->resolve_swap = img->resolve_swap;
       resized->content_serial = img->content_serial;
       resized->checked_serial = img->checked_serial;
       resized->guest_base = base;
@@ -1401,6 +1403,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (img->checked_serial == serial_) return img;
     img->reversed_channels = reversed;  // already checked for this draw
     img->checked_serial = serial_;
+    // A resolve destination bound in the swap that resolved it holds what the GPU just drew. A guest write to its memory since
+    // is not for this frame: the guest runs ahead of the command processor and prepares the next frame's memory (HCU's blur
+    // chain read back as black or noise).
+    if (img->from_resolve && img->resolve_swap == swaps_ + 1) return img;
     // Never filled, or written by the guest (or a file read) after the upload / resolve that filled it.
     if (img->content_serial && !MemoryChanged(*img, base, info.memory.base_size) && (!always_upload_ || img->from_resolve)) return img;
     // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
@@ -1744,6 +1750,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (!dd) return true;
       dd->from_resolve = true;
       dd->content_serial = serial_;
+      dd->resolve_swap = swaps_ + 1;
       depth_resolves_++;
       if (x + w > dsrc->width) w = x < dsrc->width ? dsrc->width - x : 0;
       if (y + h > dsrc->height) h = y < dsrc->height ? dsrc->height - y : 0;
@@ -1781,6 +1788,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (!dst) return true;
     dst->from_resolve = true;
     dst->content_serial = serial_;
+    dst->resolve_swap = swaps_ + 1;
     dst->mem_bytes = dest_pitch * dest_height * 4;
     dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
     if (x + w > src->width) w = x < src->width ? src->width - x : 0;
