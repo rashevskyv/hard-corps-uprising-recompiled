@@ -160,6 +160,7 @@ struct HostImage {
   uint32_t guest_base = 0;    // textures and resolve destinations
   uint32_t edram_base = 0, edram_pitch = 0;  // render targets
   std::unordered_map<HostImage*, uint32_t> merged;  // depth textures: piece image -> its content serial when copied in
+  uint32_t merge_epoch = 0;  // depth textures: the depth resolve count when the pieces were last looked at
 };
 
 class DkShaderObj : public Shader {
@@ -520,10 +521,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     DkCmdBuf cmd = f.cmdbuf;
     {
       // Each shader pair's first draw, once: the state a new kind of draw comes with.
-      char key[48];
-      std::snprintf(key, sizeof(key), "pair %016llX %016llX", (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash());
       auto blend = regs.Get<reg::RB_BLENDCONTROL>();
-      if (!logged_.count(key)) {
+      if (First(vs->ucode_data_hash() * 0x9E3779B97F4A7C15ull ^ ps->ucode_data_hash())) {
+        char key[48];
+        std::snprintf(key, sizeof(key), "pair %016llX %016llX", (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash());
         LogOnce(key, "draw VS %016llX PS %016llX: prim %u n=%u%s, blend %u/%u op %u, mask %x, z %u/%u func %u, %zu vfetch %zu tfetch",
                 (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash(), uint32_t(prim_type), index_count,
                 index_buffer_info ? " indexed" : "", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend),
@@ -558,9 +559,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
     // Textures of the pixel shader (before the render targets: a new image is cleared on creation, which
     // rebinds the targets).
-    std::string bound_textures;  // for the draw-type log below
+    std::string bound_textures;  // for the draw-type log below: built only when it is printed
     bool textures_ok = true;
-    for (const auto& tb : ps->texture_bindings()) {
+    // A fetch constant can be read by several tfetch instructions (HCU's shadow filter reads one nine times): one
+    // binding per constant slot, the last instruction's sampler (what the loop did before: the last bind won).
+    const auto& tbs = ps->texture_bindings();
+    uint32_t last_of[32];
+    uint64_t set_key = vs->ucode_data_hash() * 0x9E3779B97F4A7C15ull ^ ps->ucode_data_hash() * 0xC2B2AE3D27D4EB4Full;
+    for (size_t i = 0; i < tbs.size(); i++) {
+      if (tbs[i].fetch_constant < 32) last_of[tbs[i].fetch_constant] = uint32_t(i);
+      set_key = (set_key ^ (uint64_t(regs.GetTextureFetch(tbs[i].fetch_constant).base_address) << 5 | tbs[i].fetch_constant)) * 0x100000001B3ull;
+    }
+    const bool first_set = First(set_key);
+    bool want_text = first_set;
+#ifdef HCU_DK_GL
+    want_text = want_text || TraceFrame();
+#endif
+    for (size_t ti = 0; ti < tbs.size(); ti++) {
+      const auto& tb = tbs[ti];
+      if (tb.fetch_constant < 32 && last_of[tb.fetch_constant] != ti) continue;
       auto fetch = regs.GetTextureFetch(tb.fetch_constant);
       TextureInfo info;
       // 1D textures are 2D textures of height 1 on the Xenos (the shaders sample them so).
@@ -584,7 +601,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       uint32_t slot = DescriptorFor(f, tex, swizzle);
       if (slot == UINT32_MAX) { textures_ok = false; continue; }
       uint32_t sampler = SamplerIndex(fetch, tb.fetch_instr);
-      {
+      if (First(0xA5A5000000000000ull ^ info.memory.base_address)) {
         // Each texture's first bind, once: what the game draws with (correlates with the uploads).
         char key[32];
         std::snprintf(key, sizeof(key), "tex %08X", info.memory.base_address);
@@ -620,12 +637,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
         int n = std::snprintf(pal, sizeof(pal), "T   palette %08X endian %u swz %03X:", info.memory.base_address, uint32_t(fetch.endianness), fetch.swizzle);
         for (uint32_t i = 0; i < 12 && n < 180; i++) n += std::snprintf(pal + n, sizeof(pal) - n, " %08X", __builtin_bswap32(pw[i]));
         Log("%s", pal);
+        bound_textures += t;
       } else
 #endif
-      std::snprintf(t, sizeof(t), " tf%u=%08X(%ux%u)", tb.fetch_constant, info.memory.base_address, tex->width, tex->height);
-      bound_textures += t;
+      if (want_text) {
+        std::snprintf(t, sizeof(t), " tf%u=%08X(%ux%u)", tb.fetch_constant, info.memory.base_address, tex->width, tex->height);
+        bound_textures += t;
+      }
     }
-    {
+    if (first_set) {
       // Each shader pair's first draw with each texture set, once (the texture bases name the layer).
       char key[160];
       std::snprintf(key, sizeof(key), "pairtex %016llX %016llX%s", (unsigned long long)vs->ucode_data_hash(),
@@ -1285,6 +1305,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // memory of one 2048x2048 texture) and sampled as that one texture. Each resolve made its own depth
   // image at its own address; the texture takes the ones resolved after its own contents at their rows.
   void MergeDepthPieces(Frame& f, HostImage* img) {
+    if (img->merge_epoch == depth_resolves_) return;  // no depth resolve since the last look (a draw binds this texture nine times)
+    img->merge_epoch = depth_resolves_;
     const uint32_t stride = ((img->width + 31) & ~31u) * 32 * 4;  // bytes of one row of 32x32 tiles
     for (auto& it : guest_images_) {
       HostImage* p = it.second;
@@ -1521,8 +1543,23 @@ class Deko3dCommandProcessor : public CommandProcessor {
     uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
     uint32_t sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
     if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
-    std::memcpy(f.data.cpu + vs_off, &regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X], 4096);
-    std::memcpy(f.data.cpu + ps_off, &regs.values[XE_GPU_REG_SHADER_CONSTANT_256_X], 4096);
+    // Only the float constants a shader reads (its register map), in runs: most sprite shaders read six of
+    // 256 and the buffer is write-combined memory. Dynamic addressing (c[N + a0]) copies all of them.
+    auto copy_constants = [](uint8_t* dst, const uint32_t* src, const Shader::ConstantRegisterMap& m) {
+      if (m.float_dynamic_addressing) { std::memcpy(dst, src, 4096); return; }
+      for (uint32_t w = 0; w < 4; w++) {
+        uint64_t bits = m.float_bitmap[w];
+        while (bits) {
+          uint32_t lo = uint32_t(__builtin_ctzll(bits));
+          uint64_t run = bits >> lo;
+          uint32_t len = ~run == 0 ? 64 - lo : uint32_t(__builtin_ctzll(~run));
+          std::memcpy(dst + (w * 64 + lo) * 16, src + (w * 64 + lo) * 4, len * 16);
+          bits = len + lo >= 64 ? 0 : bits & ~(((uint64_t(1) << len) - 1) << lo);
+        }
+      }
+    };
+    copy_constants(f.data.cpu + vs_off, &regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X], vs->constant_register_map());
+    copy_constants(f.data.cpu + ps_off, &regs.values[XE_GPU_REG_SHADER_CONSTANT_256_X], ps->constant_register_map());
     SysConstants sys{};
     for (int i = 0; i < 3; i++) {
       sys.ndc_scale[i] = vi.ndc_scale[i];
@@ -1539,8 +1576,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
     DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
     dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
     dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
-    (void)vs;
-    (void)ps;
     return true;
   }
 
@@ -1667,6 +1702,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (!dd) return true;
       dd->from_resolve = true;
       dd->content_serial = serial_;
+      depth_resolves_++;
       if (x + w > dsrc->width) w = x < dsrc->width ? dsrc->width - x : 0;
       if (y + h > dsrc->height) h = y < dsrc->height ? dsrc->height - y : 0;
       if (dx + w > dd->width) w = dx < dd->width ? dd->width - dx : 0;
@@ -1829,6 +1865,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_target_ = false;
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
+  uint32_t depth_resolves_ = 0;  // depth resolves so far (MergeDepthPieces looks again when it changed)
   std::string shader_dir_;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
@@ -1839,6 +1876,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   HostImage* bound_color_ = nullptr;
   HostImage* bound_depth_ = nullptr;
   std::unordered_set<std::string> logged_;
+  std::unordered_set<uint64_t> seen_;  // integer keys of the per-draw first-time logs (no string formatting in the draw path)
+  bool First(uint64_t key) { return seen_.insert(key).second; }
   uint32_t swaps_ = 0, draws_ = 0, skipped_ = 0, missing_draws_ = 0, missing_shaders_ = 0, clears_ = 0, resolves_ = 0;
   uint32_t image_count_ = 0, uploads_ = 0, reuploads_ = 0;
   uint64_t upload_bytes_ = 0;
