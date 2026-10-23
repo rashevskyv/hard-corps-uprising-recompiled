@@ -51,7 +51,9 @@ Neither was seen on Linux in 5 minutes. If it appears, send the screenshot, its 
 
 ## 6. Speed
 
-Send the `[nx] fps` lines (stage, 60 s) and the `[dk] swap #N: ... frame: ...` lines. A stage frame on Linux is about
+Send the `[nx] fps` lines (stage, 60 s) and the `[dk] swap #N: ...` lines (two per 60 swaps). The second one is new:
+`per frame X ms draws, ... fence wait, ... acquire, ... submit`. A long fence wait means the GPU is the limit. A long
+draws time means the command processor thread is. On Linux (x86, no GPU) the draws take 1.6 to 2.4 ms per frame. A stage frame on Linux is about
 250 draws, 10 clears, 31 resolves, 0 to 7 texture uploads and 3 MB of vertex data. Eden ran 30 fps at 0.122.
 The MISSION 1 card with scanlines: the hologram panels have them by design. Compare with the reference.
 

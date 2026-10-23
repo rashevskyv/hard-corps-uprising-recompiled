@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -161,6 +162,15 @@ struct HostImage {
   uint32_t edram_base = 0, edram_pitch = 0;  // render targets
   std::unordered_map<HostImage*, uint32_t> merged;  // depth textures: piece image -> its content serial when copied in
   uint32_t merge_epoch = 0;  // depth textures: the depth resolve count when the pieces were last looked at
+};
+
+// Microseconds spent in a scope, added to a counter (the 60-swap log prints the per-frame averages: CPU recording
+// time against the waits for the GPU tells a CPU-bound frame from a GPU-bound one).
+struct ScopedUs {
+  uint64_t& total;
+  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  explicit ScopedUs(uint64_t& t) : total(t) {}
+  ~ScopedUs() { total += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count()); }
 };
 
 class DkShaderObj : public Shader {
@@ -493,6 +503,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
   bool IssueDraw(xenos::PrimitiveType prim_type, uint32_t index_count, IndexBufferInfo* index_buffer_info,
                  bool major_mode_explicit) override {
+    ScopedUs timer(us_draw_);
+    return IssueDrawImpl(prim_type, index_count, index_buffer_info, major_mode_explicit);
+  }
+
+  bool IssueDrawImpl(xenos::PrimitiveType prim_type, uint32_t index_count, IndexBufferInfo* index_buffer_info,
+                     bool major_mode_explicit) {
     if (Skipping()) return true;
     SyncDirtyPages();
     const RegisterFile& regs = *register_file_;
@@ -866,6 +882,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
   bool IssueCopy() override {
+    ScopedUs timer(us_copy_);
     if (Skipping()) return true;
     SyncDirtyPages();
     return Resolve();
@@ -926,7 +943,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
 #endif
     if (swaps_ < 5) Log("swap #%u: acquiring a swapchain image", swaps_ + 1);
-    int slot = dkQueueAcquireImage(queue_, swapchain_);
+    int slot;
+    {
+      ScopedUs timer(us_acquire_);
+      slot = dkQueueAcquireImage(queue_, swapchain_);
+    }
     if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
     HostImage* target = swap_images_[slot];
     dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
@@ -969,7 +990,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
     DkCmdList list = dkCmdBufFinishList(cmd);
-    dkQueueSubmitCommands(queue_, list);
+    {
+      ScopedUs timer(us_submit_);
+      dkQueueSubmitCommands(queue_, list);
+    }
     dkQueueSignalFence(queue_, &f.fence, false);
     f.fenced = true;
     dkQueuePresentImage(queue_, swapchain_, slot);
@@ -999,6 +1023,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
           frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
           f.data.used >> 10, f.staging.used >> 10, image_count_, images_.used >> 20);
+      // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
+      // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
+      uint32_t n = swaps_ <= 3 ? 1 : 60;
+      Log("swap #%u: per frame %.2f ms draws, %.2f ms resolves, %.2f ms fence wait, %.2f ms acquire, %.2f ms submit", swaps_, us_draw_ / 1000.0 / n,
+          us_copy_ / 1000.0 / n, us_fence_ / 1000.0 / n, us_acquire_ / 1000.0 / n, us_submit_ / 1000.0 / n);
+      us_draw_ = us_copy_ = us_fence_ = us_acquire_ = us_submit_ = 0;
     }
     dirty_pages_at_swap_ = dirty_pages_;
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = 0;
@@ -1056,7 +1086,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     Frame& f = frames_[frame_];
     if (f.fenced) {
       if (swaps_ < 6) Log("frame %u: waiting for its fence", frame_);
-      DkResult r = dkFenceWait(&f.fence, 2000000000ll);  // 2 s: a hang is logged, not silent
+      DkResult r;
+      {
+        ScopedUs timer(us_fence_);
+        r = dkFenceWait(&f.fence, 2000000000ll);  // 2 s: a hang is logged, not silent
+      }
       if (r != DkResult_Success) Log("frame %u: fence wait result %d (GPU hang?)", frame_, int(r));
       if (swaps_ < 6) Log("frame %u: fence done", frame_);
       f.fenced = false;
@@ -1110,6 +1144,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // serials. Linux: a hash of the range against the hash taken when the contents were set.
   uint64_t HashMemory(uint32_t physical, uint32_t bytes) const {
 #ifdef HCU_DK_GL
+    static const bool nohash = std::getenv("HCU_DK_NOHASH") != nullptr;  // timing experiment: textures never re-upload
+    if (nohash) return 0;
     const uint8_t* p = memory_->TranslatePhysical(physical);
     uint64_t h = 1469598103934665603ull;
     uint32_t words = bytes / 8;
@@ -1870,6 +1906,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_target_ = false;
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
+  uint64_t us_draw_ = 0, us_copy_ = 0, us_fence_ = 0, us_acquire_ = 0, us_submit_ = 0;  // ScopedUs counters of the 60-swap log
   uint32_t depth_resolves_ = 0;  // depth resolves so far (MergeDepthPieces looks again when it changed)
   std::string shader_dir_;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
