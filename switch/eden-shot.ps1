@@ -47,7 +47,7 @@ public static class Win32 {
   }
 }
 '@
-$eden = 'E:\Switch\Eden\eden.exe'
+$eden = 'E:\Switch\Eden-hcu\eden.exe'
 if (Get-Process eden -ErrorAction SilentlyContinue | Where-Object Path -eq $eden) { throw "Eden ($eden) is already running: not starting a second one" }
 New-Item -ItemType Directory -Force $Out | Out-Null
 # The key schedule: second -> key name.
