@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..3db684f 100644
+index 2205439..c809dfc 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,6 +21,7 @@
@@ -631,7 +631,7 @@ index 2205439..3db684f 100644
    bool UploadTexture(Frame& f, HostImage& img, const TextureInfo& info, xenos::Endian endian) {
      const FormatInfo* fi = info.format_info();
      const uint32_t width = info.width + 1, height = info.height + 1;  // TextureInfo keeps size minus one
-@@ -1293,8 +1613,24 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1293,8 +1613,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
      uint32_t sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
      if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
@@ -640,8 +640,11 @@ index 2205439..3db684f 100644
 +    // Only the float constants a shader reads (its register map), in runs: most sprite shaders read six of
 +    // 256 and the buffer is write-combined memory. Dynamic addressing (c[N + a0]) copies all of them.
 +    auto copy_constants = [](uint8_t* dst, const uint32_t* src, const Shader::ConstantRegisterMap& m) {
++#ifdef HCU_DK_GL
 +      static const bool full = std::getenv("HCU_DK_FULLCONST") != nullptr;  // A/B: every constant, as before the partial copy
-+      if (m.float_dynamic_addressing || full) { std::memcpy(dst, src, 4096); return; }
++      if (full) { std::memcpy(dst, src, 4096); return; }
++#endif
++      if (m.float_dynamic_addressing) { std::memcpy(dst, src, 4096); return; }
 +      for (uint32_t w = 0; w < 4; w++) {
 +        uint64_t bits = m.float_bitmap[w];
 +        while (bits) {
@@ -658,7 +661,7 @@ index 2205439..3db684f 100644
      SysConstants sys{};
      for (int i = 0; i < 3; i++) {
        sys.ndc_scale[i] = vi.ndc_scale[i];
-@@ -1311,8 +1647,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1311,8 +1650,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
      dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
      dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
@@ -667,7 +670,7 @@ index 2205439..3db684f 100644
      return true;
    }
  
-@@ -1387,6 +1721,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1387,6 +1724,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
                  depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
                  color[1], color[2], color[3], z, scale);
        }
@@ -678,7 +681,7 @@ index 2205439..3db684f 100644
        clears_++;
        frame_clears_++;
      }
-@@ -1399,8 +1737,61 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1399,8 +1740,61 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -741,7 +744,7 @@ index 2205439..3db684f 100644
        return true;
      }
      uint32_t src_pitch = info.color_edram_info.pitch_tiles * 80;
-@@ -1412,10 +1803,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1412,10 +1806,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
      (void)dest_pitch; (void)dest_height;
      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
@@ -758,7 +761,7 @@ index 2205439..3db684f 100644
      dst->mem_bytes = dest_pitch * dest_height * 4;
      dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
      if (x + w > src->width) w = x < src->width ? src->width - x : 0;
-@@ -1447,6 +1843,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1447,6 +1846,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
        LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
                x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
      }
@@ -769,7 +772,7 @@ index 2205439..3db684f 100644
      resolves_++;
      frame_resolves_++;
      return true;
-@@ -1537,6 +1937,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1537,6 +1940,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
    bool dump_images_ = false;
@@ -780,7 +783,7 @@ index 2205439..3db684f 100644
    std::string shader_dir_;
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
-@@ -1547,6 +1951,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1547,6 +1954,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
    HostImage* bound_color_ = nullptr;
    HostImage* bound_depth_ = nullptr;
    std::unordered_set<std::string> logged_;
