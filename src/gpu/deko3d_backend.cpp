@@ -953,7 +953,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         LogOnce(key, "texture at %08X (%s %ux%u) bound without an upload: its image already held %s and no page was written since",
                 base, info.format_info()->name, info.width + 1, info.height + 1, img->from_resolve ? "a resolve" : "an upload");
       }
-      if (!always_upload_) return img;
+      if (!always_upload_ || img->from_resolve) return img;  // a resolve image has no guest copy to upload
     }
     // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
     if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
