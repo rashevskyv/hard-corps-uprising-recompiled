@@ -159,6 +159,7 @@ struct HostImage {
   uint32_t checked_serial = 0;  // the draw serial of the last dirty-page check
   uint32_t guest_base = 0;    // textures and resolve destinations
   uint32_t edram_base = 0, edram_pitch = 0;  // render targets
+  std::unordered_map<HostImage*, uint32_t> merged;  // depth textures: piece image -> its content serial when copied in
 };
 
 class DkShaderObj : public Shader {
@@ -576,7 +577,32 @@ class Deko3dCommandProcessor : public CommandProcessor {
       }
       DkResHandle handle = dkMakeTextureHandle(slot, sampler);
       dkCmdBufBindTextures(cmd, DkStage_Fragment, tb.fetch_constant, &handle, 1);
-      char t[48];
+      char t[96];
+#ifdef HCU_DK_GL
+      if (TraceFrame() && std::getenv("HCU_DK_TRACE_DUMP")) {
+        DumpDecoded(info, fetch.endianness, std::getenv("HCU_DK_TRACE_DUMP"), trace_draws_);
+        // What the host image holds at this point of the command stream (R8 shows as red).
+        char hn[300];
+        std::snprintf(hn, sizeof(hn), "%s/h%u-%03u-%08X.ppm", std::getenv("HCU_DK_TRACE_DUMP"), swaps_ + 1, trace_draws_, info.memory.base_address);
+        dkglCmdDumpImage(cmd, &tex->image, hn);
+      }
+      if (TraceFrame() && info.format == xenos::TextureFormat::k_8)
+        Log("T   k_8 tex %08X: %ux%u pitch %u blockpitch %ux%u tiled %d mips %u..%u packed %d mip_addr %08X sizes %u/%u dim %u", info.memory.base_address, info.width + 1,
+            info.height + 1, info.pitch, info.extent.block_pitch_h, info.extent.block_pitch_v, info.is_tiled, info.mip_min_level, info.mip_max_level,
+            info.has_packed_mips, info.memory.mip_address, info.memory.base_size, info.memory.mip_size, uint32_t(info.dimension));
+      if (TraceFrame() && info.width + 1 <= 256 && info.height == 0) {
+        // A palette-sized texture: its memory hash and the number of non-zero words (palette changes between draws).
+        const uint32_t* pw = reinterpret_cast<const uint32_t*>(memory_->TranslatePhysical(info.memory.base_address));
+        uint32_t nz = 0, first = 0;
+        for (uint32_t i = 0; i <= info.width; i++) if (pw[i]) { if (!nz) first = pw[i]; nz++; }
+        std::snprintf(t, sizeof(t), " tf%u=%08X(%ux%u h%04llX nz%u f%08X)", tb.fetch_constant, info.memory.base_address, tex->width, tex->height,
+                      (unsigned long long)(tex->mem_hash & 0xFFFF), nz, first);
+        char pal[200];
+        int n = std::snprintf(pal, sizeof(pal), "T   palette %08X endian %u swz %03X:", info.memory.base_address, uint32_t(fetch.endianness), fetch.swizzle);
+        for (uint32_t i = 0; i < 12 && n < 180; i++) n += std::snprintf(pal + n, sizeof(pal) - n, " %08X", __builtin_bswap32(pw[i]));
+        Log("%s", pal);
+      } else
+#endif
       std::snprintf(t, sizeof(t), " tf%u=%08X(%ux%u)", tb.fetch_constant, info.memory.base_address, tex->width, tex->height);
       bound_textures += t;
     }
@@ -674,21 +700,36 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (index_buffer_info) {
       if (!CopyIndices(f, *index_buffer_info, index_offset, vertex_count)) { skipped_++; return true; }
     }
+    const uint32_t base_vertex = regs.Get<reg::VGT_INDX_OFFSET>().indx_offset;
     for (const auto& vb : vs->vertex_bindings()) {
       if (buffer_count >= DK_MAX_VERTEX_BUFFERS) break;
       auto fetch = regs.GetVertexFetch(vb.fetch_constant);
       uint32_t stride = vb.stride_words * 4;
       uint32_t bytes = vertex_count * stride;
+      // The first vertex: VGT_INDX_OFFSET is added to every vertex index (auto-indexed and indexed draws alike).
+      // HCU draws all of a frame's sprite quads from one vertex buffer, each with its own offset.
+      uint32_t src_off = base_vertex * stride;
       uint32_t avail = fetch.size * 4;
+      avail = avail > src_off ? avail - src_off : 0;
       if (bytes > avail) {
-        LogOnce("vbclamp", "vertex data clamped: %u vertices x %u bytes = %u, fetch constant %u holds %u bytes (VS %016llX)", vertex_count,
-                stride, bytes, vb.fetch_constant, avail, (unsigned long long)vs->ucode_data_hash());
+        LogOnce("vbclamp", "vertex data clamped: %u vertices x %u bytes = %u, fetch constant %u holds %u bytes after offset %u (VS %016llX)", vertex_count,
+                stride, bytes, vb.fetch_constant, avail, base_vertex, (unsigned long long)vs->ucode_data_hash());
         bytes = avail;
       }
       uint32_t off = f.data.Alloc(bytes ? bytes : 16, 64);
       if (off == UINT32_MAX) { LogOnce("ring", "frame data ring full"); skipped_++; return true; }
-      const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2);
+      const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2) + src_off;
       texture_conversion::CopySwapBlock(fetch.endian, f.data.cpu + off, src, bytes);
+#ifdef HCU_DK_GL
+      if (TraceFrame() && vertex_count <= 6) {
+        // The vertices of small draws (sprites) as floats, after the byte swap.
+        std::string v;
+        const float* fl = reinterpret_cast<const float*>(f.data.cpu + off);
+        for (uint32_t i = 0; i < std::min(bytes / 4, 30u); i++) { char b[24]; std::snprintf(b, sizeof(b), " %g", fl[i]); v += b; }
+        Log("T   vf%u n=%u stride %u addr %08X+%u:%s", vb.fetch_constant, vertex_count, stride, fetch.address << 2, src_off, v.c_str());
+        trace_vf_.emplace_back((fetch.address << 2) + src_off, std::min(bytes, 24u));
+      }
+#endif
       dkCmdBufBindVtxBuffer(cmd, buffer_count, f.data.gpu + off, bytes);
       buffers[buffer_count] = DkVtxBufferState{stride, 0};
       for (const auto& a : vb.attributes) {
@@ -736,6 +777,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
     } else {
       dkCmdBufDraw(cmd, prim, index_count, 1, 0, 0);
     }
+#ifdef HCU_DK_GL
+    if (TraceFrame() && std::getenv("HCU_DK_TRACE_DUMP") && (color ? color : depth)->width) {
+      // One picture per draw (HCU_DK_TRACE_DUMP=<dir>): the colour target after the draw, named by swap and draw number.
+      char name[256];
+      std::snprintf(name, sizeof(name), "%s/d%u-%03u.ppm", std::getenv("HCU_DK_TRACE_DUMP"), swaps_ + 1, trace_draws_ - 1);
+      if (color) dkglCmdDumpImage(cmd, &color->image, name);
+    }
+#endif
     draws_++;
     frame_draws_++;
     return true;
@@ -790,6 +839,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
       for (auto& it : guest_images_) if (it.second->width >= 600 && it.second != front) { char n[48]; std::snprintf(n, sizeof(n), "guest %08X%s", it.first, it.second->from_resolve ? " (resolve)" : " (upload)"); queue_dump(n, it.second); }
       dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
     }
+#ifdef HCU_DK_GL
+    if (TraceFrame()) {
+      for (auto& v : trace_vf_) {
+        const uint32_t* w = reinterpret_cast<const uint32_t*>(memory_->TranslatePhysical(v.first));
+        float fl[6];
+        for (int i = 0; i < 6; i++) { uint32_t b = __builtin_bswap32(w[i]); std::memcpy(&fl[i], &b, 4); }
+        Log("T   at the swap, %08X now holds: %g %g %g %g %g %g", v.first, fl[0], fl[1], fl[2], fl[3], fl[4], fl[5]);
+      }
+      trace_vf_.clear();
+    }
+#endif
     if (swaps_ < 5) Log("swap #%u: acquiring a swapchain image", swaps_ + 1);
     int slot = dkQueueAcquireImage(queue_, swapchain_);
     if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
@@ -900,6 +960,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     return list.find("," + std::to_string(swaps_ + 1) + ",") != std::string::npos;
   }
   uint32_t trace_draws_ = 0;
+  std::vector<std::pair<uint32_t, uint32_t>> trace_vf_;
 #endif
 
   // ----- frames ---------------------------------------------------------------------------------
@@ -1152,6 +1213,36 @@ class Deko3dCommandProcessor : public CommandProcessor {
     return img;
   }
 
+  // HCU's shadow maps: three cascades are resolved to three addresses (a tile row of 32 apart in the
+  // memory of one 2048x2048 texture) and sampled as that one texture. Each resolve made its own depth
+  // image at its own address; the texture takes the ones resolved after its own contents at their rows.
+  void MergeDepthPieces(Frame& f, HostImage* img) {
+    const uint32_t stride = ((img->width + 31) & ~31u) * 32 * 4;  // bytes of one row of 32x32 tiles
+    for (auto& it : guest_images_) {
+      HostImage* p = it.second;
+      if (p == img || p->format != DkImageFormat_Z24S8 || !p->from_resolve || it.first <= img->guest_base) continue;
+      uint32_t delta = it.first - img->guest_base;
+      if (delta % stride) continue;
+      uint32_t y = delta / stride * 32;
+      if (y >= img->height) continue;
+      auto m = img->merged.find(p);
+      if (p->content_serial <= img->content_serial) continue;                      // older than the texture's own contents
+      if (m != img->merged.end() && m->second >= p->content_serial) continue;      // already copied in
+      uint32_t w = std::min(p->width, img->width), h = std::min(p->height, img->height - y);
+      DkImageView sv, dv;
+      dkImageViewDefaults(&sv, &p->image);
+      dkImageViewDefaults(&dv, &img->image);
+      DkImageRect sr{0, 0, 0, w, h, 1}, dr{0, y, 0, w, h, 1};
+      dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
+      dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
+      dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
+      img->merged[p] = p->content_serial;
+      char key[64];
+      std::snprintf(key, sizeof(key), "merge %08X %08X", img->guest_base, it.first);
+      LogOnce(key, "depth image at %08X (%ux%u) copied into the texture at %08X at row %u", it.first, p->width, p->height, img->guest_base, y);
+    }
+  }
+
   HostImage* TextureImage(Frame& f, const TextureInfo& info, const xenos::xe_gpu_texture_fetch_t& fetch) {
     DkImageFormat format;
     bool reversed;
@@ -1172,6 +1263,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         img->content_serial = serial_;
         LogOnce("deptex", "depth texture at %08X (%ux%u) sampled before any depth resolve: cleared to 1", base, img->width, img->height);
       }
+      MergeDepthPieces(f, img);
       return img;
     }
     if (img->checked_serial == serial_) return img;
@@ -1244,6 +1336,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
   std::vector<std::pair<HostImage*, std::string>> pending_dumps_;
   std::unordered_map<uint32_t, uint32_t> upload_counts_;
   uint32_t dump_count_ = 0;
+#endif
+
+#ifdef HCU_DK_GL
+  // Trace frames: the decoded texels of an uncompressed texture as <dir>/t<swap>-<draw>-<base>-<w>x<h>-<format>.raw (a CPU reference for the picture).
+  void DumpDecoded(const TextureInfo& info, xenos::Endian endian, const char* dir, uint32_t draw) {
+    const FormatInfo* fi = info.format_info();
+    if (fi->block_width != 1 || fi->block_height != 1) return;
+    uint32_t w = info.width + 1, h = info.height + 1, bpb = fi->bytes_per_block();
+    std::vector<uint8_t> buf(size_t(w) * h * bpb);
+    const uint8_t* src = memory_->TranslatePhysical(info.memory.base_address);
+    if (info.is_tiled) {
+      if (!::hcu::UntileFast(buf.data(), src, w, h, info.extent.block_pitch_h, bpb, static_cast<::hcu::SwapMode>(uint32_t(endian)))) return;
+    } else {
+      for (uint32_t y = 0; y < h; y++) texture_conversion::CopySwapBlock(endian, buf.data() + y * w * bpb, src + y * info.extent.block_pitch_h * bpb, w * bpb);
+    }
+    char name[300];
+    std::snprintf(name, sizeof(name), "%s/t%u-%03u-%08X-%ux%u-%s.raw", dir, swaps_ + 1, draw, info.memory.base_address, w, h, fi->name);
+    if (FILE* fp = std::fopen(name, "wb")) { std::fwrite(buf.data(), 1, buf.size(), fp); std::fclose(fp); }
+  }
 #endif
 
   bool UploadTexture(Frame& f, HostImage& img, const TextureInfo& info, xenos::Endian endian) {

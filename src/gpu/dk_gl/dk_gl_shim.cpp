@@ -1028,3 +1028,8 @@ void dkSamplerDescriptorInitialize(DkSamplerDescriptor* obj, DkSampler const* s)
 }
 
 }  // extern "C"
+
+void dkglCmdDumpImage(DkCmdBuf c, const DkImage* image, const char* path) {
+  std::string p = path;
+  c->ops.push_back([=] { dkglDumpImage(image, p.c_str()); });
+}

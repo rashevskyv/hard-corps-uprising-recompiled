@@ -6,3 +6,5 @@
 void dkShaderInitializeGlsl(DkShader* obj, DkStage stage, const char* text);
 // Writes the image (RGBA8 contents) as a PPM file; debug only.
 void dkglDumpImage(const DkImage* image, const char* path);
+// The same, as a command in the buffer (runs between the draws recorded before and after it).
+void dkglCmdDumpImage(DkCmdBuf cmd, const DkImage* image, const char* path);
