@@ -1,3 +1,16 @@
+diff --git b/switch/eden-deko3d.ps1 a/switch/eden-deko3d.ps1
+index 8d2cf09..7b378f1 100644
+--- b/switch/eden-deko3d.ps1
++++ a/switch/eden-deko3d.ps1
+@@ -17,7 +17,7 @@ Remove-Item "$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log
+ $out = "E:\conker-data\eden-runs\hcu-$version-deko3d"
+ if ($Tag) { $out += "-$Tag" }
+ Write-Output "Eden deko3d: hcu $version for $Seconds s, screenshots every $Every s, keys '$Keys' -> $out"
+-& powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\eden-shot.ps1" -Nro "$dir\hcu.nro" -Out $out -Seconds $Seconds -Every $Every -Keys $Keys
++& powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\eden-shot.ps1" -Nro "$dir\hcu.nro" -Out $out -Seconds $Seconds -Every $Every -Keys "$Keys "  # a trailing space: an empty string would drop the argument
+ New-Item -ItemType Directory -Force $out | Out-Null
+ foreach ($f in @("$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log\eden_log.txt')) {
+     if (Test-Path $f) { Copy-Item $f $out -Force }
 diff --git b/switch/host/include/dlfcn.h a/switch/host/include/dlfcn.h
 index 8fed3c9..e6a3cab 100644
 --- b/switch/host/include/dlfcn.h
