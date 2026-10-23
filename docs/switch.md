@@ -66,12 +66,15 @@ backend, `nopin` turns thread placement off.
 | 0.120.793fc06 | Eden, deko3d, `dk_nodepth` | with the depth test off the level appears: depth is the cause |
 | 0.122.458c237 | Eden, deko3d, 280 s | **first stage renders** (rocks, wreck, airships, depth order right), 30 fps in Eden. Cause: `CompareOp` passed the Xenos compare function through, but Xenos counts from kNever = 0 and deko3d from Never = 1 (LEQUAL was EQUAL). The player sprite looks missing (only a red shape) |
 
+| cloud, Linux | deko3d backend over OpenGL (`docs/LINUX-TEST-HOST.md`) | stage 1, the menus, the pause menu and the character select match the SDK's Vulkan picture. Fixes: start vertex (`VGT_INDX_OFFSET`), depth resolves (shadow maps), stencil, resolve formats. See `docs/PROGRESS-cloud.md`; Eden checks in `docs/EDEN-CHECKLIST.md` |
+
 NVK builds are not run on the console (user decision, 2026-10-23): the renderer is deko3d, Eden is the gate.
 
 ## deko3d renderer
 
 The backend is cvhd-recomp's (`src/gpu/deko3d_backend.cpp`, docs/native-renderer-plan.md section 8 there),
-shared through `switch/sync-cvhd.sh`. The file `sdmc:/switch/hcu/deko3d` selects it. Shaders: the backend
+shared through `switch/sync-cvhd.sh` (now at 7a52b68; `switch/cvhd-local.patch` holds the HCU changes, regenerate it with
+`bash switch/make-local-patch.sh`; the generic fixes are in `docs/for-cvhd-gh/`). The file `sdmc:/switch/hcu/deko3d` selects it. Shaders: the backend
 dumps the ucode of each shader without a DKSH into `sdmc:/switch/hcu/shaders/missing/`;
 `switch/eden-deko3d.ps1` copies them to `/root/hcu/shaders_trace/`, and the next `switch/build.sh`
 translates them (`tools/xenos2glsl.py`, uam) into `out/build/switch/stage/shaders/`.
