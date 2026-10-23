@@ -1,13 +1,15 @@
 # Runs the native-renderer build in Eden with screenshots (the picture gate, CLAUDE.md "Eden before
 # the console"): stages out/build/switch/stage/ (NRO, shaders, the deko3d marker) into Eden's SD,
-# runs eden-shot.ps1, backs the logs up and prints the backend's lines.
+# runs eden-shot.ps1, backs the logs up and prints the backend's lines. Shaders the last run dumped as
+# missing (shaders/missing/) are first kept in /root/hcu/shaders_trace, the translator's input: rebuild
+# (switch/build.sh) and run again until none are missing.
 #   powershell -File switch/eden-deko3d.ps1 [-Seconds 90] [-Every 10]
 param([int]$Seconds = 90, [int]$Every = 10)
 $ErrorActionPreference = 'Stop'
 $dir = 'E:\Switch\Eden\user\sdmc\switch\hcu'
 $stage = '/root/hcu/src/out/build/switch/stage'
 $sd = '/mnt/e/Switch/Eden/user/sdmc/switch/hcu'
-$version = wsl -u root -e bash -lc "set -e; rm -rf $sd/shaders; cp -r $stage/shaders $sd/shaders; cp $stage/hcu.nro $sd/hcu.nro; touch $sd/deko3d; mkdir -p $sd/shaders/missing; grep -o '0[.][0-9]*[.][0-9a-f+]*' /root/hcu/src/out/build/switch/hcu_version.h | head -1"
+$version = wsl -u root -e bash -lc "set -e; mkdir -p /root/hcu/shaders_trace; cp -n $sd/shaders/missing/* /root/hcu/shaders_trace/ 2>/dev/null || true; rm -rf $sd/shaders; cp -r $stage/shaders $sd/shaders; cp $stage/hcu.nro $sd/hcu.nro; touch $sd/deko3d; mkdir -p $sd/shaders/missing; grep -o '0[.][0-9]*[.][0-9a-f+]*' /root/hcu/src/out/build/switch/hcu_version.h | head -1"
 $version = ($version | Select-Object -Last 1).Trim()
 if (-not $version) { throw 'staging failed (no version)' }
 Remove-Item "$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log\eden_log.txt' -ErrorAction SilentlyContinue
