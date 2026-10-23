@@ -553,7 +553,10 @@ edit('resources/templates/codegen/pch_h.inja', [
 ])
 edit('src/system/xfile.cpp', [
     ('#include <rex/system/xfile.h>' + NL,
-     '#include <rex/system/xfile.h>' + NL + '#include <cstring>' + NL + '#include <vector>' + NL),
+     '#include <rex/system/xfile.h>' + NL + '#include <cstring>' + NL + '#include <vector>' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL +
+     '// GPU dirty-page tracking of host writes into guest memory (switch/host/memory_nx.cpp).' + NL +
+     'extern "C" void rex_nx_mark_range(uint32_t guest, uint32_t length);' + NL + '#endif' + NL),
     ('          result = file_->ReadSync(' + NL +
      '              std::span<uint8_t>(' + NL +
      '                  buffer_physical_heap' + NL +
@@ -574,7 +577,8 @@ edit('src/system/xfile.cpp', [
      '          result = file_->ReadSync(std::span<uint8_t>(nx_bounce.data(), buffer_length),' + NL +
      '                                   size_t(byte_offset), &bytes_read);' + NL +
      '          if (XSUCCEEDED(result) && bytes_read) {' + NL +
-     '            std::memcpy(guest_buffer, nx_bounce.data(), bytes_read);' + NL + '          }' + NL +
+     '            std::memcpy(guest_buffer, nx_bounce.data(), bytes_read);' + NL +
+     '            rex_nx_mark_range(buffer_guest_address, uint32_t(bytes_read));' + NL + '          }' + NL +
      '#else' + NL +
      '          result = file_->ReadSync(std::span<uint8_t>(guest_buffer, buffer_length),' + NL +
      '                                   size_t(byte_offset), &bytes_read);' + NL +
@@ -1265,31 +1269,3 @@ for f in ('src/graphics/vulkan/render_target_cache.cpp', 'src/graphics/vulkan/te
     edit(f, [('#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL,
               '#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL + '#include <atomic>' + NL)], must=False)
 print('changed (27):', *changed, sep=NL + '  ')
-
-# --- Shader::DumpUcode (the deko3d backend's shaders/missing/ dumps, --dump_shaders): absolute() of an
-# sdmc:/ path prepends "/" on newlib and create_directories then throws (std::terminate at the first
-# missing shader, HCU Eden 0.92). Keep the path as given and create the directory without throwing.
-edit('src/graphics/pipeline/shader/shader.cpp', [
-    ('    target_path = std::filesystem::absolute(target_path);' + NL +
-     '    std::filesystem::create_directories(target_path);' + NL,
-     '#if REX_PLATFORM_SWITCH' + NL +
-     '    std::error_code nx_ec;' + NL +
-     '    std::filesystem::create_directories(target_path, nx_ec);  // sdmc:/... is absolute already' + NL +
-     '#else' + NL +
-     '    target_path = std::filesystem::absolute(target_path);' + NL +
-     '    std::filesystem::create_directories(target_path);' + NL +
-     '#endif' + NL),
-    # The same code in Shader::DumpUcode itself (the pair above takes the first copy, the translation dump).
-    ('    target_path = std::filesystem::absolute(target_path);' + NL +
-     '    std::filesystem::create_directories(target_path);' + NL + '  }' + NL + NL +
-     '  const char* type_extension',
-     '#if REX_PLATFORM_SWITCH' + NL +
-     '    std::error_code nx_ec;' + NL +
-     '    std::filesystem::create_directories(target_path, nx_ec);  // sdmc:/... is absolute already' + NL +
-     '#else' + NL +
-     '    target_path = std::filesystem::absolute(target_path);' + NL +
-     '    std::filesystem::create_directories(target_path);' + NL +
-     '#endif' + NL + '  }' + NL + NL +
-     '  const char* type_extension'),
-])
-print('changed (DumpUcode):', *changed, sep=NL + '  ')

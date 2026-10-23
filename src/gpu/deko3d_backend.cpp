@@ -9,6 +9,7 @@
 #ifdef __SWITCH__
 #include <switch.h>
 #include <deko3d.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -22,6 +23,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include <rex/cvar.h>
 #include <rex/graphics/command_processor.h>
 #include <rex/graphics/flags.h>
 #include <rex/graphics/graphics_system.h>
@@ -39,6 +41,20 @@
 
 #include "ucode_hash.h"
 
+// Where the DKSH shaders are (tools/xenos2glsl.py + uam, staged by switch/build.sh): a game sets it
+// in its hcu.toml / arguments. Missing shaders are dumped to its missing/ subdirectory. The debug
+// markers are files next to the directory: dk_dump (image readback at swaps 120 and 600),
+// dk_present_rt (present the widest colour render target instead of the front buffer).
+REXCVAR_DEFINE_STRING(deko3d_shader_dir, "sdmc:/switch/hcu/shaders/", "GPU",
+                      "deko3d backend: directory of shader_<ucode hash>.vert|frag.dksh and present.vert|frag.dksh")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// The Switch host layer's dirty-page bytes (switch/host/memory_nx.cpp): one byte per 4 KB page of the
+// physical arena, set by every guest store (the codegen pch) and by host writes into guest memory
+// (file reads). This backend is their only consumer (there is no SharedMemory here).
+extern "C" volatile uint8_t rex_nx_dirty[0x20000];
+extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200];
+
 namespace rex::graphics::deko {
 
 namespace {
@@ -55,7 +71,6 @@ constexpr uint32_t kPresentWidth = 1280;
 constexpr uint32_t kPresentHeight = 720;
 constexpr uint32_t kEdramTiles = 2048;  // 10 MB of 5120-byte tiles (80 x 16 x 32 bit)
 constexpr uint32_t kMaxTargetHeight = 1088;
-const char* const kShaderDir = "sdmc:/switch/hcu/shaders/";
 
 void Log(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void Log(const char* fmt, ...) {
@@ -110,7 +125,8 @@ struct HostImage {
   uint32_t width = 0, height = 0;
   bool is_depth = false;
   bool from_resolve = false;  // host-native channels: the fetch swizzle is not applied
-  bool uploaded = false;
+  uint32_t content_serial = 0;  // the draw serial when the contents were set (upload or resolve); 0 = never
+  uint32_t checked_serial = 0;  // the draw serial of the last dirty-page check
   uint32_t guest_base = 0;    // textures and resolve destinations
   uint32_t edram_base = 0, edram_pitch = 0;  // render targets
 };
@@ -323,21 +339,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkSwapchainMakerDefaults(&sm, device_, nwindowGetDefault(), swap_image_ptrs_, kFrames);
     swapchain_ = dkSwapchainCreate(&sm);
     if (!swapchain_) { Log("dkSwapchainCreate failed"); return false; }
-    present_target_ = access("sdmc:/switch/hcu/dk_present_rt", F_OK) == 0;
-    dump_images_ = access("sdmc:/switch/hcu/dk_dump", F_OK) == 0;  // readback dumps stall the GPU: debug only
-    present_vs_ = LoadDksh(std::string(kShaderDir) + "present.vert.dksh", present_vs_shader_);
-    present_fs_ = LoadDksh(std::string(kShaderDir) + "present.frag.dksh", present_fs_shader_);
-    Log("deko3d backend up: %s present shaders, %u MB images, %u MB data per frame",
-        present_vs_ && present_fs_ ? "with" : "WITHOUT", kImagePoolBytes >> 20, kFrameDataBytes >> 20);
+    shader_dir_ = REXCVAR_GET(deko3d_shader_dir);
+    if (shader_dir_.empty() || shader_dir_.back() != '/') shader_dir_ += '/';
+    size_t cut = shader_dir_.size() >= 2 ? shader_dir_.rfind('/', shader_dir_.size() - 2) : std::string::npos;
+    std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
+    present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
+    dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
+    present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
+    present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
+    Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
+        shader_dir_.c_str(), present_vs_ && present_fs_ ? "with" : "WITHOUT", kImagePoolBytes >> 20, kFrameDataBytes >> 20);
     BeginFrame();
     return true;
   }
 
   void ShutdownContext() override {
     if (queue_) dkQueueWaitIdle(queue_);
-    Log("deko3d backend down: %u swaps, %u draws, %u skipped, %u without shaders, %u clears, %u resolves, %u images (%u MB), %u uploads (%u KB)",
+    Log("deko3d backend down: %u swaps, %u draws, %u skipped, %u without shaders, %u clears, %u resolves, %u images (%u MB), %u uploads (%u KB, %u re-uploads), %llu dirty pages",
         swaps_, draws_, skipped_, missing_draws_, clears_, resolves_, image_count_, images_.peak >> 20, uploads_,
-        uint32_t(upload_bytes_ >> 10));
+        uint32_t(upload_bytes_ >> 10), reuploads_, (unsigned long long)dirty_pages_);
   }
 
   Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address, const uint32_t* host_address,
@@ -349,15 +369,16 @@ class Deko3dCommandProcessor : public CommandProcessor {
     string::StringBuffer disasm;
     shader->AnalyzeUcode(disasm);
     shaders_.emplace(hash, shader);
-    char name[128];
-    std::snprintf(name, sizeof(name), "%sshader_%016llX.%s.dksh", kShaderDir, (unsigned long long)hash,
+    char name[512];
+    std::snprintf(name, sizeof(name), "%sshader_%016llX.%s.dksh", shader_dir_.c_str(), (unsigned long long)hash,
                   shader_type == xenos::ShaderType::kVertex ? "vert" : "frag");
     shader->loaded = LoadDksh(name, shader->shader);
     if (!shader->loaded) {
       missing_shaders_++;
-      Log("no DKSH for %s %016llX (%u dwords at %08X): dumping the ucode to shaders/missing/",
-          shader_type == xenos::ShaderType::kVertex ? "VS" : "PS", (unsigned long long)hash, dword_count, guest_address);
-      shader->DumpUcode(std::string(kShaderDir) + "missing");
+      Log("no DKSH for %s %016llX (%u dwords at %08X): dumping the ucode to %smissing/",
+          shader_type == xenos::ShaderType::kVertex ? "VS" : "PS", (unsigned long long)hash, dword_count, guest_address,
+          shader_dir_.c_str());
+      DumpMissing(*shader);
     } else {
       REXLOG_INFO("[dk] shader {} {:016X} loaded ({} dwords)", shader_type == xenos::ShaderType::kVertex ? "VS" : "PS",
                   hash, dword_count);
@@ -367,6 +388,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
   bool IssueDraw(xenos::PrimitiveType prim_type, uint32_t index_count, IndexBufferInfo* index_buffer_info,
                  bool major_mode_explicit) override {
+    SyncDirtyPages();
     const RegisterFile& regs = *register_file_;
     auto mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
     if (mode == xenos::EdramMode::kCopy) return Resolve();
@@ -500,8 +522,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     for (const auto& tb : ps->texture_bindings()) {
       auto fetch = regs.GetTextureFetch(tb.fetch_constant);
       TextureInfo info;
-      if (!TextureInfo::Prepare(fetch, &info) || info.dimension != xenos::DataDimension::k2DOrStacked) {
-        LogOnce("tex", "texture fetch %u not preparable or not 2D (dim %u)", tb.fetch_constant, uint32_t(fetch.dimension));
+      // 1D textures are 2D textures of height 1 on the Xenos (the shaders sample them so).
+      if (!TextureInfo::Prepare(fetch, &info) ||
+          (info.dimension != xenos::DataDimension::k2DOrStacked && info.dimension != xenos::DataDimension::k1D)) {
+        LogOnce("tex", "texture fetch %u not preparable or not 1D/2D (dim %u)", tb.fetch_constant, uint32_t(fetch.dimension));
         continue;
       }
       HostImage* tex = TextureImage(f, info, fetch);
@@ -529,7 +553,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     return true;
   }
 
-  bool IssueCopy() override { return Resolve(); }
+  bool IssueCopy() override {
+    SyncDirtyPages();
+    return Resolve();
+  }
 
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width, uint32_t frontbuffer_height) override {
     Frame& f = frames_[frame_];
@@ -635,12 +662,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     swaps_++;
     if (swaps_ <= 3 || swaps_ % 60 == 0) {
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
-      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader; data %u KB staging %u KB; images %u (%u MB)",
+      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads; data %u KB staging %u KB; images %u (%u MB)",
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
-          frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, f.data.used >> 10, f.staging.used >> 10, image_count_,
-          images_.used >> 20);
+          frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, f.data.used >> 10, f.staging.used >> 10,
+          image_count_, images_.used >> 20);
     }
-    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = 0;
+    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = 0;
     frame_ = (frame_ + 1) % kFrames;
     BeginFrame();
   }
@@ -666,6 +693,39 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
     bound_color_ = nullptr;
     bound_depth_ = nullptr;
+  }
+
+  // ----- dirty pages ----------------------------------------------------------------------------
+  // Consumes the dirty-page bytes before every draw and stamps each written page with the draw
+  // serial; a texture whose pages were written after the upload or resolve that filled its image
+  // is uploaded again at its next bind (TextureImage). The coarse map makes a clean frame cost 512
+  // byte reads. ponytail: the guest marks a page after the store without a barrier, so a texture
+  // written in the same microsecond as its bind can be uploaded stale once (the next write fixes it).
+  void SyncDirtyPages() {
+    serial_++;
+    const uint64_t* words = reinterpret_cast<const uint64_t*>(const_cast<const uint8_t*>(rex_nx_dirty));
+    for (uint32_t c = 0; c < 0x200; c++) {
+      if (!rex_nx_dirty_coarse[c]) continue;
+      rex_nx_dirty_coarse[c] = 0;
+      for (uint32_t w = c * 32; w < c * 32 + 32; w++) {
+        if (!words[w]) continue;
+        for (uint32_t i = w * 8; i < w * 8 + 8; i++) {
+          if (!rex_nx_dirty[i]) continue;
+          rex_nx_dirty[i] = 0;
+          page_serial_[i] = serial_;
+          dirty_pages_++;
+        }
+      }
+    }
+  }
+
+  bool WrittenSince(uint32_t physical, uint32_t bytes, uint32_t serial) const {
+    uint32_t first = (physical & 0x1FFFFFFFu) >> 12;
+    uint32_t last = ((physical & 0x1FFFFFFFu) + (bytes ? bytes - 1 : 0)) >> 12;
+    for (uint32_t p = first; p <= last && p < page_serial_.size(); p++) {
+      if (page_serial_[p] > serial) return true;
+    }
+    return false;
   }
 
   // ----- images ---------------------------------------------------------------------------------
@@ -741,6 +801,18 @@ class Deko3dCommandProcessor : public CommandProcessor {
     auto it = guest_images_.find(base);
     if (it != guest_images_.end()) {
       HostImage* img = it->second;
+      if (img->format != format) {
+        // The memory was reused with another format (a texture over an old resolve destination or the
+        // reverse): a new image. ponytail: the old image's pool memory is not reclaimed (bump pool);
+        // a free list when the pool fills in a stage.
+        HostImage* fresh = CreateImage(std::max(width, create_w), std::max(height, create_h), format, DkImageFlags_UsageRender, false);
+        if (!fresh) return nullptr;
+        fresh->guest_base = base;
+        Log("image at %08X recreated: format %u -> %u, %ux%u -> %ux%u", base, uint32_t(img->format), uint32_t(format), img->width,
+            img->height, fresh->width, fresh->height);
+        it->second = fresh;
+        return fresh;
+      }
       if (img->width == width && img->height == height) return img;
       if (at_least && width <= img->width && height <= img->height) return img;
       if (at_least) {
@@ -758,7 +830,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
       dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
       resized->from_resolve = img->from_resolve;
-      resized->uploaded = img->uploaded;
+      resized->content_serial = img->content_serial;
+      resized->checked_serial = img->checked_serial;
       resized->guest_base = base;
       Log("image at %08X resized %ux%u -> %ux%u", base, img->width, img->height, width, height);
       it->second = resized;  // the old image's memory stays allocated (bump pool)
@@ -782,9 +855,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // TextureInfo keeps the fetch constant's fields: the size minus one.
     HostImage* img = GuestImage(f, base, info.width + 1, info.height + 1, format, false);
     if (!img) return nullptr;
-    if (img->from_resolve || img->uploaded) return img;
-    if (!UploadTexture(f, *img, info, fetch.endianness)) return nullptr;
-    img->uploaded = true;
+    if (img->checked_serial == serial_) return img;  // already checked for this draw
+    img->checked_serial = serial_;
+    // Never filled, or written by the guest (or a file read) after the upload / resolve that filled it.
+    if (img->content_serial && !WrittenSince(base, info.memory.base_size, img->content_serial)) return img;
+    // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
+    if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
+    if (img->content_serial) {
+      reuploads_++;
+      frame_reuploads_++;
+      if (reuploads_ <= 8) Log("texture at %08X re-uploaded (%s, %ux%u): its memory changed", base,
+                               img->from_resolve ? "was a resolve destination" : "was uploaded before", img->width, img->height);
+    }
+    img->from_resolve = false;
+    img->content_serial = serial_;
     return img;
   }
 
@@ -1002,6 +1086,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, DkImageFormat_RGBA8_Unorm, true, dest_pitch, dest_height);
     if (!dst) return true;
     dst->from_resolve = true;
+    dst->content_serial = serial_;
     if (x + w > src->width) w = x < src->width ? src->width - x : 0;
     if (y + h > src->height) h = y < src->height ? src->height - y : 0;
     if (dx + w > dst->width) w = dx < dst->width ? dst->width - dx : 0;
@@ -1032,6 +1117,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
   // ----- shaders --------------------------------------------------------------------------------
+  // The same two files as Shader::DumpUcode (shader_<hash>.ucode.bin.<ext> and the disassembly
+  // shader_<hash>.ucode.<ext>, the translator's input), written with stdio: the SDK's version goes
+  // through std::filesystem::absolute, which turns sdmc:/x into /sdmc:/x on newlib (finding 0.41).
+  void DumpMissing(const DkShaderObj& shader) {
+    std::string dir = shader_dir_ + "missing/";
+    mkdir(dir.c_str(), 0777);
+    const char* ext = shader.type() == xenos::ShaderType::kVertex ? "vert" : "frag";
+    char name[512];
+    std::snprintf(name, sizeof(name), "%sshader_%016llX.ucode.bin.%s", dir.c_str(), (unsigned long long)shader.ucode_data_hash(), ext);
+    if (FILE* fp = std::fopen(name, "wb")) {
+      std::fwrite(shader.ucode_data().data(), 4, shader.ucode_data().size(), fp);
+      std::fclose(fp);
+    } else {
+      Log("cannot write %s", name);
+    }
+    std::snprintf(name, sizeof(name), "%sshader_%016llX.ucode.%s", dir.c_str(), (unsigned long long)shader.ucode_data_hash(), ext);
+    if (FILE* fp = std::fopen(name, "w")) {
+      std::fwrite(shader.ucode_disassembly().data(), 1, shader.ucode_disassembly().size(), fp);
+      std::fclose(fp);
+    }
+  }
+
   bool LoadDksh(const std::string& path, DkShader& out) {
     FILE* fp = std::fopen(path.c_str(), "rb");
     if (!fp) return false;
@@ -1079,6 +1186,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_vs_ = false, present_fs_ = false;
   bool present_target_ = false;
   bool dump_images_ = false;
+  std::string shader_dir_;
+  std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
+  uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
+  uint64_t dirty_pages_ = 0;
   std::unordered_map<uint64_t, DkShaderObj*> shaders_;
   std::unordered_map<uint64_t, HostImage*> targets_;       // EDRAM base/pitch -> render target
   std::unordered_map<uint32_t, HostImage*> guest_images_;  // guest address -> texture / resolve destination
@@ -1086,9 +1197,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
   HostImage* bound_depth_ = nullptr;
   std::unordered_set<std::string> logged_;
   uint32_t swaps_ = 0, draws_ = 0, skipped_ = 0, missing_draws_ = 0, missing_shaders_ = 0, clears_ = 0, resolves_ = 0;
-  uint32_t image_count_ = 0, uploads_ = 0;
+  uint32_t image_count_ = 0, uploads_ = 0, reuploads_ = 0;
   uint64_t upload_bytes_ = 0;
-  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0;
+  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0;
 };
 
 class Deko3dGraphicsSystem : public GraphicsSystem {

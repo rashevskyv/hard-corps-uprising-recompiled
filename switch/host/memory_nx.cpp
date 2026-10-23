@@ -141,6 +141,19 @@ extern "C" volatile uint8_t rex_nx_dirty[0x20000] = {};
 extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200];
 extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200] = {};
 
+// Host writes into guest memory that bypass the store macros (the SDK's file reads, xfile.cpp on the
+// Switch) mark their pages here, by guest virtual address (any view of the physical arena).
+extern "C" void rex_nx_mark_range(uint32_t guest, uint32_t length) {
+    if (!length) return;
+    const uint64_t f = fold_guest(guest);
+    if (f < 0xA0000000ull) return;  // not the physical arena: not GPU-visible
+    const uint64_t first = (f - 0xA0000000ull) >> 12, last = (f - 0xA0000000ull + length - 1) >> 12;
+    for (uint64_t p = first; p <= last && p < 0x20000; p++) {
+        rex_nx_dirty[p] = 1;
+        rex_nx_dirty_coarse[p >> 8] = 1;
+    }
+}
+
 namespace nx {
 uint8_t* arena_base() { return arena.base; }
 

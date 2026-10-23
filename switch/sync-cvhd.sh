@@ -9,7 +9,7 @@ set -e
 cd "$(dirname "$0")/.."
 CVHD=${CVHD_DIR:-../cvhd-recomp}
 COMMIT=${1:-$(cat switch/CVHD_COMMIT)}
-FILES="switch/host switch/sdk-edits.py switch/eden-shot.ps1 src/gpu tools/xenos2glsl.py tools/nro_nacp.py"
+FILES="switch/host switch/sdk-edits.py switch/eden-shot.ps1 switch/eden-deko3d.ps1 src/gpu tools/xenos2glsl.py tools/nro_nacp.py"
 ARCHIVE=$(mktemp)
 # Archive first: a failing git (wrong commit, ownership check) must not leave the tree half deleted.
 git -C "$CVHD" archive -o "$ARCHIVE" "$COMMIT" $FILES

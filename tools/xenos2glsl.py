@@ -50,7 +50,8 @@ class Translator:
         self.textures = {}    # slot -> dimension ('2D', '1D', '3D', 'Cube')
         self.max_reg = -1
         self.reads_before_write = set()
-        self.written = set()
+        self.written = {}     # register index -> components written so far (per component: `r0.z = ...`
+                              # before `tfetch2D r0, r0.xy` must not hide the interpolator in r0.xy)
         self.exports = set()  # 'oPos', 'o0'.., 'oC0'.., 'oPts', 'oDepth'
         self.has_jump = False
         self.has_kill = False
@@ -66,14 +67,14 @@ class Translator:
     def note_reg(self, idx):
         self.max_reg = max(self.max_reg, idx)
 
-    def reg_read(self, idx):
+    def reg_read(self, idx, comps):
         self.note_reg(idx)
-        if idx not in self.written:
+        if not set(comps) <= self.written.get(idx, set()):
             self.reads_before_write.add(idx)
 
-    def reg_write(self, idx):
+    def reg_write(self, idx, comps):
         self.note_reg(idx)
-        self.written.add(idx)
+        self.written.setdefault(idx, set()).update(comps)
 
     def parse_result(self, tok):
         """'r0.__z_' -> (target, [per-component source char or None]). Target: 'r3', 'o1', 'oPos', 'oC0'."""
@@ -91,7 +92,7 @@ class Translator:
                 self.err('bad result mask %r' % tok)
             comps = [None if ch == '_' else ch for ch in mask]
         if kind == 'r':
-            self.reg_write(int(idx))
+            self.reg_write(int(idx), ['xyzw'[i] for i, ch in enumerate(comps) if ch is not None])
         elif kind in ('eA', 'eM'):
             self.err('memexport is not supported')
         else:
@@ -105,17 +106,17 @@ class Translator:
             self.err('bad source operand %r' % tok)
         neg, kind, is_abs, idx_abs, idx_plain, swz = m.groups()
         idx = int(idx_abs if idx_abs is not None else idx_plain)
-        if kind == 'r':
-            self.reg_read(idx)
-            base = 'r%d' % idx
-        else:
-            base = 'c[%d]' % idx
         if swz is None:
             swz = 'xyzw'
         if len(swz) == 1:
             swz = swz * 4  # the disassembler prints one letter for a scalar operand: that component
         elif len(swz) == 2:
             swz = swz  # two-component scalar operand
+        if kind == 'r':
+            self.reg_read(idx, swz[:count] if count in (1, 2) else swz[:4])
+            base = 'r%d' % idx
+        else:
+            base = 'c[%d]' % idx
         if count == 1:
             expr = '%s.%s' % (base, swz[0])
         elif count == 2:
@@ -197,6 +198,11 @@ class Translator:
         target, comps = self.parse_result(parts[0])
         if ncomp == 3:
             coord = '(%s).xyz' % coord
+        if dim == '1D':
+            # The Xenos has no 1D textures: a 1D fetch reads a 2D texture of height 1 (Xenia does the
+            # same), so the sampler is 2D and the row is 0.
+            coord = 'vec2(%s, 0.5)' % coord
+            dim = '2D'
         if not parts[2].startswith('tf'):
             self.err('tfetch without a fetch constant', rest)
         slot = int(parts[2][2:])
