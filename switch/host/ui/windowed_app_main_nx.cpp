@@ -61,6 +61,8 @@ int main(int argc, char* argv[]) {
       // config/hard_corps_uprising.toml: the 16:9 Original guest video mode.
       "--video_mode_width=853",
       "--video_mode_height=480",
+      // No ImGui under deko3d: the game's message boxes (save data) are answered with their defaults.
+      "--headless=true",
   };
   if (deko3d) {
     defaults.push_back("--gpu_backend=deko3d");

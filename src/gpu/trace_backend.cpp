@@ -324,7 +324,7 @@ class TraceGraphicsSystem : public GraphicsSystem {
 
 }  // namespace rex::graphics::trace
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || (defined(__linux__) && __has_include(<EGL/egl.h>))
 namespace rex::graphics::deko {
 rex::system::IGraphicsSystem* CreateDeko3dGraphicsSystem();  // deko3d_backend.cpp
 }
@@ -334,7 +334,7 @@ extern "C" rex::system::IGraphicsSystem* rex_gpu_extra_backend(const char* name)
   if (name && std::strcmp(name, "trace") == 0) {
     return new rex::graphics::trace::TraceGraphicsSystem();
   }
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || (defined(__linux__) && __has_include(<EGL/egl.h>))
   if (name && std::strcmp(name, "deko3d") == 0) {
     return rex::graphics::deko::CreateDeko3dGraphicsSystem();
   }

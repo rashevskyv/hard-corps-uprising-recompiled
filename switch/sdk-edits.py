@@ -1379,3 +1379,256 @@ for f in ('src/graphics/vulkan/render_target_cache.cpp', 'src/graphics/vulkan/te
     edit(f, [('#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL,
               '#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL + '#include <atomic>' + NL)], must=False)
 print('changed (27):', *changed, sep=NL + '  ')
+
+# --- Guest DLL modules (the game's player_dll/*.dll): the SDK loads each recompiled module as a shared
+# library by the bare name "<project>_<target>", which dlopen cannot find on Linux (the file is
+# lib<name>.so next to the exe), and has no way to take modules linked into the executable (Horizon has
+# no dlopen). Static modules (REXGLUE_STATIC_MODULES, always on the Switch): the module libraries are
+# joined into one object each (ld -r) whose only global symbols are the two entry points renamed per module
+# (ReXModule_Register_<lib>, ReXModule_GetImageInfo_<lib>), and the generated registry hands the function
+# pointers to the kernel state, which then loads no library. Image bases of the six character DLLs do not overlap, so the address-named
+# functions (sub_83...) stay unique. -------------------------------------------------------------------
+edit('include/rex/system/kernel_state.h', [
+    ('    std::string shared_lib_name;' + NL + '  };' + NL + NL +
+     '  void RegisterRecompiledModule(const char* pe_name, const char* guest_path,' + NL +
+     '                                const char* shared_lib_name);' + NL,
+     '    std::string shared_lib_name;' + NL +
+     '    // Static modules (no dlopen): the entry points of the code linked into the executable.' + NL +
+     '    void* static_register = nullptr;' + NL +
+     '    const void* (*static_image_info)() = nullptr;' + NL + '  };' + NL + NL +
+     '  void RegisterRecompiledModule(const char* pe_name, const char* guest_path,' + NL +
+     '                                const char* shared_lib_name);' + NL +
+     '  void RegisterStaticRecompiledModule(const char* pe_name, const char* guest_path,' + NL +
+     '                                      const char* shared_lib_name, void* register_fn,' + NL +
+     '                                      const void* (*image_info_fn)());' + NL),
+])
+edit('src/system/kernel_state.cpp', [
+    ('    rex::platform::DynamicLibrary library_local;' + NL +
+     '    if (!library_local.Load(std::filesystem::path(recomp->shared_lib_name),' + NL +
+     '                            rex::platform::SymbolResolution::kImmediate)) {' + NL +
+     '      REXSYS_ERROR("Failed to load shared library for module \'{}\'", recomp->pe_name);' + NL +
+     '    } else {' + NL +
+     '      auto register_func = reinterpret_cast<runtime::FunctionDispatcher::RegisterFn>(' + NL +
+     '          library_local.GetRawSymbol("ReXModule_Register"));' + NL +
+     '      using GetImageInfoFn = const rex::PPCImageInfo* (*)();' + NL +
+     '      auto get_image_info =' + NL +
+     '          reinterpret_cast<GetImageInfoFn>(library_local.GetRawSymbol("ReXModule_GetImageInfo"));' + NL,
+     '    rex::platform::DynamicLibrary library_local;' + NL +
+     '    using GetImageInfoFn = const rex::PPCImageInfo* (*)();' + NL +
+     '    runtime::FunctionDispatcher::RegisterFn register_func = nullptr;' + NL +
+     '    GetImageInfoFn get_image_info = nullptr;' + NL +
+     '    bool library_ok = false;' + NL +
+     '    if (recomp->static_register) {' + NL +
+     '      // Linked into the executable: nothing to load.' + NL +
+     '      register_func = reinterpret_cast<runtime::FunctionDispatcher::RegisterFn>(recomp->static_register);' + NL +
+     '      get_image_info = reinterpret_cast<GetImageInfoFn>(recomp->static_image_info);' + NL +
+     '      library_ok = true;' + NL +
+     '    } else {' + NL +
+     '      std::filesystem::path lib_path(recomp->shared_lib_name);' + NL +
+     '#if !REX_PLATFORM_WIN32' + NL +
+     '      // CMake names the shared library lib<name>.so (.dylib); the registry has the bare target name.' + NL +
+     '      if (!lib_path.has_extension()) {' + NL +
+     '        lib_path = lib_path.parent_path() / (std::string("lib") + lib_path.filename().string() +' + NL +
+     '                                             (REX_PLATFORM_MAC ? ".dylib" : ".so"));' + NL +
+     '      }' + NL +
+     '#endif' + NL +
+     '      library_ok = library_local.Load(lib_path, rex::platform::SymbolResolution::kImmediate);' + NL +
+     '      if (library_ok) {' + NL +
+     '        register_func = reinterpret_cast<runtime::FunctionDispatcher::RegisterFn>(' + NL +
+     '            library_local.GetRawSymbol("ReXModule_Register"));' + NL +
+     '        get_image_info =' + NL +
+     '            reinterpret_cast<GetImageInfoFn>(library_local.GetRawSymbol("ReXModule_GetImageInfo"));' + NL +
+     '      }' + NL +
+     '    }' + NL +
+     '    if (!library_ok) {' + NL +
+     '      REXSYS_ERROR("Failed to load shared library for module \'{}\'", recomp->pe_name);' + NL +
+     '    } else {' + NL),
+    ('void KernelState::RegisterRecompiledModule(const char* pe_name, const char* guest_path,' + NL +
+     '                                           const char* shared_lib_name) {' + NL,
+     'void KernelState::RegisterStaticRecompiledModule(const char* pe_name, const char* guest_path,' + NL +
+     '                                                 const char* shared_lib_name, void* register_fn,' + NL +
+     '                                                 const void* (*image_info_fn)()) {' + NL +
+     '  RegisterRecompiledModule(pe_name, guest_path, shared_lib_name);' + NL +
+     '  auto global_lock = global_critical_region_.Acquire();' + NL +
+     '  for (auto& info : recompiled_modules_) {' + NL +
+     '    if (info.guest_path == NormalizeGuestPath(guest_path)) {' + NL +
+     '      info.static_register = register_fn;' + NL +
+     '      info.static_image_info = image_info_fn;' + NL +
+     '    }' + NL + '  }' + NL + '}' + NL + NL +
+     'void KernelState::RegisterRecompiledModule(const char* pe_name, const char* guest_path,' + NL +
+     '                                           const char* shared_lib_name) {' + NL),
+])
+edit('resources/templates/codegen/module_registry_cpp.inja', [
+    ('#include <rex/system/kernel_state.h>' + NL + NL +
+     'void RegisterRecompiledModules(rex::system::KernelState* kernel_state) {' + NL +
+     '{% for mod in dll_modules %}' + NL +
+     '  kernel_state->RegisterRecompiledModule(' + NL +
+     '      "{{ mod.pe_name }}",' + NL +
+     '      "{{ mod.guest_path }}",' + NL +
+     '      "{{ mod.shared_lib_name }}");' + NL +
+     '{% endfor %}' + NL + '}' + NL,
+     '#include <rex/system/kernel_state.h>' + NL + NL +
+     '#ifdef REX_STATIC_MODULES' + NL +
+     '// Module code linked into the executable (no dlopen): the entry points are renamed per module by' + NL +
+     '// the module targets (compile definitions in dll_targets.cmake).' + NL +
+     '{% for mod in dll_modules %}' + NL +
+     'extern "C" void ReXModule_Register_{{ mod.shared_lib_name }}(rex::runtime::IModuleRegistrar*);' + NL +
+     'extern "C" const rex::PPCImageInfo* ReXModule_GetImageInfo_{{ mod.shared_lib_name }}();' + NL +
+     '{% endfor %}' + NL +
+     '#endif' + NL + NL +
+     'void RegisterRecompiledModules(rex::system::KernelState* kernel_state) {' + NL +
+     '{% for mod in dll_modules %}' + NL +
+     '#ifdef REX_STATIC_MODULES' + NL +
+     '  kernel_state->RegisterStaticRecompiledModule(' + NL +
+     '      "{{ mod.pe_name }}",' + NL +
+     '      "{{ mod.guest_path }}",' + NL +
+     '      "{{ mod.shared_lib_name }}",' + NL +
+     '      reinterpret_cast<void*>(&ReXModule_Register_{{ mod.shared_lib_name }}),' + NL +
+     '      reinterpret_cast<const void* (*)()>(&ReXModule_GetImageInfo_{{ mod.shared_lib_name }}));' + NL +
+     '#else' + NL +
+     '  kernel_state->RegisterRecompiledModule(' + NL +
+     '      "{{ mod.pe_name }}",' + NL +
+     '      "{{ mod.guest_path }}",' + NL +
+     '      "{{ mod.shared_lib_name }}");' + NL +
+     '#endif' + NL +
+     '{% endfor %}' + NL + '}' + NL),
+])
+edit('resources/templates/codegen/dll_targets_cmake.inja', [
+    ('    add_library({{ mod.lib_name }} SHARED {{ cmake_var("DLL_SOURCES_" + mod.target_name) }})' + NL,
+     '    if(REXGLUE_STATIC_MODULES)' + NL +
+     '        # Linked into the executable (the game CMakeLists adds REXGLUE_STATIC_MODULE_OBJECTS to it): no' + NL +
+     '        # dlopen. Every module defines the same helper symbols (__imp____savegprlr_14, PPCFuncMappings,' + NL +
+     '        # ...): the module objects are joined with ld -r and every global but its two entry points becomes' + NL +
+     '        # local, so the modules cannot clash with each other or with the main module.' + NL +
+     '        add_library({{ mod.lib_name }} OBJECT {{ cmake_var("DLL_SOURCES_" + mod.target_name) }})' + NL +
+     '        target_compile_definitions({{ mod.lib_name }} PRIVATE' + NL +
+     '            ReXModule_Register=ReXModule_Register_{{ mod.lib_name }}' + NL +
+     '            ReXModule_GetImageInfo=ReXModule_GetImageInfo_{{ mod.lib_name }})' + NL +
+     '        set(_rexglue_module_o "{{ cmake_var("CMAKE_BINARY_DIR") }}/rexglue_modules/{{ mod.lib_name }}.o")' + NL +
+     '        add_custom_command(OUTPUT "{{ cmake_var("_rexglue_module_o") }}"' + NL +
+     '            COMMAND {{ cmake_var("CMAKE_COMMAND") }} -E make_directory "{{ cmake_var("CMAKE_BINARY_DIR") }}/rexglue_modules"' + NL +
+     '            COMMAND {{ cmake_var("CMAKE_LINKER") }} -r -o "{{ cmake_var("_rexglue_module_o") }}.tmp" $<FILTER:$<TARGET_OBJECTS:{{ mod.lib_name }}>,EXCLUDE,[.]pch$>' + NL +
+     '            COMMAND {{ cmake_var("CMAKE_OBJCOPY") }}' + NL +
+     '                --keep-global-symbol=ReXModule_Register_{{ mod.lib_name }}' + NL +
+     '                --keep-global-symbol=ReXModule_GetImageInfo_{{ mod.lib_name }}' + NL +
+     '                "{{ cmake_var("_rexglue_module_o") }}.tmp" "{{ cmake_var("_rexglue_module_o") }}"' + NL +
+     '            DEPENDS {{ mod.lib_name }} $<TARGET_OBJECTS:{{ mod.lib_name }}>' + NL +
+     '            COMMAND_EXPAND_LISTS VERBATIM)' + NL +
+     '        set_source_files_properties("{{ cmake_var("_rexglue_module_o") }}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)' + NL +
+     '        list(APPEND REXGLUE_STATIC_MODULE_OBJECTS "{{ cmake_var("_rexglue_module_o") }}")' + NL +
+     '    else()' + NL +
+     '        add_library({{ mod.lib_name }} SHARED {{ cmake_var("DLL_SOURCES_" + mod.target_name) }})' + NL +
+     '    endif()' + NL),
+])
+print('changed (29):', *changed, sep=NL + '  ')
+
+# --- Function tables out of the way of the DLL images. The SDK puts a module's dispatch table right after
+# its image (guest address IMAGE_BASE + IMAGE_SIZE, two bytes per code byte). The main module's table
+# (0x82960000 + 13.8 MB) covers the fixed bases of the character DLLs (0x83000000...): "Module image range
+# overlaps existing", and the XEX loader would also fail to map them. With guest DLL modules the codegen
+# emits REX_TABLE_BASE: the main module's table at 0x80100000, a DLL's at 0x81000000 + 2 * (code_base -
+# 0x83000000); all below the first image (0x82000000), inside the 64 MB block the Switch maps there.
+# PPCImageInfo.table_base carries it to the runtime (0 = after the image, as before). ----------------------
+edit('include/rex/image_info.h', [
+    ('  PPCCodegenFlags codegen_flags{};                 ///< Set by codegen from the config flags' + NL + '};' + NL,
+     '  PPCCodegenFlags codegen_flags{};                 ///< Set by codegen from the config flags' + NL +
+     '  u32 table_base = 0;  ///< Guest address of the function table (0: right after the image)' + NL + '};' + NL),
+])
+edit('resources/templates/codegen/pch_h.inja', [
+    ('#define REX_THUNK_RESERVE_SIZE {{ thunk_reserve_size }}ull' + NL,
+     '#define REX_THUNK_RESERVE_SIZE {{ thunk_reserve_size }}ull' + NL +
+     '{% if has_dll_modules %}// Guest DLL modules: the function tables leave the neighbourhood of the images (their fixed bases lie' + NL +
+     '// inside the main module\'s table): main at 0x80100000, a DLL at 0x81000000 + 2 * (code_base - 0x83000000).' + NL +
+     '#define REX_TABLE_BASE ((REX_CODE_BASE < 0x83000000ull) ? 0x80100000ull : 0x81000000ull + (REX_CODE_BASE - 0x83000000ull) * 2)' + NL +
+     '{% else %}#define REX_TABLE_BASE (REX_IMAGE_BASE + REX_IMAGE_SIZE)' + NL + '{% endif %}' + NL),
+])
+edit('resources/templates/codegen/_indirect_call.inja', [
+    ('  (*(PPCFunc**)(x + REX_IMAGE_BASE + REX_IMAGE_SIZE + (u64(u32(y) - REX_CODE_BASE) * 2)))',
+     '  (*(PPCFunc**)(x + REX_TABLE_BASE + (u64(u32(y) - REX_CODE_BASE) * 2)))'),
+])
+edit('resources/templates/codegen/init_cpp.inja', [
+    ('        .non_volatile_as_local = {{ config_flags.non_volatile_as_local }},' + NL + '    },' + NL + '};' + NL,
+     '        .non_volatile_as_local = {{ config_flags.non_volatile_as_local }},' + NL + '    },' + NL +
+     '    .table_base = REX_TABLE_BASE,' + NL + '};' + NL),
+])
+edit('include/rex/system/xmemory.h', [
+    ('  bool InitializeFunctionTable(uint32_t code_base, uint32_t code_size, uint32_t image_base,' + NL +
+     '                               uint32_t image_size);' + NL + '  bool DestroyFunctionTable(uint32_t code_base);' + NL,
+     '  bool InitializeFunctionTable(uint32_t code_base, uint32_t code_size, uint32_t image_base,' + NL +
+     '                               uint32_t image_size, uint32_t table_base_override = 0);' + NL +
+     '  bool DestroyFunctionTable(uint32_t code_base);' + NL),
+])
+edit('src/system/xmemory.cpp', [
+    ('bool Memory::InitializeFunctionTable(uint32_t code_base, uint32_t code_size, uint32_t image_base,' + NL +
+     '                                     uint32_t image_size) {' + NL +
+     '  constexpr uint32_t kThunkReserveSize = runtime::FunctionDispatcher::kThunkReserveSize;' + NL +
+     '  uint32_t table_base = image_base + image_size;' + NL,
+     'bool Memory::InitializeFunctionTable(uint32_t code_base, uint32_t code_size, uint32_t image_base,' + NL +
+     '                                     uint32_t image_size, uint32_t table_base_override) {' + NL +
+     '  constexpr uint32_t kThunkReserveSize = runtime::FunctionDispatcher::kThunkReserveSize;' + NL +
+     '  uint32_t table_base = table_base_override ? table_base_override : image_base + image_size;' + NL),
+])
+edit('include/rex/system/function_dispatcher.h', [
+    ('  bool InitializeFunctionTable(uint32_t code_base, uint32_t code_size, uint32_t image_base,' + NL +
+     '                               uint32_t image_size, bool is_entrypoint = false);' + NL,
+     '  bool InitializeFunctionTable(uint32_t code_base, uint32_t code_size, uint32_t image_base,' + NL +
+     '                               uint32_t image_size, bool is_entrypoint = false,' + NL +
+     '                               uint32_t table_base_override = 0);' + NL),
+    ('    uint32_t image_size;' + NL + '    uint32_t next_thunk_address;' + NL,
+     '    uint32_t image_size;' + NL + '    uint32_t table_base;' + NL + '    uint32_t next_thunk_address;' + NL),
+])
+edit('src/system/function_dispatcher.cpp', [
+    ('bool FunctionDispatcher::InitializeFunctionTable(uint32_t code_base, uint32_t code_size,' + NL +
+     '                                                 uint32_t image_base, uint32_t image_size,' + NL +
+     '                                                 bool is_entrypoint) {' + NL,
+     'bool FunctionDispatcher::InitializeFunctionTable(uint32_t code_base, uint32_t code_size,' + NL +
+     '                                                 uint32_t image_base, uint32_t image_size,' + NL +
+     '                                                 bool is_entrypoint, uint32_t table_base_override) {' + NL),
+    ('  uint32_t new_table_end = image_base + image_size + (code_size + kThunkReserveSize) * 2;' + NL +
+     '  uint32_t new_code_end = code_base + code_size + kThunkReserveSize;' + NL +
+     '  for (const auto& existing : module_tables_) {' + NL +
+     '    uint32_t existing_table_end =' + NL +
+     '        existing.image_base + existing.image_size + (existing.code_size + kThunkReserveSize) * 2;' + NL +
+     '    uint32_t existing_code_end = existing.code_base + existing.code_size + kThunkReserveSize;' + NL +
+     '    if (image_base < existing_table_end && new_table_end > existing.image_base) {' + NL +
+     '      REXLOG_ERROR("Module image range [{:08X}, {:08X}) overlaps existing [{:08X}, {:08X})",' + NL +
+     '                   image_base, new_table_end, existing.image_base, existing_table_end);' + NL +
+     '      return false;' + NL + '    }' + NL,
+     '  const uint32_t new_table_base = table_base_override ? table_base_override : image_base + image_size;' + NL +
+     '  const uint32_t new_table_end = new_table_base + (code_size + kThunkReserveSize) * 2;' + NL +
+     '  uint32_t new_code_end = code_base + code_size + kThunkReserveSize;' + NL +
+     '  auto ranges_overlap = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) { return a0 < b1 && a1 > b0; };' + NL +
+     '  for (const auto& existing : module_tables_) {' + NL +
+     '    // The image and the table of a module are separate ranges (the table follows the image unless' + NL +
+     '    // the module asked for another place).' + NL +
+     '    const uint32_t existing_table_end = existing.table_base + (existing.code_size + kThunkReserveSize) * 2;' + NL +
+     '    uint32_t existing_code_end = existing.code_base + existing.code_size + kThunkReserveSize;' + NL +
+     '    const uint32_t image_end = image_base + image_size;' + NL +
+     '    const uint32_t existing_image_end = existing.image_base + existing.image_size;' + NL +
+     '    if (ranges_overlap(image_base, image_end, existing.image_base, existing_image_end) ||' + NL +
+     '        ranges_overlap(image_base, image_end, existing.table_base, existing_table_end) ||' + NL +
+     '        ranges_overlap(new_table_base, new_table_end, existing.image_base, existing_image_end) ||' + NL +
+     '        ranges_overlap(new_table_base, new_table_end, existing.table_base, existing_table_end)) {' + NL +
+     '      REXLOG_ERROR("Module image/table range [{:08X}, {:08X}) / [{:08X}, {:08X}) overlaps existing [{:08X}, {:08X}) / [{:08X}, {:08X})",' + NL +
+     '                   image_base, image_end, new_table_base, new_table_end, existing.image_base,' + NL +
+     '                   existing_image_end, existing.table_base, existing_table_end);' + NL +
+     '      return false;' + NL + '    }' + NL),
+    ('  if (!memory_->InitializeFunctionTable(code_base, code_size, image_base, image_size)) {' + NL,
+     '  if (!memory_->InitializeFunctionTable(code_base, code_size, image_base, image_size, table_base_override)) {' + NL),
+    ('      .image_base = image_base,' + NL + '      .image_size = image_size,' + NL + '      .next_thunk_address = code_base + code_size,' + NL,
+     '      .image_base = image_base,' + NL + '      .image_size = image_size,' + NL + '      .table_base = new_table_base,' + NL +
+     '      .next_thunk_address = code_base + code_size,' + NL),
+])
+edit('src/system/runtime.cpp', [
+    ('                                                     image_info.image_base, image_info.image_size,' + NL +
+     '                                                     /*is_entrypoint=*/true)) {' + NL,
+     '                                                     image_info.image_base, image_info.image_size,' + NL +
+     '                                                     /*is_entrypoint=*/true, image_info.table_base)) {' + NL),
+])
+edit('src/system/kernel_state.cpp', [
+    ('                       image_info->code_base, image_info->code_size, image_info->image_base,' + NL +
+     '                       image_info->image_size)) {' + NL,
+     '                       image_info->code_base, image_info->code_size, image_info->image_base,' + NL +
+     '                       image_info->image_size, false, image_info->table_base)) {' + NL),
+])
+print('changed (30):', *changed, sep=NL + '  ')

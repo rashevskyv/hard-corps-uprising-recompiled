@@ -54,6 +54,7 @@ class Translator:
                               # before `tfetch2D r0, r0.xy` must not hide the interpolator in r0.xy)
         self.exports = set()  # 'oPos', 'o0'.., 'oC0'.., 'oPts', 'oDepth'
         self.has_jump = False
+        self.has_loop = False
         self.has_kill = False
         self.uses_bools = False
         self.stride_words = 0
@@ -101,13 +102,15 @@ class Translator:
 
     def parse_source(self, tok, count):
         """Source operand -> GLSL expression with exactly `count` components (1, 2 or 4)."""
-        m = re.match(r'^(-?)(r|c)(_abs)?(?:\[(\d+)(\+a0)?\]|(\d+))(?:\.([xyzw]+))?$', tok)
+        m = re.match(r'^(-?)(r|c)(_abs)?(?:\[(\d+)\]|(\d+)|\[(\d+)\+aL\]|\[aL\]|\[(\d+)\+a0\])(?:\.([xyzw]+))?$', tok)
         if not m:
             self.err('bad source operand %r' % tok)
-        neg, kind, is_abs, idx_abs, rel_a0, idx_plain, swz = m.groups()
-        if rel_a0 and kind != 'c':
+        neg, kind, is_abs, idx_abs, idx_plain, idx_rel, idx_a0, swz = m.groups()
+        relative = tok.find('aL') >= 0  # gh: c[N+aL] inside a loop
+        idx = int(idx_abs if idx_abs is not None else idx_plain if idx_plain is not None else idx_a0 if idx_a0 is not None else idx_rel or 0)
+        rel_a0 = idx_a0 is not None  # hcu: c[N+a0], indexed by the address register
+        if (relative or rel_a0) and kind != 'c':
             self.err('relative register operand %r is not supported' % tok)
-        idx = int(idx_abs if idx_abs is not None else idx_plain)
         if swz is None:
             swz = 'xyzw'
         if len(swz) == 1:
@@ -117,8 +120,12 @@ class Translator:
         if kind == 'r':
             self.reg_read(idx, swz[:count] if count in (1, 2) else swz[:4])
             base = 'r%d' % idx
+        elif relative:
+            base = 'c[%d + aL]' % idx
+        elif rel_a0:
+            base = 'c[%d + a0]' % idx
         else:
-            base = 'c[%d + a0]' % idx if rel_a0 else 'c[%d]' % idx  # c[N+a0]: indexed by the address register
+            base = 'c[%d]' % idx
         if count == 1:
             expr = '%s.%s' % (base, swz[0])
         elif count == 2:
@@ -309,12 +316,12 @@ class Translator:
             self.has_kill = True
             self.extra_kill = 'if (%s %s) discard;' % (a[0], cmp)
             return 'float(%s %s)' % (a[0], cmp)
-        if op == 'retain_prev': return 'ps'
         if op in ('maxas', 'maxasf'):
             # The address register (Xenia): a0 = clamp(floor(a + 0.5), -256, 255) (maxasf: floor(a)); the
             # result is max(a, b). Set after the operands are read, before the results are written.
             self.extra_pred = 'a0 = int(clamp(floor(%s%s), -256.0, 255.0));' % (a[0], ' + 0.5' if op == 'maxas' else '')
             return 'max(%s, %s)' % (a[0], a[1])
+        if op == 'retain_prev': return 'ps'
         self.err('scalar op %s is not implemented' % op)
 
     def emit_alu(self, vec, sca, pred):
@@ -439,7 +446,15 @@ class Translator:
                                    'target': int(m2.group(2)), 'stmts': []})
                 elif op in ('alloc', 'cnop', 'nop'):
                     blocks.append({'index': idx, 'kind': 'nop', 'stmts': []})
-                elif op in ('loop', 'endloop', 'call', 'ccall', 'ret'):
+                elif op in ('loop', 'endloop'):
+                    # gh: structured loops over an integer constant (count | start << 8 | step << 16);
+                    # aL is the loop register the body indexes the constants with (c[1+aL]).
+                    m2 = re.match(r'^(loop|endloop)\s+i(\d+),\s*L(\d+)$', text)
+                    if not m2:
+                        self.err('bad loop', line)
+                    self.has_loop = True
+                    blocks.append({'index': idx, 'kind': op, 'loop': int(m2.group(2)), 'stmts': []})
+                elif op in ('call', 'ccall', 'ret'):
                     self.err('control flow %s is not supported' % op, line)
                 else:
                     self.err('unknown control flow %r' % text, line)
@@ -499,7 +514,7 @@ class Translator:
             for slot in sorted(self.textures):
                 out.append('layout(binding = %d) uniform sampler%s tf_%d;' % (slot, self.textures[slot], slot))
         out.append('layout(std140, binding = 0) uniform Consts { vec4 c[256]; };')
-        out.append('layout(std140, binding = 1) uniform Sys { vec4 ndc_scale; vec4 ndc_offset; vec4 alpha; uvec4 bools[2]; };')
+        out.append('layout(std140, binding = 1) uniform Sys { vec4 ndc_scale; vec4 ndc_offset; vec4 alpha; uvec4 bools[2]; uvec4 loops[8]; };')
         interps = sorted(int(e[1:]) for e in self.exports if re.match(r'^o\d+$', e))
         colors = sorted(int(e[2:]) for e in self.exports if e.startswith('oC'))
         if self.stage == 'vert':
@@ -517,8 +532,8 @@ class Translator:
         for e in sorted(self.exports):
             out.append(ind + 'vec4 %s = vec4(0.0);' % e)
         out.append(ind + 'bool p0 = false;')
-        out.append(ind + 'float ps = 0.0;')
         out.append(ind + 'int a0 = 0;')
+        out.append(ind + 'float ps = 0.0;')
 
         def block_cond(b):
             conds = []
@@ -531,8 +546,21 @@ class Translator:
                 conds.append('%s((bools[%d][%d] >> %du) & 1u) != 0u' % ('!' if neg else '', n // 128, (n % 128) // 32, n % 32))
             return ' && '.join(conds)
 
+        if self.has_loop:
+            if self.has_jump:
+                self.err('loops together with jumps are not supported')
+            out.append(ind + 'int aL = 0;')
         if not self.has_jump:
             for b in blocks:
+                if b['kind'] == 'loop':
+                    n = b['loop']
+                    out.append(ind + '{ uint lc = loops[%d][%d]; int lcount = int(lc & 255u); aL = int((lc >> 8) & 255u); '
+                                     'int lstep = int(int((lc >> 16) & 255u) << 24) >> 24;' % (n // 4, n % 4))
+                    out.append(ind + 'for (int li = 0; li < lcount; ++li) {')
+                    continue
+                if b['kind'] == 'endloop':
+                    out.append(ind + 'aL += lstep; } }')
+                    continue
                 if b['kind'] != 'exec':
                     continue
                 cond = block_cond(b)

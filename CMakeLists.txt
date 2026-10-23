@@ -11,6 +11,11 @@ if(NINTENDO_SWITCH)
     return()
 endif()
 
+if(HCU_LINUX_TESTHOST)
+    include(switch/linux-testhost.cmake)
+    return()
+endif()
+
 # Where tools/codegen.ps1 and tools/package-linux.sh unpack the pinned SDK.
 if(WIN32)
     set(HCU_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tools/rexglue/win-amd64")
