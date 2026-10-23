@@ -1,0 +1,682 @@
+--- a/src/gpu/deko3d_backend.cpp
++++ b/src/gpu/deko3d_backend.cpp
+@@ -159,6 +159,7 @@
+   uint32_t checked_serial = 0;  // the draw serial of the last dirty-page check
+   uint32_t guest_base = 0;    // textures and resolve destinations
+   uint32_t edram_base = 0, edram_pitch = 0;  // render targets
++  std::unordered_map<HostImage*, uint32_t> merged;  // depth textures: piece image -> its content serial when copied in
+ };
+ 
+ class DkShaderObj : public Shader {
+@@ -191,7 +192,23 @@
+   uint32_t loops[32];  // gh: integer loop constants i0..i31 (count | start << 8 | step << 16)
+ };
+ 
+-DkCompareOp CompareOp(xenos::CompareFunction f) { return DkCompareOp(uint32_t(f)); }
++// Xenos counts from kNever = 0, deko3d from DkCompareOp_Never = 1 (HCU 0.120: LEQUAL became EQUAL, the
++// depth-tested 3D level never showed).
++DkCompareOp CompareOp(xenos::CompareFunction f) { return DkCompareOp(uint32_t(f) + 1); }
++
++// Xenos StencilOp (kKeep = 0 ...) to deko3d (Keep = 1 ...).
++DkStencilOp StencilOpOf(xenos::StencilOp op) {
++  switch (op) {
++    case xenos::StencilOp::kZero: return DkStencilOp_Zero;
++    case xenos::StencilOp::kReplace: return DkStencilOp_Replace;
++    case xenos::StencilOp::kIncrementClamp: return DkStencilOp_Incr;
++    case xenos::StencilOp::kDecrementClamp: return DkStencilOp_Decr;
++    case xenos::StencilOp::kInvert: return DkStencilOp_Invert;
++    case xenos::StencilOp::kIncrementWrap: return DkStencilOp_IncrWrap;
++    case xenos::StencilOp::kDecrementWrap: return DkStencilOp_DecrWrap;
++    default: return DkStencilOp_Keep;
++  }
++}
+ 
+ DkBlendFactor BlendFactor(xenos::BlendFactor f) {
+   switch (f) {
+@@ -296,6 +313,12 @@
+     case TF::k_16_16_FLOAT: out = DkImageFormat_RG16_Float; return true;
+     case TF::k_16: out = DkImageFormat_R16_Unorm; return true;
+     case TF::k_16_16: out = DkImageFormat_RG16_Unorm; return true;
++    // Resolves of 2_10_10_10 and 8_8_8_8 targets (HCU's blur chain and post effects read them back as textures,
++    // fetch formats "AS_16_16_16_16" = the resolve expanded to 64 bits): the host image keeps the target's format.
++    case TF::k_2_10_10_10: case TF::k_2_10_10_10_AS_16_16_16_16: out = DkImageFormat_RGB10A2_Unorm; return true;
++    case TF::k_8_8_8_8_AS_16_16_16_16: out = DkImageFormat_RGBA8_Unorm; return true;
++    // A depth resolve target (HCU's stage shadow map, 8-tap compare in the pixel shader): the host depth image, sampled as depth.
++    case TF::k_24_8: case TF::k_24_8_FLOAT: out = DkImageFormat_Z24S8; return true;
+     default: return false;
+   }
+ }
+@@ -420,6 +443,7 @@
+     std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
+     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
+     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
++    no_depth_copy_ = access((debug_dir + "dk_nodepthcopy").c_str(), F_OK) == 0;  // debug A/B: depth resolves are ignored (shadow maps stay empty)
+     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
+     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
+     Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
+@@ -482,7 +506,13 @@
+     bool writes_depth = dc.z_enable && dc.z_write_enable;
+     if (!writes_color && !writes_depth && !dc.stencil_enable) { skipped_++; return true; }
+     if (IsClearDraw(vs, ps, prim_type)) return ClearDraw(index_count, mode);
+-    if (!vs->loaded || !ps->loaded) { missing_draws_++; return true; }
++    if (!vs->loaded || !ps->loaded) {
++#ifdef CVHD_DK_GL
++      if (TraceFrame()) Log("T NO SHADER draw vs %016llX (%d) ps %016llX (%d)", (unsigned long long)vs->ucode_data_hash(), vs->loaded, (unsigned long long)ps->ucode_data_hash(), ps->loaded);
++#endif
++      missing_draws_++;
++      return true;
++    }
+     DkPrimitive prim;
+     bool rects;
+     if (!PrimitiveOf(prim_type, prim, rects)) { LogOnce("prim", "unsupported primitive type %u", uint32_t(prim_type)); skipped_++; return true; }
+@@ -566,7 +596,32 @@
+       }
+       DkResHandle handle = dkMakeTextureHandle(slot, sampler);
+       dkCmdBufBindTextures(cmd, DkStage_Fragment, tb.fetch_constant, &handle, 1);
+-      char t[48];
++      char t[96];
++#ifdef CVHD_DK_GL
++      if (TraceFrame() && std::getenv("HCU_DK_TRACE_DUMP")) {
++        DumpDecoded(info, fetch.endianness, std::getenv("HCU_DK_TRACE_DUMP"), trace_draws_);
++        // What the host image holds at this point of the command stream (R8 shows as red).
++        char hn[300];
++        std::snprintf(hn, sizeof(hn), "%s/h%u-%03u-%08X.ppm", std::getenv("HCU_DK_TRACE_DUMP"), swaps_ + 1, trace_draws_, info.memory.base_address);
++        dkglCmdDumpImage(cmd, &tex->image, hn);
++      }
++      if (TraceFrame() && info.format == xenos::TextureFormat::k_8)
++        Log("T   k_8 tex %08X: %ux%u pitch %u blockpitch %ux%u tiled %d mips %u..%u packed %d mip_addr %08X sizes %u/%u dim %u", info.memory.base_address, info.width + 1,
++            info.height + 1, info.pitch, info.extent.block_pitch_h, info.extent.block_pitch_v, info.is_tiled, info.mip_min_level, info.mip_max_level,
++            info.has_packed_mips, info.memory.mip_address, info.memory.base_size, info.memory.mip_size, uint32_t(info.dimension));
++      if (TraceFrame() && info.width + 1 <= 256 && info.height == 0) {
++        // A palette-sized texture: its memory hash and the number of non-zero words (palette changes between draws).
++        const uint32_t* pw = reinterpret_cast<const uint32_t*>(memory_->TranslatePhysical(info.memory.base_address));
++        uint32_t nz = 0, first = 0;
++        for (uint32_t i = 0; i <= info.width; i++) if (pw[i]) { if (!nz) first = pw[i]; nz++; }
++        std::snprintf(t, sizeof(t), " tf%u=%08X(%ux%u h%04llX nz%u f%08X)", tb.fetch_constant, info.memory.base_address, tex->width, tex->height,
++                      (unsigned long long)(tex->mem_hash & 0xFFFF), nz, first);
++        char pal[200];
++        int n = std::snprintf(pal, sizeof(pal), "T   palette %08X endian %u swz %03X:", info.memory.base_address, uint32_t(fetch.endianness), fetch.swizzle);
++        for (uint32_t i = 0; i < 12 && n < 180; i++) n += std::snprintf(pal + n, sizeof(pal) - n, " %08X", __builtin_bswap32(pw[i]));
++        Log("%s", pal);
++      } else
++#endif
+       std::snprintf(t, sizeof(t), " tf%u=%08X(%ux%u)", tb.fetch_constant, info.memory.base_address, tex->width, tex->height);
+       bound_textures += t;
+     }
+@@ -579,7 +634,14 @@
+               (unsigned long long)ps->ucode_data_hash(), uint32_t(prim_type), index_count, bound_textures.empty() ? " no textures" : bound_textures.c_str());
+     }
+     // A draw with a missing texture would sample whatever the slot held before (noise): skip it.
+-    if (!textures_ok) { skipped_++; return true; }
++    if (!textures_ok) {
++#ifdef CVHD_DK_GL
++      if (TraceFrame()) Log("T SKIPPED draw vs %016llX ps %016llX n=%u: a texture could not be bound |%s", (unsigned long long)vs->ucode_data_hash(),
++                            (unsigned long long)ps->ucode_data_hash(), index_count, bound_textures.c_str());
++#endif
++      skipped_++;
++      return true;
++    }
+ 
+     // Render targets.
+     auto surf = regs.Get<reg::RB_SURFACE_INFO>();
+@@ -636,12 +698,48 @@
+     DkBlendState bs{BlendOp(blend.color_comb_fcn), BlendFactor(blend.color_srcblend), BlendFactor(blend.color_destblend),
+                     BlendOp(blend.alpha_comb_fcn), BlendFactor(blend.alpha_srcblend), BlendFactor(blend.alpha_destblend)};
+     dkCmdBufBindBlendStates(cmd, 0, &bs, 1);
++    {
++      // The constant factors (Xenos kConstantColor/Alpha and their inverses) read RB_BLEND_RED..ALPHA.
++      auto is_const = [](xenos::BlendFactor f) { return uint32_t(f) >= 12 && uint32_t(f) <= 15; };
++      if (blend_enabled && (is_const(blend.color_srcblend) || is_const(blend.color_destblend) || is_const(blend.alpha_srcblend) || is_const(blend.alpha_destblend))) {
++        float bc[4];
++        for (int i = 0; i < 4; i++) std::memcpy(&bc[i], &regs.values[XE_GPU_REG_RB_BLEND_RED + i], 4);
++        dkCmdBufSetBlendConst(cmd, bc[0], bc[1], bc[2], bc[3]);
++        char key[96];
++        std::snprintf(key, sizeof(key), "blendconst %u %u %g %g", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend), bc[0], bc[3]);
++        LogOnce(key, "constant blend factors %u/%u (alpha %u/%u): constant %g %g %g %g", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend),
++                uint32_t(blend.alpha_srcblend), uint32_t(blend.alpha_destblend), bc[0], bc[1], bc[2], bc[3]);
++      }
++    }
+     DkDepthStencilState ds;
+     dkDepthStencilStateDefaults(&ds);
+     ds.depthTestEnable = depth && dc.z_enable;
+     ds.depthWriteEnable = depth && dc.z_write_enable;
+     ds.depthCompareOp = CompareOp(dc.zfunc);
+-    ds.stencilTestEnable = 0;
++    // Stencil (HCU's UI clips its panels with it): needs the depth image, which holds the stencil bits.
++    ds.stencilTestEnable = depth && dc.stencil_enable;
++    if (ds.stencilTestEnable) {
++      ds.stencilFrontFailOp = StencilOpOf(dc.stencilfail);
++      ds.stencilFrontPassOp = StencilOpOf(dc.stencilzpass);
++      ds.stencilFrontDepthFailOp = StencilOpOf(dc.stencilzfail);
++      ds.stencilFrontCompareOp = CompareOp(dc.stencilfunc);
++      ds.stencilBackFailOp = StencilOpOf(dc.stencilfail_bf);
++      ds.stencilBackPassOp = StencilOpOf(dc.stencilzpass_bf);
++      ds.stencilBackDepthFailOp = StencilOpOf(dc.stencilzfail_bf);
++      ds.stencilBackCompareOp = CompareOp(dc.stencilfunc_bf);
++      auto fr = regs.Get<reg::RB_STENCILREFMASK>();
++      reg::RB_STENCILREFMASK bk;
++      bk.value = regs.values[XE_GPU_REG_RB_STENCILREFMASK_BF];
++      dkCmdBufSetStencil(cmd, DkFace_Front, uint8_t(fr.stencilwritemask), uint8_t(fr.stencilref), uint8_t(fr.stencilmask));
++      dkCmdBufSetStencil(cmd, DkFace_Back, uint8_t(bk.stencilwritemask), uint8_t(bk.stencilref), uint8_t(bk.stencilmask));
++      char key[96];
++      std::snprintf(key, sizeof(key), "stencil %u %u %u %u %u ref %u", uint32_t(dc.stencilfunc), uint32_t(dc.stencilfail), uint32_t(dc.stencilzpass),
++                    uint32_t(dc.stencilzfail), uint32_t(dc.backface_enable), uint32_t(fr.stencilref));
++      LogOnce(key, "stencil on: func %u fail %u zpass %u zfail %u (back %u: func %u fail %u zpass %u zfail %u), ref %u mask %02X write %02X", uint32_t(dc.stencilfunc),
++              uint32_t(dc.stencilfail), uint32_t(dc.stencilzpass), uint32_t(dc.stencilzfail), uint32_t(dc.backface_enable), uint32_t(dc.stencilfunc_bf),
++              uint32_t(dc.stencilfail_bf), uint32_t(dc.stencilzpass_bf), uint32_t(dc.stencilzfail_bf), uint32_t(fr.stencilref), uint32_t(fr.stencilmask),
++              uint32_t(fr.stencilwritemask));
++    }
+     dkCmdBufBindDepthStencilState(cmd, &ds);
+ 
+     // Shaders (the whole graphics mask: a stage without a shader here is unbound).
+@@ -657,21 +755,36 @@
+     if (index_buffer_info) {
+       if (!CopyIndices(f, *index_buffer_info, index_offset, vertex_count)) { skipped_++; return true; }
+     }
++    const uint32_t base_vertex = regs.Get<reg::VGT_INDX_OFFSET>().indx_offset;
+     for (const auto& vb : vs->vertex_bindings()) {
+       if (buffer_count >= DK_MAX_VERTEX_BUFFERS) break;
+       auto fetch = regs.GetVertexFetch(vb.fetch_constant);
+       uint32_t stride = vb.stride_words * 4;
+       uint32_t bytes = vertex_count * stride;
++      // The first vertex: VGT_INDX_OFFSET is added to every vertex index (auto-indexed and indexed draws alike).
++      // HCU draws all of a frame's sprite quads from one vertex buffer, each with its own offset.
++      uint32_t src_off = base_vertex * stride;
+       uint32_t avail = fetch.size * 4;
++      avail = avail > src_off ? avail - src_off : 0;
+       if (bytes > avail) {
+-        LogOnce("vbclamp", "vertex data clamped: %u vertices x %u bytes = %u, fetch constant %u holds %u bytes (VS %016llX)", vertex_count,
+-                stride, bytes, vb.fetch_constant, avail, (unsigned long long)vs->ucode_data_hash());
++        LogOnce("vbclamp", "vertex data clamped: %u vertices x %u bytes = %u, fetch constant %u holds %u bytes after offset %u (VS %016llX)", vertex_count,
++                stride, bytes, vb.fetch_constant, avail, base_vertex, (unsigned long long)vs->ucode_data_hash());
+         bytes = avail;
+       }
+       uint32_t off = f.data.Alloc(bytes ? bytes : 16, 64);
+       if (off == UINT32_MAX) { LogOnce("ring", "frame data ring full"); skipped_++; return true; }
+-      const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2);
++      const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2) + src_off;
+       texture_conversion::CopySwapBlock(fetch.endian, f.data.cpu + off, src, bytes);
++#ifdef CVHD_DK_GL
++      if (TraceFrame() && vertex_count <= 6) {
++        // The vertices of small draws (sprites) as floats, after the byte swap.
++        std::string v;
++        const float* fl = reinterpret_cast<const float*>(f.data.cpu + off);
++        for (uint32_t i = 0; i < std::min(bytes / 4, 30u); i++) { char b[24]; std::snprintf(b, sizeof(b), " %g", fl[i]); v += b; }
++        Log("T   vf%u n=%u stride %u addr %08X+%u:%s", vb.fetch_constant, vertex_count, stride, fetch.address << 2, src_off, v.c_str());
++        trace_vf_.emplace_back((fetch.address << 2) + src_off, std::min(bytes, 24u));
++      }
++#endif
+       dkCmdBufBindVtxBuffer(cmd, buffer_count, f.data.gpu + off, bytes);
+       buffers[buffer_count] = DkVtxBufferState{stride, 0};
+       for (const auto& a : vb.attributes) {
+@@ -700,6 +813,18 @@
+     // Uniforms: the ALU constants and the system constants, per stage.
+     if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; return true; }
+ 
++#ifdef CVHD_DK_GL
++    if (TraceFrame()) {
++      // Linux test host: HCU_DK_TRACE_AT=N logs every draw, clear and resolve of swap N.
++      auto bl = regs.Get<reg::RB_BLENDCONTROL>();
++      Log("T draw %u vs %016llX ps %016llX prim %u n=%u%s | color %s base %u fmt %u | depth %s base %u | pitch %u msaa %u | mask %x | blend %u/%u/%u a %u/%u/%u | z %u/%u f %u stencil %u | vp %g,%g %gx%g | sc %u,%u %ux%u |%s",
++          trace_draws_++, (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash(), uint32_t(prim_type), index_count,
++          index_buffer_info ? "i" : "", color ? "yes" : "no", color_info.color_base, uint32_t(color_info.color_format), depth ? "yes" : "no",
++          depth_info.depth_base, pitch, uint32_t(surf.msaa_samples), uint32_t(mask.value & 0xF), uint32_t(bl.color_srcblend), uint32_t(bl.color_destblend), uint32_t(bl.color_comb_fcn),
++          uint32_t(bl.alpha_srcblend), uint32_t(bl.alpha_destblend), uint32_t(bl.alpha_comb_fcn), dc.z_enable, dc.z_write_enable, uint32_t(dc.zfunc),
++          dc.stencil_enable, vp.x, vp.y, vp.width, vp.height, scissor.x, scissor.y, scissor.width, scissor.height, bound_textures.c_str());
++    }
++#endif
+     if (index_buffer_info) {
+       dkCmdBufBindIdxBuffer(cmd, index_buffer_info->format == xenos::IndexFormat::kInt32 ? DkIdxFormat_Uint32 : DkIdxFormat_Uint16,
+                             f.data.gpu + index_offset);
+@@ -707,6 +832,14 @@
+     } else {
+       dkCmdBufDraw(cmd, prim, index_count, 1, 0, 0);
+     }
++#ifdef CVHD_DK_GL
++    if (TraceFrame() && std::getenv("HCU_DK_TRACE_DUMP") && (color ? color : depth)->width) {
++      // One picture per draw (HCU_DK_TRACE_DUMP=<dir>): the colour target after the draw, named by swap and draw number.
++      char name[256];
++      std::snprintf(name, sizeof(name), "%s/d%u-%03u.ppm", std::getenv("HCU_DK_TRACE_DUMP"), swaps_ + 1, trace_draws_ - 1);
++      if (color) dkglCmdDumpImage(cmd, &color->image, name);
++    }
++#endif
+     draws_++;
+     frame_draws_++;
+     return true;
+@@ -729,7 +862,7 @@
+     HostImage* front = nullptr;
+     if (guest_images_.count(frontbuffer_ptr) && frontbuffer_width && frontbuffer_height) {
+       // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
+-      front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, DkImageFormat_RGBA8_Unorm, false);
++      front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, guest_images_[frontbuffer_ptr]->format, false);
+     }
+     if (present_target_) {
+       // Debug (the file sdmc:/switch/cvhd/dk_present_rt): show the widest colour render target itself,
+@@ -761,6 +894,17 @@
+       for (auto& it : guest_images_) if (it.second->width >= 600 && it.second != front) { char n[48]; std::snprintf(n, sizeof(n), "guest %08X%s", it.first, it.second->from_resolve ? " (resolve)" : " (upload)"); queue_dump(n, it.second); }
+       dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
+     }
++#ifdef CVHD_DK_GL
++    if (TraceFrame()) {
++      for (auto& v : trace_vf_) {
++        const uint32_t* w = reinterpret_cast<const uint32_t*>(memory_->TranslatePhysical(v.first));
++        float fl[6];
++        for (int i = 0; i < 6; i++) { uint32_t b = __builtin_bswap32(w[i]); std::memcpy(&fl[i], &b, 4); }
++        Log("T   at the swap, %08X now holds: %g %g %g %g %g %g", v.first, fl[0], fl[1], fl[2], fl[3], fl[4], fl[5]);
++      }
++      trace_vf_.clear();
++    }
++#endif
+     if (swaps_ < 5) Log("swap #%u: acquiring a swapchain image", swaps_ + 1);
+     int slot = dkQueueAcquireImage(queue_, swapchain_);
+     if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
+@@ -811,6 +955,7 @@
+     dkQueuePresentImage(queue_, swapchain_, slot);
+ #ifdef CVHD_DK_GL
+     FlushTextureDumps();
++    trace_draws_ = 0;
+ #endif
+     if (!dumps.empty()) {
+       dkQueueWaitIdle(queue_);
+@@ -863,6 +1008,28 @@
+ #endif
+   }
+   mutable bool skip_checked_[1] = {false};
++#ifdef CVHD_DK_GL
++  bool TraceFrame() const {
++    static const char* at = std::getenv("HCU_DK_TRACE_AT");
++    if (!at) return false;
++    // "7600,7700" or ranges "7600-7640" (comma separated).
++    uint32_t cur = swaps_ + 1;
++    std::string list = at;
++    size_t pos = 0;
++    while (pos < list.size()) {
++      size_t end = list.find(',', pos);
++      if (end == std::string::npos) end = list.size();
++      std::string item = list.substr(pos, end - pos);
++      size_t dash = item.find('-');
++      uint32_t lo = uint32_t(std::atoi(item.c_str())), hi = dash == std::string::npos ? lo : uint32_t(std::atoi(item.c_str() + dash + 1));
++      if (cur >= lo && cur <= hi) return true;
++      pos = end + 1;
++    }
++    return false;
++  }
++  uint32_t trace_draws_ = 0;
++  std::vector<std::pair<uint32_t, uint32_t>> trace_vf_;
++#endif
+ 
+   // ----- frames ---------------------------------------------------------------------------------
+   void BeginFrame() {
+@@ -1069,7 +1236,7 @@
+         // The memory was reused with another format (a texture over an old resolve destination or the
+         // reverse): a new image. ponytail: the old image's pool memory is not reclaimed (bump pool);
+         // a free list when the pool fills in a stage.
+-        HostImage* fresh = CreateImage(std::max(width, create_w), std::max(height, create_h), format, DkImageFlags_UsageRender, false);
++        HostImage* fresh = CreateImage(std::max(width, create_w), std::max(height, create_h), format, DkImageFlags_UsageRender, format == DkImageFormat_Z24S8);
+         if (!fresh) return nullptr;
+         fresh->guest_base = base;
+         if (create_w || create_h) ClearNewImage(fresh);
+@@ -1085,7 +1252,7 @@
+         width = std::max(width, img->width);
+         height = std::max(height, img->height);
+       }
+-      HostImage* resized = CreateImage(width, height, img->format, DkImageFlags_UsageRender, false);
++      HostImage* resized = CreateImage(width, height, img->format, DkImageFlags_UsageRender, img->is_depth);
+       if (!resized) return img;
+       ClearNewImage(resized);
+       uint32_t cw = std::min(width, img->width), ch = std::min(height, img->height);
+@@ -1106,12 +1273,42 @@
+       return resized;
+     }
+     HostImage* img = CreateImage(std::max(width, create_w), std::max(height, create_h), format,
+-                                 DkImageFlags_UsageRender, false);
++                                 DkImageFlags_UsageRender, format == DkImageFormat_Z24S8);
+     if (!img) return nullptr;
+     img->guest_base = base;
+     guest_images_.emplace(base, img);
+     if (create_w || create_h) ClearNewImage(img);
+     return img;
++  }
++
++  // HCU's shadow maps: three cascades are resolved to three addresses (a tile row of 32 apart in the
++  // memory of one 2048x2048 texture) and sampled as that one texture. Each resolve made its own depth
++  // image at its own address; the texture takes the ones resolved after its own contents at their rows.
++  void MergeDepthPieces(Frame& f, HostImage* img) {
++    const uint32_t stride = ((img->width + 31) & ~31u) * 32 * 4;  // bytes of one row of 32x32 tiles
++    for (auto& it : guest_images_) {
++      HostImage* p = it.second;
++      if (p == img || p->format != DkImageFormat_Z24S8 || !p->from_resolve || it.first <= img->guest_base) continue;
++      uint32_t delta = it.first - img->guest_base;
++      if (delta % stride) continue;
++      uint32_t y = delta / stride * 32;
++      if (y >= img->height) continue;
++      auto m = img->merged.find(p);
++      if (p->content_serial <= img->content_serial) continue;                      // older than the texture's own contents
++      if (m != img->merged.end() && m->second >= p->content_serial) continue;      // already copied in
++      uint32_t w = std::min(p->width, img->width), h = std::min(p->height, img->height - y);
++      DkImageView sv, dv;
++      dkImageViewDefaults(&sv, &p->image);
++      dkImageViewDefaults(&dv, &img->image);
++      DkImageRect sr{0, 0, 0, w, h, 1}, dr{0, y, 0, w, h, 1};
++      dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
++      dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
++      dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
++      img->merged[p] = p->content_serial;
++      char key[64];
++      std::snprintf(key, sizeof(key), "merge %08X %08X", img->guest_base, it.first);
++      LogOnce(key, "depth image at %08X (%ux%u) copied into the texture at %08X at row %u", it.first, p->width, p->height, img->guest_base, y);
++    }
+   }
+ 
+   HostImage* TextureImage(Frame& f, const TextureInfo& info, const xenos::xe_gpu_texture_fetch_t& fetch) {
+@@ -1123,8 +1320,20 @@
+     }
+     uint32_t base = info.memory.base_address;
+     // TextureInfo keeps the fetch constant's fields: the size minus one.
+-    HostImage* img = GuestImage(f, base, info.width + 1, info.height + 1, format, false);
++    HostImage* img = GuestImage(f, base, info.width + 1, info.height + 1, format, format == DkImageFormat_Z24S8);
+     if (!img) return nullptr;
++    if (format == DkImageFormat_Z24S8) {
++      // Only a depth resolve fills a depth image. One never resolved here (a sample before the first
++      // shadow pass) reads "nothing in the way": depth 1.
++      if (!img->content_serial) {
++        ClearNewImage(img);
++        img->from_resolve = true;
++        img->content_serial = serial_;
++        LogOnce("deptex", "depth texture at %08X (%ux%u) sampled before any depth resolve: cleared to 1", base, img->width, img->height);
++      }
++      MergeDepthPieces(f, img);
++      return img;
++    }
+     if (img->checked_serial == serial_) return img;
+     img->reversed_channels = reversed;  // already checked for this draw
+     img->checked_serial = serial_;
+@@ -1195,6 +1404,25 @@
+   std::vector<std::pair<HostImage*, std::string>> pending_dumps_;
+   std::unordered_map<uint32_t, uint32_t> upload_counts_;
+   uint32_t dump_count_ = 0;
++#endif
++
++#ifdef CVHD_DK_GL
++  // Trace frames: the decoded texels of an uncompressed texture as <dir>/t<swap>-<draw>-<base>-<w>x<h>-<format>.raw (a CPU reference for the picture).
++  void DumpDecoded(const TextureInfo& info, xenos::Endian endian, const char* dir, uint32_t draw) {
++    const FormatInfo* fi = info.format_info();
++    if (fi->block_width != 1 || fi->block_height != 1) return;
++    uint32_t w = info.width + 1, h = info.height + 1, bpb = fi->bytes_per_block();
++    std::vector<uint8_t> buf(size_t(w) * h * bpb);
++    const uint8_t* src = memory_->TranslatePhysical(info.memory.base_address);
++    if (info.is_tiled) {
++      if (!::cvhd::UntileFast(buf.data(), src, w, h, info.extent.block_pitch_h, bpb, static_cast<::cvhd::SwapMode>(uint32_t(endian)))) return;
++    } else {
++      for (uint32_t y = 0; y < h; y++) texture_conversion::CopySwapBlock(endian, buf.data() + y * w * bpb, src + y * info.extent.block_pitch_h * bpb, w * bpb);
++    }
++    char name[300];
++    std::snprintf(name, sizeof(name), "%s/t%u-%03u-%08X-%ux%u-%s.raw", dir, swaps_ + 1, draw, info.memory.base_address, w, h, fi->name);
++    if (FILE* fp = std::fopen(name, "wb")) { std::fwrite(buf.data(), 1, buf.size(), fp); std::fclose(fp); }
++  }
+ #endif
+ 
+   bool UploadTexture(Frame& f, HostImage& img, const TextureInfo& info, xenos::Endian endian) {
+@@ -1387,6 +1615,10 @@
+                 depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
+                 color[1], color[2], color[3], z, scale);
+       }
++#ifdef CVHD_DK_GL
++      if (TraceFrame()) Log("T clear %s%s EDRAM %u/%u pitch %u rect %u,%u %ux%u color %g %g %g %g z %g", color_img ? "color" : "", depth_img ? " depth" : "",
++                            color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0], color[1], color[2], color[3], z);
++#endif
+       clears_++;
+       frame_clears_++;
+     }
+@@ -1399,8 +1631,59 @@
+     DkCmdBuf cmd = f.cmdbuf;
+     draw_util::ResolveInfo info;
+     if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
++    if (info.IsClearingDepth()) {
++      // The XDK clears depth with the resolve (D3DRESOLVE_CLEARDEPTHSTENCIL). Without it a depth-tested
++      // scene keeps the last frame's (or uninitialized) depth and every LEQUAL fragment fails (HCU's
++      // stage: the 3D level never showed, the depth-less HUD did). D24S8: depth in the top 24 bits.
++      uint32_t dpitch = info.depth_edram_info.pitch_tiles * 80;
++      HostImage* d = TargetImage(info.depth_original_base, dpitch, DkImageFormat_Z24S8, true);
++      uint32_t cx = info.coordinate_info.edram_offset_x_div_8 * 8, cy = info.coordinate_info.edram_offset_y_div_8 * 8;
++      uint32_t cw = info.coordinate_info.width_div_8 * 8, ch = info.height_div_8 * 8;
++      if (d && cx < d->width && cy < d->height) {
++        if (cx + cw > d->width) cw = d->width - cx;
++        if (cy + ch > d->height) ch = d->height - cy;
++        BindTargets(cmd, nullptr, d);
++        DkScissor sc{cx, cy, cw, ch};
++        dkCmdBufSetScissors(cmd, 0, &sc, 1);
++        float z = float(info.rb_depth_clear >> 8) / float(0xFFFFFF);
++        dkCmdBufClearDepthStencil(cmd, true, z, 0xFF, info.rb_depth_clear & 0xFF);
++        char key[64];
++        std::snprintf(key, sizeof(key), "dclear %u %u %u %u %u %u", info.depth_original_base, dpitch, cx, cy, cw, ch);
++        LogOnce(key, "resolve clears depth at EDRAM %u pitch %u: rect %u,%u %ux%u to %g, stencil %u", info.depth_original_base, dpitch, cx,
++                cy, cw, ch, z, info.rb_depth_clear & 0xFF);
++      }
++    }
++    if (info.IsCopyingDepth() && no_depth_copy_) return true;
+     if (info.IsCopyingDepth()) {
+-      LogOnce("depthresolve", "depth resolve to %08X ignored", info.copy_dest_base);
++      // A depth resolve into a texture (the stage's shadow map): the depth image is copied into a depth
++      // image aliased at the destination address, which the pixel shaders then sample as a k_24_8 texture.
++      uint32_t dpitch = info.depth_edram_info.pitch_tiles * 80;
++      HostImage* dsrc = TargetImage(info.depth_original_base, dpitch, DkImageFormat_Z24S8, true);
++      uint32_t x = info.coordinate_info.edram_offset_x_div_8 * 8, y = info.coordinate_info.edram_offset_y_div_8 * 8;
++      uint32_t w = info.coordinate_info.width_div_8 * 8, h = info.height_div_8 * 8;
++      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
++      if (!dsrc || !w || !h) return true;
++      HostImage* dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, DkImageFormat_Z24S8, true);
++      if (!dd) return true;
++      dd->from_resolve = true;
++      dd->content_serial = serial_;
++      if (x + w > dsrc->width) w = x < dsrc->width ? dsrc->width - x : 0;
++      if (y + h > dsrc->height) h = y < dsrc->height ? dsrc->height - y : 0;
++      if (dx + w > dd->width) w = dx < dd->width ? dd->width - dx : 0;
++      if (dy + h > dd->height) h = dy < dd->height ? dd->height - dy : 0;
++      if (w && h) {
++        DkImageView sv, dv;
++        dkImageViewDefaults(&sv, &dsrc->image);
++        dkImageViewDefaults(&dv, &dd->image);
++        DkImageRect sr{x, y, 0, w, h, 1}, dr{dx, dy, 0, w, h, 1};
++        dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
++        dkCmdBufCopyImage(cmd, &sv, &sr, &dv, &dr, 0);
++        dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
++      }
++      char key[96];
++      std::snprintf(key, sizeof(key), "depthcopy %u %u %u %u %u %u %08X", info.depth_original_base, dpitch, x, y, w, h, info.copy_dest_base);
++      LogOnce(key, "depth resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u depth image) at %u,%u", info.depth_original_base, dpitch, x, y, w, h,
++              info.copy_dest_base, dd->width, dd->height, dx, dy);
+       return true;
+     }
+     uint32_t src_pitch = info.color_edram_info.pitch_tiles * 80;
+@@ -1412,7 +1695,11 @@
+     uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
+     (void)dest_pitch; (void)dest_height;
+     uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
+-    HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, DkImageFormat_RGBA8_Unorm, true);  // gh: exact size (the aligned one made it ping-pong with the texture bind)
++    // The destination keeps the target's host format (RGB10A2, RGBA16F), so the raw image copy is exact and the
++    // texture fetch of the resolve finds an image of its own format. sRGB targets resolve to plain RGBA8: the
++    // guest reads the stored (gamma-encoded) bytes as a normal texture.
++    DkImageFormat dst_format = src->format == DkImageFormat_RGBA8_Unorm_sRGB ? DkImageFormat_RGBA8_Unorm : src->format;
++    HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, dst_format, true);  // gh: exact size (the aligned one made it ping-pong with the texture bind)
+     if (!dst) return true;
+     dst->from_resolve = true;
+     dst->content_serial = serial_;
+@@ -1447,6 +1734,10 @@
+       LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
+               x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
+     }
++#ifdef CVHD_DK_GL
++    if (TraceFrame()) Log("T resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u) at %u,%u%s%s", info.color_edram_info.base_tiles, src_pitch, x, y, w, h,
++                          info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? " clearC" : "", info.IsClearingDepth() ? " clearD" : "");
++#endif
+     resolves_++;
+     frame_resolves_++;
+     return true;
+@@ -1537,6 +1828,7 @@
+   bool present_vs_ = false, present_fs_ = false;
+   bool present_target_ = false;
+   bool dump_images_ = false;
++  bool no_depth_copy_ = false;
+   std::string shader_dir_;
+   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
+   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
+--- a/src/gpu/dk_gl/dk_gl_shim.cpp
++++ b/src/gpu/dk_gl/dk_gl_shim.cpp
+@@ -59,6 +59,7 @@
+   X(LinkProgram, LINKPROGRAM) X(GetProgramiv, GETPROGRAMIV) X(GetProgramInfoLog, GETPROGRAMINFOLOG) \
+   X(UseProgram, USEPROGRAM) X(DeleteShader, DELETESHADER) X(CullFace, CULLFACE) X(FrontFace, FRONTFACE) \
+   X(PolygonMode, POLYGONMODE) X(GetError, GETERROR) X(Finish, FINISH) X(ClearColor, CLEARCOLOR) \
++  X(StencilFuncSeparate, STENCILFUNCSEPARATE) X(StencilOpSeparate, STENCILOPSEPARATE) X(StencilMaskSeparate, STENCILMASKSEPARATE) \
+   X(Clear, CLEAR) X(BlendColor, BLENDCOLOR) X(GetTexImage, GETTEXIMAGE) X(DeleteProgram, DELETEPROGRAM)
+ 
+ #define DECL(name, upper) PFNGL##upper##PROC gl##name = nullptr;
+@@ -212,6 +213,7 @@
+   DkColorWriteState colorwrite{};
+   DkBlendState blend{};
+   DkDepthStencilState ds{};
++  uint8_t st_write[2] = {0xFF, 0xFF}, st_ref[2] = {0, 0}, st_mask[2] = {0xFF, 0xFF};  // front, back: dkCmdBufSetStencil
+   const DkShader* shaders[5] = {};  // by stage: vertex, tess ctrl, tess eval, geometry, fragment
+   std::vector<DkVtxAttribState> attribs;
+   std::vector<DkVtxBufferState> vbufs;
+@@ -308,6 +310,19 @@
+   }
+ }
+ 
++GLenum StencilOpOf(DkStencilOp op) {
++  switch (op) {
++    case DkStencilOp_Zero: return GL_ZERO;
++    case DkStencilOp_Replace: return GL_REPLACE;
++    case DkStencilOp_Incr: return GL_INCR;
++    case DkStencilOp_Decr: return GL_DECR;
++    case DkStencilOp_Invert: return GL_INVERT;
++    case DkStencilOp_IncrWrap: return GL_INCR_WRAP;
++    case DkStencilOp_DecrWrap: return GL_DECR_WRAP;
++    default: return GL_KEEP;
++  }
++}
++
+ GLenum BlendFactorOf(DkBlendFactor f) {
+   switch (f) {
+     case DkBlendFactor_Zero: return GL_ZERO;
+@@ -483,7 +498,21 @@
+   if (E.ds.depthTestEnable && E.depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+   glDepthMask(E.ds.depthWriteEnable && E.depth ? GL_TRUE : GL_FALSE);
+   glDepthFunc(CompareFunc(DkCompareOp(E.ds.depthCompareOp)));
+-  glDisable(GL_STENCIL_TEST);
++  if (E.ds.stencilTestEnable && E.depth) {
++    glEnable(GL_STENCIL_TEST);
++    for (int face = 0; face < 2; face++) {
++      GLenum f = face ? GL_BACK : GL_FRONT;
++      DkCompareOp cmp = DkCompareOp(face ? E.ds.stencilBackCompareOp : E.ds.stencilFrontCompareOp);
++      glStencilFuncSeparate(f, CompareFunc(cmp), E.st_ref[face], E.st_mask[face]);
++      glStencilOpSeparate(f, StencilOpOf(DkStencilOp(face ? E.ds.stencilBackFailOp : E.ds.stencilFrontFailOp)),
++                          StencilOpOf(DkStencilOp(face ? E.ds.stencilBackDepthFailOp : E.ds.stencilFrontDepthFailOp)),
++                          StencilOpOf(DkStencilOp(face ? E.ds.stencilBackPassOp : E.ds.stencilFrontPassOp)));
++      glStencilMaskSeparate(f, E.st_write[face]);
++    }
++  } else {
++    glDisable(GL_STENCIL_TEST);
++    glStencilMaskSeparate(GL_FRONT_AND_BACK, 0xFF);  // clears must still write the stencil
++  }
+   if (E.rast.cullMode == DkFace_None) glDisable(GL_CULL_FACE);
+   else {
+     glEnable(GL_CULL_FACE);
+@@ -816,6 +845,19 @@
+ void dkCmdBufBindColorState(DkCmdBuf c, DkColorState const* s) { DkColorState v = *s; c->ops.push_back([=] { E.colorstate = v; }); }
+ void dkCmdBufBindColorWriteState(DkCmdBuf c, DkColorWriteState const* s) { DkColorWriteState v = *s; c->ops.push_back([=] { E.colorwrite = v; }); }
+ void dkCmdBufBindBlendStates(DkCmdBuf c, uint32_t, DkBlendState const states[], uint32_t) { DkBlendState v = states[0]; c->ops.push_back([=] { E.blend = v; }); }
++void dkCmdBufSetStencil(DkCmdBuf c, DkFace face, uint8_t mask, uint8_t funcRef, uint8_t funcMask) {
++  c->ops.push_back([=] {
++    for (int i = 0; i < 2; i++) {
++      bool front = i == 0;
++      if ((front && (face == DkFace_Front || face == DkFace_FrontAndBack)) || (!front && (face == DkFace_Back || face == DkFace_FrontAndBack))) {
++        E.st_write[i] = mask;
++        E.st_ref[i] = funcRef;
++        E.st_mask[i] = funcMask;
++      }
++    }
++  });
++}
++void dkCmdBufSetBlendConst(DkCmdBuf c, float r, float g, float b, float a) { c->ops.push_back([=] { glBlendColor(r, g, b, a); }); }
+ void dkCmdBufBindDepthStencilState(DkCmdBuf c, DkDepthStencilState const* s) { DkDepthStencilState v = *s; c->ops.push_back([=] { E.ds = v; }); }
+ 
+ void dkCmdBufBindVtxAttribState(DkCmdBuf c, DkVtxAttribState const attribs[], uint32_t n) {
+@@ -874,7 +916,7 @@
+   const ImageData* d = reinterpret_cast<const ImageData*>(dst->pImage->_storage);
+   DkImageRect a = *sr, b = *dr;
+   c->ops.push_back([=] {
+-    if (s->internal == d->internal && !s->depth) {
++    if (s->internal == d->internal) {
+       glCopyImageSubData(s->tex, GL_TEXTURE_2D, 0, int(a.x), int(a.y), 0, d->tex, GL_TEXTURE_2D, 0, int(b.x), int(b.y), 0, int(a.width), int(a.height), 1);
+     } else {
+       glBindFramebuffer(GL_READ_FRAMEBUFFER, G.fbo_read);
+@@ -1028,3 +1070,8 @@
+ }
+ 
+ }  // extern "C"
++
++void dkglCmdDumpImage(DkCmdBuf c, const DkImage* image, const char* path) {
++  std::string p = path;
++  c->ops.push_back([=] { dkglDumpImage(image, p.c_str()); });
++}
+--- a/src/gpu/dk_gl/dk_gl_shim.h
++++ b/src/gpu/dk_gl/dk_gl_shim.h
+@@ -6,3 +6,5 @@
+ void dkShaderInitializeGlsl(DkShader* obj, DkStage stage, const char* text);
+ // Writes the image (RGBA8 contents) as a PPM file; debug only.
+ void dkglDumpImage(const DkImage* image, const char* path);
++// The same, as a command in the buffer (runs between the draws recorded before and after it).
++void dkglCmdDumpImage(DkCmdBuf cmd, const DkImage* image, const char* path);
+--- a/tools/xenos2glsl.py
++++ b/tools/xenos2glsl.py
+@@ -102,14 +102,15 @@
+ 
+     def parse_source(self, tok, count):
+         """Source operand -> GLSL expression with exactly `count` components (1, 2 or 4)."""
+-        m = re.match(r'^(-?)(r|c)(_abs)?(?:\[(\d+)\]|(\d+)|\[(\d+)\+aL\]|\[aL\])(?:\.([xyzw]+))?$', tok)
++        m = re.match(r'^(-?)(r|c)(_abs)?(?:\[(\d+)\]|(\d+)|\[(\d+)\+aL\]|\[aL\]|\[(\d+)\+a0\])(?:\.([xyzw]+))?$', tok)
+         if not m:
+             self.err('bad source operand %r' % tok)
+-        neg, kind, is_abs, idx_abs, idx_plain, idx_rel, swz = m.groups()
++        neg, kind, is_abs, idx_abs, idx_plain, idx_rel, idx_a0, swz = m.groups()
+         relative = tok.find('aL') >= 0  # gh: c[N+aL] inside a loop
+-        idx = int(idx_abs if idx_abs is not None else idx_plain if idx_plain is not None else idx_rel or 0)
+-        if relative and kind != 'c':
+-            self.err('aL on a register is not supported')
++        idx = int(idx_abs if idx_abs is not None else idx_plain if idx_plain is not None else idx_a0 if idx_a0 is not None else idx_rel or 0)
++        rel_a0 = idx_a0 is not None  # cvhd: c[N+a0], indexed by the address register
++        if (relative or rel_a0) and kind != 'c':
++            self.err('relative register operand %r is not supported' % tok)
+         if swz is None:
+             swz = 'xyzw'
+         if len(swz) == 1:
+@@ -121,6 +122,8 @@
+             base = 'r%d' % idx
+         elif relative:
+             base = 'c[%d + aL]' % idx
++        elif rel_a0:
++            base = 'c[%d + a0]' % idx
+         else:
+             base = 'c[%d]' % idx
+         if count == 1:
+@@ -313,6 +316,11 @@
+             self.has_kill = True
+             self.extra_kill = 'if (%s %s) discard;' % (a[0], cmp)
+             return 'float(%s %s)' % (a[0], cmp)
++        if op in ('maxas', 'maxasf'):
++            # The address register (Xenia): a0 = clamp(floor(a + 0.5), -256, 255) (maxasf: floor(a)); the
++            # result is max(a, b). Set after the operands are read, before the results are written.
++            self.extra_pred = 'a0 = int(clamp(floor(%s%s), -256.0, 255.0));' % (a[0], ' + 0.5' if op == 'maxas' else '')
++            return 'max(%s, %s)' % (a[0], a[1])
+         if op == 'retain_prev': return 'ps'
+         self.err('scalar op %s is not implemented' % op)
+ 
+@@ -524,6 +532,7 @@
+         for e in sorted(self.exports):
+             out.append(ind + 'vec4 %s = vec4(0.0);' % e)
+         out.append(ind + 'bool p0 = false;')
++        out.append(ind + 'int a0 = 0;')
+         out.append(ind + 'float ps = 0.0;')
+ 
+         def block_cond(b):
