@@ -196,6 +196,20 @@ struct SysConstants {
 // depth-tested 3D level never showed).
 DkCompareOp CompareOp(xenos::CompareFunction f) { return DkCompareOp(uint32_t(f) + 1); }
 
+// Xenos StencilOp (kKeep = 0 ...) to deko3d (Keep = 1 ...).
+DkStencilOp StencilOpOf(xenos::StencilOp op) {
+  switch (op) {
+    case xenos::StencilOp::kZero: return DkStencilOp_Zero;
+    case xenos::StencilOp::kReplace: return DkStencilOp_Replace;
+    case xenos::StencilOp::kIncrementClamp: return DkStencilOp_Incr;
+    case xenos::StencilOp::kDecrementClamp: return DkStencilOp_Decr;
+    case xenos::StencilOp::kInvert: return DkStencilOp_Invert;
+    case xenos::StencilOp::kIncrementWrap: return DkStencilOp_IncrWrap;
+    case xenos::StencilOp::kDecrementWrap: return DkStencilOp_DecrWrap;
+    default: return DkStencilOp_Keep;
+  }
+}
+
 DkBlendFactor BlendFactor(xenos::BlendFactor f) {
   switch (f) {
     case xenos::BlendFactor::kZero: return DkBlendFactor_Zero;
@@ -679,12 +693,48 @@ class Deko3dCommandProcessor : public CommandProcessor {
     DkBlendState bs{BlendOp(blend.color_comb_fcn), BlendFactor(blend.color_srcblend), BlendFactor(blend.color_destblend),
                     BlendOp(blend.alpha_comb_fcn), BlendFactor(blend.alpha_srcblend), BlendFactor(blend.alpha_destblend)};
     dkCmdBufBindBlendStates(cmd, 0, &bs, 1);
+    {
+      // The constant factors (Xenos kConstantColor/Alpha and their inverses) read RB_BLEND_RED..ALPHA.
+      auto is_const = [](xenos::BlendFactor f) { return uint32_t(f) >= 12 && uint32_t(f) <= 15; };
+      if (blend_enabled && (is_const(blend.color_srcblend) || is_const(blend.color_destblend) || is_const(blend.alpha_srcblend) || is_const(blend.alpha_destblend))) {
+        float bc[4];
+        for (int i = 0; i < 4; i++) std::memcpy(&bc[i], &regs.values[XE_GPU_REG_RB_BLEND_RED + i], 4);
+        dkCmdBufSetBlendConst(cmd, bc[0], bc[1], bc[2], bc[3]);
+        char key[96];
+        std::snprintf(key, sizeof(key), "blendconst %u %u %g %g", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend), bc[0], bc[3]);
+        LogOnce(key, "constant blend factors %u/%u (alpha %u/%u): constant %g %g %g %g", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend),
+                uint32_t(blend.alpha_srcblend), uint32_t(blend.alpha_destblend), bc[0], bc[1], bc[2], bc[3]);
+      }
+    }
     DkDepthStencilState ds;
     dkDepthStencilStateDefaults(&ds);
     ds.depthTestEnable = depth && dc.z_enable;
     ds.depthWriteEnable = depth && dc.z_write_enable;
     ds.depthCompareOp = CompareOp(dc.zfunc);
-    ds.stencilTestEnable = 0;
+    // Stencil (HCU's UI clips its panels with it): needs the depth image, which holds the stencil bits.
+    ds.stencilTestEnable = depth && dc.stencil_enable;
+    if (ds.stencilTestEnable) {
+      ds.stencilFrontFailOp = StencilOpOf(dc.stencilfail);
+      ds.stencilFrontPassOp = StencilOpOf(dc.stencilzpass);
+      ds.stencilFrontDepthFailOp = StencilOpOf(dc.stencilzfail);
+      ds.stencilFrontCompareOp = CompareOp(dc.stencilfunc);
+      ds.stencilBackFailOp = StencilOpOf(dc.stencilfail_bf);
+      ds.stencilBackPassOp = StencilOpOf(dc.stencilzpass_bf);
+      ds.stencilBackDepthFailOp = StencilOpOf(dc.stencilzfail_bf);
+      ds.stencilBackCompareOp = CompareOp(dc.stencilfunc_bf);
+      auto fr = regs.Get<reg::RB_STENCILREFMASK>();
+      reg::RB_STENCILREFMASK bk;
+      bk.value = regs.values[XE_GPU_REG_RB_STENCILREFMASK_BF];
+      dkCmdBufSetStencil(cmd, DkFace_Front, uint8_t(fr.stencilwritemask), uint8_t(fr.stencilref), uint8_t(fr.stencilmask));
+      dkCmdBufSetStencil(cmd, DkFace_Back, uint8_t(bk.stencilwritemask), uint8_t(bk.stencilref), uint8_t(bk.stencilmask));
+      char key[96];
+      std::snprintf(key, sizeof(key), "stencil %u %u %u %u %u ref %u", uint32_t(dc.stencilfunc), uint32_t(dc.stencilfail), uint32_t(dc.stencilzpass),
+                    uint32_t(dc.stencilzfail), uint32_t(dc.backface_enable), uint32_t(fr.stencilref));
+      LogOnce(key, "stencil on: func %u fail %u zpass %u zfail %u (back %u: func %u fail %u zpass %u zfail %u), ref %u mask %02X write %02X", uint32_t(dc.stencilfunc),
+              uint32_t(dc.stencilfail), uint32_t(dc.stencilzpass), uint32_t(dc.stencilzfail), uint32_t(dc.backface_enable), uint32_t(dc.stencilfunc_bf),
+              uint32_t(dc.stencilfail_bf), uint32_t(dc.stencilzpass_bf), uint32_t(dc.stencilzfail_bf), uint32_t(fr.stencilref), uint32_t(fr.stencilmask),
+              uint32_t(fr.stencilwritemask));
+    }
     dkCmdBufBindDepthStencilState(cmd, &ds);
 
     // Shaders (the whole graphics mask: a stage without a shader here is unbound).
@@ -900,6 +950,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkQueuePresentImage(queue_, swapchain_, slot);
 #ifdef HCU_DK_GL
     FlushTextureDumps();
+    trace_draws_ = 0;
 #endif
     if (!dumps.empty()) {
       dkQueueWaitIdle(queue_);
@@ -956,8 +1007,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool TraceFrame() const {
     static const char* at = std::getenv("HCU_DK_TRACE_AT");
     if (!at) return false;
-    std::string list = std::string(",") + at + ",";
-    return list.find("," + std::to_string(swaps_ + 1) + ",") != std::string::npos;
+    // "7600,7700" or ranges "7600-7640" (comma separated).
+    uint32_t cur = swaps_ + 1;
+    std::string list = at;
+    size_t pos = 0;
+    while (pos < list.size()) {
+      size_t end = list.find(',', pos);
+      if (end == std::string::npos) end = list.size();
+      std::string item = list.substr(pos, end - pos);
+      size_t dash = item.find('-');
+      uint32_t lo = uint32_t(std::atoi(item.c_str())), hi = dash == std::string::npos ? lo : uint32_t(std::atoi(item.c_str() + dash + 1));
+      if (cur >= lo && cur <= hi) return true;
+      pos = end + 1;
+    }
+    return false;
   }
   uint32_t trace_draws_ = 0;
   std::vector<std::pair<uint32_t, uint32_t>> trace_vf_;

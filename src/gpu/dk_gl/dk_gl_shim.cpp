@@ -59,6 +59,7 @@ namespace {
   X(LinkProgram, LINKPROGRAM) X(GetProgramiv, GETPROGRAMIV) X(GetProgramInfoLog, GETPROGRAMINFOLOG) \
   X(UseProgram, USEPROGRAM) X(DeleteShader, DELETESHADER) X(CullFace, CULLFACE) X(FrontFace, FRONTFACE) \
   X(PolygonMode, POLYGONMODE) X(GetError, GETERROR) X(Finish, FINISH) X(ClearColor, CLEARCOLOR) \
+  X(StencilFuncSeparate, STENCILFUNCSEPARATE) X(StencilOpSeparate, STENCILOPSEPARATE) X(StencilMaskSeparate, STENCILMASKSEPARATE) \
   X(Clear, CLEAR) X(BlendColor, BLENDCOLOR) X(GetTexImage, GETTEXIMAGE) X(DeleteProgram, DELETEPROGRAM)
 
 #define DECL(name, upper) PFNGL##upper##PROC gl##name = nullptr;
@@ -212,6 +213,7 @@ struct Exec {
   DkColorWriteState colorwrite{};
   DkBlendState blend{};
   DkDepthStencilState ds{};
+  uint8_t st_write[2] = {0xFF, 0xFF}, st_ref[2] = {0, 0}, st_mask[2] = {0xFF, 0xFF};  // front, back: dkCmdBufSetStencil
   const DkShader* shaders[5] = {};  // by stage: vertex, tess ctrl, tess eval, geometry, fragment
   std::vector<DkVtxAttribState> attribs;
   std::vector<DkVtxBufferState> vbufs;
@@ -305,6 +307,19 @@ GLenum CompareFunc(DkCompareOp op) {
     case DkCompareOp_NotEqual: return GL_NOTEQUAL;
     case DkCompareOp_Gequal: return GL_GEQUAL;
     default: return GL_ALWAYS;
+  }
+}
+
+GLenum StencilOpOf(DkStencilOp op) {
+  switch (op) {
+    case DkStencilOp_Zero: return GL_ZERO;
+    case DkStencilOp_Replace: return GL_REPLACE;
+    case DkStencilOp_Incr: return GL_INCR;
+    case DkStencilOp_Decr: return GL_DECR;
+    case DkStencilOp_Invert: return GL_INVERT;
+    case DkStencilOp_IncrWrap: return GL_INCR_WRAP;
+    case DkStencilOp_DecrWrap: return GL_DECR_WRAP;
+    default: return GL_KEEP;
   }
 }
 
@@ -483,7 +498,21 @@ void ApplyFixedState() {
   if (E.ds.depthTestEnable && E.depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
   glDepthMask(E.ds.depthWriteEnable && E.depth ? GL_TRUE : GL_FALSE);
   glDepthFunc(CompareFunc(DkCompareOp(E.ds.depthCompareOp)));
-  glDisable(GL_STENCIL_TEST);
+  if (E.ds.stencilTestEnable && E.depth) {
+    glEnable(GL_STENCIL_TEST);
+    for (int face = 0; face < 2; face++) {
+      GLenum f = face ? GL_BACK : GL_FRONT;
+      DkCompareOp cmp = DkCompareOp(face ? E.ds.stencilBackCompareOp : E.ds.stencilFrontCompareOp);
+      glStencilFuncSeparate(f, CompareFunc(cmp), E.st_ref[face], E.st_mask[face]);
+      glStencilOpSeparate(f, StencilOpOf(DkStencilOp(face ? E.ds.stencilBackFailOp : E.ds.stencilFrontFailOp)),
+                          StencilOpOf(DkStencilOp(face ? E.ds.stencilBackDepthFailOp : E.ds.stencilFrontDepthFailOp)),
+                          StencilOpOf(DkStencilOp(face ? E.ds.stencilBackPassOp : E.ds.stencilFrontPassOp)));
+      glStencilMaskSeparate(f, E.st_write[face]);
+    }
+  } else {
+    glDisable(GL_STENCIL_TEST);
+    glStencilMaskSeparate(GL_FRONT_AND_BACK, 0xFF);  // clears must still write the stencil
+  }
   if (E.rast.cullMode == DkFace_None) glDisable(GL_CULL_FACE);
   else {
     glEnable(GL_CULL_FACE);
@@ -816,6 +845,19 @@ void dkCmdBufBindRasterizerState(DkCmdBuf c, DkRasterizerState const* s) { DkRas
 void dkCmdBufBindColorState(DkCmdBuf c, DkColorState const* s) { DkColorState v = *s; c->ops.push_back([=] { E.colorstate = v; }); }
 void dkCmdBufBindColorWriteState(DkCmdBuf c, DkColorWriteState const* s) { DkColorWriteState v = *s; c->ops.push_back([=] { E.colorwrite = v; }); }
 void dkCmdBufBindBlendStates(DkCmdBuf c, uint32_t, DkBlendState const states[], uint32_t) { DkBlendState v = states[0]; c->ops.push_back([=] { E.blend = v; }); }
+void dkCmdBufSetStencil(DkCmdBuf c, DkFace face, uint8_t mask, uint8_t funcRef, uint8_t funcMask) {
+  c->ops.push_back([=] {
+    for (int i = 0; i < 2; i++) {
+      bool front = i == 0;
+      if ((front && (face == DkFace_Front || face == DkFace_FrontAndBack)) || (!front && (face == DkFace_Back || face == DkFace_FrontAndBack))) {
+        E.st_write[i] = mask;
+        E.st_ref[i] = funcRef;
+        E.st_mask[i] = funcMask;
+      }
+    }
+  });
+}
+void dkCmdBufSetBlendConst(DkCmdBuf c, float r, float g, float b, float a) { c->ops.push_back([=] { glBlendColor(r, g, b, a); }); }
 void dkCmdBufBindDepthStencilState(DkCmdBuf c, DkDepthStencilState const* s) { DkDepthStencilState v = *s; c->ops.push_back([=] { E.ds = v; }); }
 
 void dkCmdBufBindVtxAttribState(DkCmdBuf c, DkVtxAttribState const attribs[], uint32_t n) {
