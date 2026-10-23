@@ -1356,6 +1356,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
       MergeDepthPieces(f, img);
       return img;
     }
+    if (format == DkImageFormat_RGB10A2_Unorm && !img->from_resolve) {
+      // Only a resolve of a 2_10_10_10 target fills such an image; memory uploads would need the Xenos bit order.
+      LogOnce("rgb10a2", "texture at %08X: %s uploads are not supported (only resolves)", base, info.format_info()->name);
+      return nullptr;
+    }
     if (img->checked_serial == serial_) return img;
     img->reversed_channels = reversed;  // already checked for this draw
     img->checked_serial = serial_;
