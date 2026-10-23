@@ -55,7 +55,13 @@ Only the GPU calls end in OpenGL (Mesa llvmpipe, headless EGL).
     texels of each bound texture (`t<swap>-<draw>-<base>-<w>x<h>-<format>.raw`) and the host image
     (`h<swap>-<draw>-<base>.ppm`).
   - `HCU_DK_GL_POISON=1`: new images start as noise (finds uninitialised memory).
-- One test at a time. Never `pkill -f` with a pattern that the shell command itself contains.
+- `HCU_PLAY=1 HCU_DK_START_SWAP=24000 scripts/stage1.sh <name> 90`: after the walk the script runs right, shoots and jumps for the
+  whole time (the stick is `d`, X is `l`). The guest needs START_SWAP / 60 seconds to get there. The player dies and
+  the CONTINUE screen appears (both draw correctly).
+- `scripts/collect-shaders.sh [dump dir] [play seconds]`: trace backend run that collects and translates the shaders.
+- A killed game leaves its 4.8 GB guest arena in `/dev/shm` (16 GB tmpfs here). `scripts/linux-drive.py` deletes
+  stale `xenia_memory_*` files before and after a run. Without it later runs die at start ("exit 1" or "-9" at 4 s).
+- One test at a time. Never `pkill -f` or `pgrep -f` with a pattern that the shell command itself contains.
 
 ## Tools that helped
 
