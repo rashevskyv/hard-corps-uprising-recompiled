@@ -1,8 +1,36 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index f2077a1..919269d 100644
+index f2077a1..cf32207 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
-@@ -970,7 +970,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -168,7 +168,9 @@ struct SysConstants {
+   uint32_t bools[8];
+ };
+ 
+-DkCompareOp CompareOp(xenos::CompareFunction f) { return DkCompareOp(uint32_t(f)); }
++// Xenos counts from kNever = 0, deko3d from DkCompareOp_Never = 1 (HCU 0.120: LEQUAL became EQUAL, the
++// depth-tested 3D level never showed).
++DkCompareOp CompareOp(xenos::CompareFunction f) { return DkCompareOp(uint32_t(f) + 1); }
+ 
+ DkBlendFactor BlendFactor(xenos::BlendFactor f) {
+   switch (f) {
+@@ -355,6 +357,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
+     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
+     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
++    no_depth_ = access((debug_dir + "dk_nodepth").c_str(), F_OK) == 0;  // debug A/B: every draw without the depth test
+     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
+     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
+     Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
+@@ -517,7 +520,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     dkCmdBufBindBlendStates(cmd, 0, &bs, 1);
+     DkDepthStencilState ds;
+     dkDepthStencilStateDefaults(&ds);
+-    ds.depthTestEnable = depth && dc.z_enable;
++    ds.depthTestEnable = depth && dc.z_enable && !no_depth_;
+     ds.depthWriteEnable = depth && dc.z_write_enable;
+     ds.depthCompareOp = CompareOp(dc.zfunc);
+     ds.stencilTestEnable = 0;
+@@ -970,7 +973,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
        u.offset_y = 0;
        u.width = bw;
        u.height = bh;
@@ -11,7 +39,7 @@ index f2077a1..919269d 100644
        u.output_pitch = bw;
        u.input_format_info = fi;
        u.output_format_info = fi;
-@@ -978,7 +978,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -978,7 +981,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
        texture_conversion::Untile(dst, src, &u);
      } else {
        uint32_t row = bw * bpb;
@@ -20,7 +48,7 @@ index f2077a1..919269d 100644
        for (uint32_t y = 0; y < bh; y++) texture_conversion::CopySwapBlock(endian, dst + y * row, src + y * src_row, row);
      }
      DkCopyBuf cb{f.staging.gpu + off, 0, 0};
-@@ -1157,6 +1157,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1157,6 +1160,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -49,6 +77,14 @@ index f2077a1..919269d 100644
      if (info.IsCopyingDepth()) {
        LogOnce("depthresolve", "depth resolve to %08X ignored", info.copy_dest_base);
        return true;
+@@ -1277,6 +1302,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+   bool present_vs_ = false, present_fs_ = false;
+   bool present_target_ = false;
+   bool dump_images_ = false;
++  bool no_depth_ = false;
+   std::string shader_dir_;
+   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
+   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
 diff --git b/switch/eden-shot.ps1 a/switch/eden-shot.ps1
 index 1f4c830..ccc1fd9 100644
 --- b/switch/eden-shot.ps1
