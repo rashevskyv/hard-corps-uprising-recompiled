@@ -13,3 +13,5 @@ patches/appimage-runtime/* text eol=lf
 # The Switch build runs in WSL.
 switch/** text eol=lf
 tools/nro_nacp.py text eol=lf
+src/gpu/** text eol=lf
+tools/xenos2glsl.py text eol=lf

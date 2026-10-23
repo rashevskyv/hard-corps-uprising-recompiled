@@ -414,7 +414,7 @@ bool pinning = true;
 extern "C" void userAppInit(void) {
     open_log();
     std::set_terminate(terminate_handler);
-    std::printf("[nx] Castlevania: Harmony of Despair, version " HCU_VERSION ", built " HCU_BUILD_UTC "\n");
+    std::printf("[nx] Hard Corps: Uprising, version " HCU_VERSION ", built " HCU_BUILD_UTC "\n");
     AppletType type = appletGetAppletType();
     const bool application = type == AppletType_Application || type == AppletType_SystemApplication;
     std::printf("[nx] launch: %s (applet type %d)\n",

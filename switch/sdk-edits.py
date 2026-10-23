@@ -376,8 +376,40 @@ reps = [
      '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
      '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
      '      }' + NL),
+    # The same wait after HCU patch 0021 (patches/rexglue-sdk), which moved the timeout check.
+    ('      if (infinite_timeout) {' + NL +
+     '        std::this_thread::sleep_for(std::chrono::milliseconds(1));' + NL +
+     '      } else {' + NL +
+     '        auto now = std::chrono::steady_clock::now();' + NL +
+     '        if (now >= end_time) {' + NL +
+     '          return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
+     '        }' + NL +
+     '        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);' + NL +
+     '        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));' + NL +
+     '        std::this_thread::sleep_for(sleep_time);' + NL +
+     '      }' + NL,
+     '      {' + NL +
+     '        const auto cap = std::chrono::milliseconds(20);' + NL +
+     '        auto wait_time = cap;' + NL +
+     '        if (!infinite_timeout) {' + NL +
+     '          auto now = std::chrono::steady_clock::now();' + NL +
+     '          if (now >= end_time) {' + NL +
+     '            return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
+     '          }' + NL +
+     '          wait_time = std::min(std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now), cap);' + NL +
+     '        }' + NL +
+     '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
+     '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
+     '      }' + NL),
 ]
+# Exactly one of the two WaitMultiple variants is present (stock or HCU 0021).
+optional = {reps[-2][0], reps[-1][0]}
+if not any(o in src for o in optional) and not any(n in src for _, n in reps[-2:]):
+    raise SystemExit('threading_posix.cpp: no WaitMultiple poll found')
 for old, new in reps:
+    if old in optional:
+        src = src.replace(old, new)
+        continue
     if old not in src and new not in src:
         raise SystemExit('threading_posix.cpp: anchor not found: ' + old[:60])
     src = src.replace(old, new)

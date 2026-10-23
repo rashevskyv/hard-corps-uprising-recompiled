@@ -31,6 +31,12 @@ set(REXGLUE_HOST_CLI "${REXSDK_DIR}/out/linux-amd64/Release/rexglue" CACHE FILEP
 add_executable(rex::rexglue IMPORTED GLOBAL)
 set_target_properties(rex::rexglue PROPERTIES IMPORTED_LOCATION "${REXGLUE_HOST_CLI}")
 set(REXGLUE_HOST_TARGET hcu)
+# GPU backends compiled into the SDK's GPU plugin (sdk-edits.py adds the hook), shared with cvhd-recomp:
+# the trace backend (--gpu_backend=trace: every draw's state logged, shaders dumped, nothing drawn) and
+# the deko3d renderer (--gpu_backend=deko3d, selected by the file sdmc:/switch/hcu/deko3d).
+set(REXGPU_XENOS_EXTRA_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/trace_backend.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/deko3d_backend.cpp")
 
 include(generated/rexglue.cmake)
 
@@ -57,7 +63,7 @@ target_link_options(hcu PRIVATE
     -Wl,-u,vk_icdGetInstanceProcAddr
 )
 # zstd, expat and zlib from devkitPro portlibs (the SDK links them on Linux through the system).
-target_link_libraries(hcu PRIVATE "${NVK_SDK}/lib/libvulkan.a" zstd expat z nx m stdc++)
+target_link_libraries(hcu PRIVATE "${NVK_SDK}/lib/libvulkan.a" deko3d zstd expat z nx m stdc++)
 # nx_create_nro ignores NAME/AUTHOR/VERSION: the NACP is generated here and handed to it.
 nx_generate_nacp(hcu.nacp NAME "Hard Corps: Uprising" AUTHOR "hcu-switch" VERSION "${HCU_VERSION}")
 nx_create_nro(hcu NACP hcu.nacp)

@@ -45,6 +45,10 @@ int main(int argc, char* argv[]) {
       "--fullscreen=true",
       "--log_file=sdmc:/switch/hcu/hcu_rex_log.txt",
       "--gpu_plugin=xenos",
+      // config/hard_corps_uprising.toml: the full (purchased) license, the 16:9 Original guest video mode.
+      "--license_mask=1",
+      "--video_mode_width=853",
+      "--video_mode_height=480",
   };
   if (deko3d) {
     defaults.push_back("--gpu_backend=deko3d");

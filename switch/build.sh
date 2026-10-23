@@ -26,6 +26,7 @@ CLI=$SDK/out/linux-amd64/Release/rexglue
 mkdir -p "$SRC"
 rsync -a --delete --exclude /out --exclude /game --exclude /generated --exclude /.git "$GIT_DIR/" "$SRC/"
 python3 "$SRC/switch/sdk-edits.py" "$SDK"
+python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
 # The CLI embeds the codegen templates: a template edit needs `cmake --build ... --target rexglue`.
 if [ ! -f "$SRC/generated/default/sources.cmake" ]; then
     (cd "$SRC" && "$CLI" codegen hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1)         || { tail -20 "$ROOT/codegen.log"; exit 1; }
@@ -58,3 +59,27 @@ ls -la "$BUILD"/hcu.nro "$BUILD"/hcu.elf 2>/dev/null || true
 sha1sum "$BUILD"/hcu.nro 2>/dev/null || true
 # What hbmenu will show; the NACP version must be this build's (nx_create_nro ignored it until 0.55).
 python3 "$SRC/tools/nro_nacp.py" "$BUILD/hcu.nro" "$VERSION"
+
+# --- deko3d renderer staging (shared with cvhd-recomp): the present shaders and the game's shaders as
+# DKSH next to the NRO in $BUILD/stage/ (switch/eden-deko3d.ps1 copies it to Eden's SD). The game's
+# shaders come from the trace backend's --dump_shaders directory ($HCU_SHADER_DUMPS, default
+# /root/hcu/shaders_trace) through tools/xenos2glsl.py + uam.
+STAGE=$BUILD/stage
+rm -rf "$STAGE"
+mkdir -p "$STAGE/shaders"
+for s in vert frag; do
+    uam -s $s -o "$STAGE/shaders/present.$s.dksh" "$SRC/src/gpu/shaders/present.$s"
+done
+SHADER_DUMPS=${HCU_SHADER_DUMPS:-$ROOT/shaders_trace}
+if [ -d "$SHADER_DUMPS" ]; then
+    rm -rf "$BUILD/glsl"
+    python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl" --check | tail -1
+    for f in "$BUILD"/glsl/*.glsl.dksh; do
+        [ -f "$f" ] || continue
+        b=$(basename "$f" .glsl.dksh)
+        cp "$f" "$STAGE/shaders/$b.dksh"
+    done
+fi
+cp "$BUILD/hcu.nro" "$STAGE/hcu.nro"
+touch "$STAGE/deko3d"
+echo "stage: $STAGE ($(ls "$STAGE/shaders" | wc -l) shaders)"
