@@ -623,9 +623,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
         // Each texture's first bind, once: what the game draws with (correlates with the uploads).
         char key[32];
         std::snprintf(key, sizeof(key), "tex %08X", info.memory.base_address);
-        LogOnce(key, "texture at %08X: %s %ux%u %s endian %u swizzle %03X exp_adjust %d filters min %u mag %u (instr %u/%u) clamp %u/%u (%u KB)%s",
+        LogOnce(key, "texture at %08X: %s %ux%u %s endian %u swizzle %03X exp_adjust %d sign %u%u%u%u filters min %u mag %u (instr %u/%u) clamp %u/%u (%u KB)%s",
                 info.memory.base_address, info.format_info()->name, info.width + 1, info.height + 1, info.is_tiled ? "tiled" : "linear",
-                uint32_t(fetch.endianness), fetch.swizzle, int(fetch.exp_adjust), uint32_t(fetch.min_filter), uint32_t(fetch.mag_filter),
+                uint32_t(fetch.endianness), fetch.swizzle, int(fetch.exp_adjust), uint32_t(fetch.sign_x), uint32_t(fetch.sign_y), uint32_t(fetch.sign_z), uint32_t(fetch.sign_w), uint32_t(fetch.min_filter), uint32_t(fetch.mag_filter),
                 uint32_t(tb.fetch_instr.attributes.min_filter), uint32_t(tb.fetch_instr.attributes.mag_filter), uint32_t(fetch.clamp_x),
                 uint32_t(fetch.clamp_y), info.memory.base_size >> 10, tex->from_resolve ? " (a resolve image)" : "");
       }
@@ -987,6 +987,23 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (dslot != UINT32_MAX) {
         DkResHandle handle = dkMakeTextureHandle(dslot, 4);  // linear, clamp
         dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &handle, 1);
+        // The display gamma ramp the game set (D3D SetGammaRamp): HCU's is not linear (128 -> 462 of 1023), the picture is darker
+        // with it. 8888 front buffers use the 256-entry table; a 2_10_10_10 front buffer would use the piecewise linear one
+        // (not done: identity).
+        uint32_t ramp_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
+        if (ramp_off != UINT32_MAX) {
+          float* r = reinterpret_cast<float*>(f.data.cpu + ramp_off);
+          const auto* ramp = gamma_ramp_256_entry_table();
+          const bool identity = front->format != DkImageFormat_RGBA8_Unorm;
+          for (uint32_t i = 0; i < 256; i++) {
+            r[i * 4 + 0] = identity ? i / 255.0f : ramp[i].color_10_red / 1023.0f;
+            r[i * 4 + 1] = identity ? i / 255.0f : ramp[i].color_10_green / 1023.0f;
+            r[i * 4 + 2] = identity ? i / 255.0f : ramp[i].color_10_blue / 1023.0f;
+            r[i * 4 + 3] = 0.0f;
+          }
+          DkBufExtents ramp_buf{f.data.gpu + ramp_off, 4096};
+          dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, &ramp_buf, 1);
+        }
         dkCmdBufDraw(cmd, DkPrimitive_Triangles, 3, 1, 0, 0);
       }
     }
@@ -1031,6 +1048,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
       Log("swap #%u: per frame %.2f ms draws, %.2f ms resolves, %.2f ms fence wait, %.2f ms acquire, %.2f ms submit", swaps_, us_draw_ / 1000.0 / n,
           us_copy_ / 1000.0 / n, us_fence_ / 1000.0 / n, us_acquire_ / 1000.0 / n, us_submit_ / 1000.0 / n);
       us_draw_ = us_copy_ = us_fence_ = us_acquire_ = us_submit_ = 0;
+      if (swaps_ % 60 == 0 || swaps_ <= 3) {
+        const auto* ramp = gamma_ramp_256_entry_table();
+        Log("swap #%u: display gamma ramp (10 bit red, of 255 in/out): in 32 -> %u, 64 -> %u, 128 -> %u, 192 -> %u, 255 -> %u", swaps_, uint32_t(ramp[32].color_10_red),
+            uint32_t(ramp[64].color_10_red), uint32_t(ramp[128].color_10_red), uint32_t(ramp[192].color_10_red), uint32_t(ramp[255].color_10_red));
+      }
     }
     dirty_pages_at_swap_ = dirty_pages_;
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = 0;
@@ -1594,7 +1616,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // Only the float constants a shader reads (its register map), in runs: most sprite shaders read six of
     // 256 and the buffer is write-combined memory. Dynamic addressing (c[N + a0]) copies all of them.
     auto copy_constants = [](uint8_t* dst, const uint32_t* src, const Shader::ConstantRegisterMap& m) {
-      if (m.float_dynamic_addressing) { std::memcpy(dst, src, 4096); return; }
+      static const bool full = std::getenv("HCU_DK_FULLCONST") != nullptr;  // A/B: every constant, as before the partial copy
+      if (m.float_dynamic_addressing || full) { std::memcpy(dst, src, 4096); return; }
       for (uint32_t w = 0; w < 4; w++) {
         uint64_t bits = m.float_bitmap[w];
         while (bits) {

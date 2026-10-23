@@ -26,3 +26,10 @@ Verified on the Linux test host with Hard Corps. The real deko3d driver is untes
     one texture binding per fetch constant (a shader may read one constant nine times), only the float constants
     a shader reads are copied to the write-combined buffer (`constant_register_map`), depth pieces merged once per
     depth resolve.
+12. **Display gamma ramp.** `gamma_ramp_256_entry_table()` (the SDK's command processor keeps what the game wrote to the
+    DC_LUT registers, linear by default) is applied in the present pass: `src/gpu/shaders/present.frag` reads a 256-entry
+    float table from a uniform buffer filled in `IssueSwap`. HCU's ramp is not linear. Check your game's ramp in the log line
+    `display gamma ramp`. A 2_10_10_10 front buffer would use the PWL ramp (not done).
+13. A resolve destination bound in the swap that resolved it is not re-uploaded from guest memory (`resolve_swap`).
+14. Timing in the 60-swap log (`per frame ... ms draws`, fence wait, acquire, submit) and the `dk_reupload` / `dk_nodepthcopy`
+    debug markers.

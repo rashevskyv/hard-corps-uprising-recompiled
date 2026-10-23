@@ -42,6 +42,12 @@ Without it the depth copy is skipped (no shadows). Send both results. This marks
 What changed: resolves keep the host format of their target (RGB10A2). Their texture fetches are accepted now.
 Look at: a soft glow around the crashed ship and bright rocks. Log: no `unsupported texture format`.
 
+## 3b. Colours (display gamma ramp)
+
+What changed: the present pass applies the game's display gamma ramp (the log line `display gamma ramp` shows it: 128 -> 462).
+Look at: deep blue sky, golden sand with dark shadows, not washed out. Compare `hcu-linux-deko3d-stage.jpg` (ours) and
+`hcu-linux-reference-stage.jpg` (SDK Vulkan). The present shaders are rebuilt by `switch/build.sh` (`present.frag` has a uniform buffer now).
+
 ## 4. Pause menu (press START once in the stage)
 
 Expected: a translucent dark green panel with scanlines, the scene visible through it, the score table, text rows.

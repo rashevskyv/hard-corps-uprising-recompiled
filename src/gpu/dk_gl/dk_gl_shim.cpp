@@ -730,8 +730,21 @@ void WritePpm(const char* path, const uint8_t* rgba, uint32_t w, uint32_t h, boo
 // ----- public: shim extras --------------------------------------------------------------------------------
 void dkglDumpImage(const DkImage* image, const char* path) {
   const ImageData* d = reinterpret_cast<const ImageData*>(image->_storage);
-  if (!d || !d->tex || d->depth) return;
+  if (!d || !d->tex) return;
   std::vector<uint8_t> px(size_t(d->w) * d->h * 4);
+  if (d->depth) {
+    // Depth images (shadow maps): the depth as grey, 0 = near, 1 = far; stencil ignored.
+    std::vector<float> z(size_t(d->w) * d->h);
+    glBindTexture(GL_TEXTURE_2D, d->tex);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, z.data());
+    for (size_t i = 0; i < z.size(); i++) {
+      uint8_t v = uint8_t(std::min(1.0f, std::max(0.0f, z[i])) * 255.0f + 0.5f);
+      px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = v;
+      px[i * 4 + 3] = 255;
+    }
+    WritePpm(path, px.data(), d->w, d->h, false);
+    return;
+  }
   glBindTexture(GL_TEXTURE_2D, d->tex);
   glDisable(GL_FRAMEBUFFER_SRGB);
   glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
