@@ -10,7 +10,7 @@ Plain notes: what to build, what to look at, and what to send back.
 2. The SDK edits changed. `switch/build.sh` resets the SDK by itself. Then run the codegen again with the host CLI
    the SDK build made: `rexglue codegen hard_corps_uprising_manifest.toml --ignore-stamp` (templates changed).
 3. Delete stale debug marker files on the SD: `sdmc:/switch/hcu/dk_dump`, `dk_present_rt`, `dk_texdump`,
-   `dk_reupload`, `dk_nodepth`, `dk_nodepthcopy` and the `texdump/` folder. They cost speed and draw dumps on screen.
+   `dk_reupload` (unless you test with it), `dk_nodepth`, `dk_nodepthcopy` and the `texdump/` folder. They cost speed and draw dumps on screen.
    The mirrored font atlas and the 8 to 9 fps came from such files.
 4. Shaders: the stage needs 60 shaders. The old dump directory has about 45. Play stage 1 once, let the script
    copy the missing ones back, run `switch/build.sh`, run again. `docs/shader-hashes-stage1.txt` lists the known hashes.
@@ -24,6 +24,10 @@ Look at: red-hooded runners with rifles, jetpack mechs with a red pod, dynamite 
 All must be whole sprites with transparent backgrounds. No 80x80 squares, no red crescent only.
 Reference pictures: `docs/images/linux-test-host/hcu-linux-reference-stage.jpg` (SDK Vulkan) and `hcu-linux-deko3d-stage.jpg` (our backend on Linux).
 If squares remain: send the `[dk] vertex data clamped` lines and a screenshot.
+
+If tiles or sprite parts are stale (wrong frame, flicker) while the picture is otherwise right: create the empty file
+`sdmc:/switch/hcu/dk_reupload` and run again. Textures then upload at every bind. If that fixes it, the guest wrote
+texture memory without marking the page (a missing dirty mark in the store macros or a host write).
 
 ## 2. Shadows
 

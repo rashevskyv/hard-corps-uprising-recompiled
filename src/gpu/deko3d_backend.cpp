@@ -454,6 +454,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
+    always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: textures upload at every bind (missed dirty pages = stale sprites)
     no_depth_copy_ = access((debug_dir + "dk_nodepthcopy").c_str(), F_OK) == 0;  // debug A/B: depth resolves are ignored (shadow maps stay empty)
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
@@ -1401,7 +1402,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     img->reversed_channels = reversed;  // already checked for this draw
     img->checked_serial = serial_;
     // Never filled, or written by the guest (or a file read) after the upload / resolve that filled it.
-    if (img->content_serial && !MemoryChanged(*img, base, info.memory.base_size)) return img;
+    if (img->content_serial && !MemoryChanged(*img, base, info.memory.base_size) && (!always_upload_ || img->from_resolve)) return img;
     // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
     if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
     if (img->content_serial) {
@@ -1906,6 +1907,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_target_ = false;
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
+  bool always_upload_ = false;
   uint64_t us_draw_ = 0, us_copy_ = 0, us_fence_ = 0, us_acquire_ = 0, us_submit_ = 0;  // ScopedUs counters of the 60-swap log
   uint32_t depth_resolves_ = 0;  // depth resolves so far (MergeDepthPieces looks again when it changed)
   std::string shader_dir_;
