@@ -27,6 +27,7 @@ public static class Win32 {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, UIntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint mapType);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdc, uint flags);
   public static List<IntPtr> WindowsOf(uint pid) {
     var list = new List<IntPtr>();
     EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) list.Add(h); return true; }, IntPtr.Zero);
@@ -102,11 +103,19 @@ for ($t = 1; $t -le $Seconds; $t++) {
     if ($wins.Count -eq 0) { Write-Output "${t}s: no window yet"; continue }
     $k = 0
     foreach ($win in $wins) {
-        $null = [Win32]::SetForegroundWindow($win.h)
-        Start-Sleep -Milliseconds 300
+        # The window's own content (PW_RENDERFULLCONTENT, also for Vulkan windows), without taking the
+        # focus: a script in the background cannot raise Eden, so a screen copy showed whatever window
+        # was in front. The screen copy stays as the fallback.
         $bmp = New-Object System.Drawing.Bitmap $win.w, $win.hh
         $g = [System.Drawing.Graphics]::FromImage($bmp)
-        $g.CopyFromScreen($win.r.Left, $win.r.Top, 0, 0, $bmp.Size)
+        $hdc = $g.GetHdc()
+        $printed = [Win32]::PrintWindow($win.h, $hdc, 2)
+        $g.ReleaseHdc($hdc)
+        if (-not $printed) {
+            $null = [Win32]::SetForegroundWindow($win.h)
+            Start-Sleep -Milliseconds 300
+            $g.CopyFromScreen($win.r.Left, $win.r.Top, 0, 0, $bmp.Size)
+        }
         $file = Join-Path $Out ("shot-{0:D2}-{1}.png" -f $n, $k)
         $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
         $g.Dispose(); $bmp.Dispose()
