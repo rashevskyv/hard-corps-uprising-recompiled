@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index f2077a1..f7dbd2a 100644
+index f2077a1..919269d 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -970,7 +970,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
@@ -20,6 +20,35 @@ index f2077a1..f7dbd2a 100644
        for (uint32_t y = 0; y < bh; y++) texture_conversion::CopySwapBlock(endian, dst + y * row, src + y * src_row, row);
      }
      DkCopyBuf cb{f.staging.gpu + off, 0, 0};
+@@ -1157,6 +1157,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     DkCmdBuf cmd = f.cmdbuf;
+     draw_util::ResolveInfo info;
+     if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
++    if (info.IsClearingDepth()) {
++      // The XDK clears depth with the resolve (D3DRESOLVE_CLEARDEPTHSTENCIL). Without it a depth-tested
++      // scene keeps the last frame's (or uninitialized) depth and every LEQUAL fragment fails (HCU's
++      // stage: the 3D level never showed, the depth-less HUD did). D24S8: depth in the top 24 bits.
++      uint32_t dpitch = info.depth_edram_info.pitch_tiles * 80;
++      HostImage* d = TargetImage(info.depth_original_base, dpitch, DkImageFormat_Z24S8, true);
++      uint32_t cx = info.coordinate_info.edram_offset_x_div_8 * 8, cy = info.coordinate_info.edram_offset_y_div_8 * 8;
++      uint32_t cw = info.coordinate_info.width_div_8 * 8, ch = info.height_div_8 * 8;
++      if (d && cx < d->width && cy < d->height) {
++        if (cx + cw > d->width) cw = d->width - cx;
++        if (cy + ch > d->height) ch = d->height - cy;
++        BindTargets(cmd, nullptr, d);
++        DkScissor sc{cx, cy, cw, ch};
++        dkCmdBufSetScissors(cmd, 0, &sc, 1);
++        float z = float(info.rb_depth_clear >> 8) / float(0xFFFFFF);
++        dkCmdBufClearDepthStencil(cmd, true, z, 0xFF, info.rb_depth_clear & 0xFF);
++        char key[64];
++        std::snprintf(key, sizeof(key), "dclear %u %u %u %u %u %u", info.depth_original_base, dpitch, cx, cy, cw, ch);
++        LogOnce(key, "resolve clears depth at EDRAM %u pitch %u: rect %u,%u %ux%u to %g, stencil %u", info.depth_original_base, dpitch, cx,
++                cy, cw, ch, z, info.rb_depth_clear & 0xFF);
++      }
++    }
+     if (info.IsCopyingDepth()) {
+       LogOnce("depthresolve", "depth resolve to %08X ignored", info.copy_dest_base);
+       return true;
 diff --git b/switch/eden-shot.ps1 a/switch/eden-shot.ps1
 index 1f4c830..ccc1fd9 100644
 --- b/switch/eden-shot.ps1
