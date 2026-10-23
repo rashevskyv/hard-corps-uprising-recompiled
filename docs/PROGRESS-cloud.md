@@ -51,3 +51,18 @@ The Eden checks are in `docs/EDEN-CHECKLIST.md`. The Linux test host is in `docs
 ## Shared with the sibling ports
 
 `docs/for-cvhd-gh/README.md` lists the generic backend fixes. The patch applies to cvhd-recomp 7a52b68.
+
+## Speed notes (Linux, x86, no GPU involved in these numbers)
+
+- A stage frame has about 250 draws, 10 clears and 31 resolves. Vertex data is 3 MB. Uploads are 0 to 7 small tiles.
+- Recording the draws takes 1.6 to 2.4 ms per frame on this box (the guest memory hash of the test host excluded).
+  The Switch CPU is slower. Expect 3 to 5 times that. The 60-swap log line shows the real number.
+- The 60-swap log has `per frame ... draws / fence wait / acquire / submit`. A long fence wait means a GPU limit.
+- Cheaper draws were done: integer keys for logs, one binding per fetch constant, only the used float constants.
+
+## Not done
+
+- The piecewise linear gamma ramp for 2_10_10_10 front buffers (HCU uses the 256-entry table).
+- Shaders for later stages and bosses. The key script reached the first stage and played into it only.
+- MSAA 4x draws (`msaa 2`) are drawn at the doubled size and resolved from a different image. Not seen in stage 1 pictures.
+- A real measurement of the console speed, and the dirty-page path of the Switch (Linux hashes memory instead).
