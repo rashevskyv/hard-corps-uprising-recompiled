@@ -24,7 +24,7 @@ CLI=$SDK/out/linux-amd64/Release/rexglue
 [ -f "$SRC/game/extracted/default.xex" ] || { echo "no game files: $SRC/game/extracted/default.xex"; exit 1; }
 
 mkdir -p "$SRC"
-rsync -a --delete --exclude /out --exclude /game --exclude /generated --exclude /.git "$GIT_DIR/" "$SRC/"
+rsync -rlc --delete --exclude /out --exclude /game --exclude /generated --exclude /.git "$GIT_DIR/" "$SRC/"
 python3 "$SRC/switch/sdk-edits.py" "$SDK"
 python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
 # The CLI embeds the codegen templates: a template edit needs `cmake --build ... --target rexglue`.
