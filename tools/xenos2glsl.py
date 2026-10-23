@@ -101,10 +101,12 @@ class Translator:
 
     def parse_source(self, tok, count):
         """Source operand -> GLSL expression with exactly `count` components (1, 2 or 4)."""
-        m = re.match(r'^(-?)(r|c)(_abs)?(?:\[(\d+)\]|(\d+))(?:\.([xyzw]+))?$', tok)
+        m = re.match(r'^(-?)(r|c)(_abs)?(?:\[(\d+)(\+a0)?\]|(\d+))(?:\.([xyzw]+))?$', tok)
         if not m:
             self.err('bad source operand %r' % tok)
-        neg, kind, is_abs, idx_abs, idx_plain, swz = m.groups()
+        neg, kind, is_abs, idx_abs, rel_a0, idx_plain, swz = m.groups()
+        if rel_a0 and kind != 'c':
+            self.err('relative register operand %r is not supported' % tok)
         idx = int(idx_abs if idx_abs is not None else idx_plain)
         if swz is None:
             swz = 'xyzw'
@@ -116,7 +118,7 @@ class Translator:
             self.reg_read(idx, swz[:count] if count in (1, 2) else swz[:4])
             base = 'r%d' % idx
         else:
-            base = 'c[%d]' % idx
+            base = 'c[%d + a0]' % idx if rel_a0 else 'c[%d]' % idx  # c[N+a0]: indexed by the address register
         if count == 1:
             expr = '%s.%s' % (base, swz[0])
         elif count == 2:
@@ -308,6 +310,11 @@ class Translator:
             self.extra_kill = 'if (%s %s) discard;' % (a[0], cmp)
             return 'float(%s %s)' % (a[0], cmp)
         if op == 'retain_prev': return 'ps'
+        if op in ('maxas', 'maxasf'):
+            # The address register (Xenia): a0 = clamp(floor(a + 0.5), -256, 255) (maxasf: floor(a)); the
+            # result is max(a, b). Set after the operands are read, before the results are written.
+            self.extra_pred = 'a0 = int(clamp(floor(%s%s), -256.0, 255.0));' % (a[0], ' + 0.5' if op == 'maxas' else '')
+            return 'max(%s, %s)' % (a[0], a[1])
         self.err('scalar op %s is not implemented' % op)
 
     def emit_alu(self, vec, sca, pred):
@@ -511,6 +518,7 @@ class Translator:
             out.append(ind + 'vec4 %s = vec4(0.0);' % e)
         out.append(ind + 'bool p0 = false;')
         out.append(ind + 'float ps = 0.0;')
+        out.append(ind + 'int a0 = 0;')
 
         def block_cond(b):
             conds = []
