@@ -58,6 +58,9 @@ backend, `nopin` turns thread placement off.
 | 0.106.a08f9a3 | Eden, deko3d | the intro plays to its end, then the game hangs: main thread in a condition-variable wait, the Audio Worker gone (a stale "audio worker leaves" SDK insert from an older sdk-edits.py next to the new nop audio driver). build.sh now resets the SDK when the edit scripts change |
 | 0.111.dd75cc2 | Eden, deko3d, 210 s, pad.txt START/A | **past the intro**: title screen, "No save data found" dialog, CHARACTER SELECT at **60 fps** in Eden, 113 draws per frame; 2 more shaders dumped |
 
+| 0.113.d9cc178 | Eden, deko3d, 300 s | START/A to the first stage: the HUD draws, the scene is grey; 32 stage shaders dumped |
+| 0.116.bc9e4d8 | Eden, deko3d, 320 s | 45 of 45 shaders (xenos2glsl: `maxas` and `c[N+a0]` added); stage: HUD, 1P marker and a light-column effect draw, the level and the player do not. 235 draws, 31 resolves, 10 clears per frame, 0 skipped, 0 without shader; `unsupported texture format k_24_8` (a depth texture sampled) |
+
 NVK builds are not run on the console (user decision, 2026-10-23): the renderer is deko3d, Eden is the gate.
 
 ## deko3d renderer
