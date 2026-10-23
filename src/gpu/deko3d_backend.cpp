@@ -1616,8 +1616,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // Only the float constants a shader reads (its register map), in runs: most sprite shaders read six of
     // 256 and the buffer is write-combined memory. Dynamic addressing (c[N + a0]) copies all of them.
     auto copy_constants = [](uint8_t* dst, const uint32_t* src, const Shader::ConstantRegisterMap& m) {
+#ifdef HCU_DK_GL
       static const bool full = std::getenv("HCU_DK_FULLCONST") != nullptr;  // A/B: every constant, as before the partial copy
-      if (m.float_dynamic_addressing || full) { std::memcpy(dst, src, 4096); return; }
+      if (full) { std::memcpy(dst, src, 4096); return; }
+#endif
+      if (m.float_dynamic_addressing) { std::memcpy(dst, src, 4096); return; }
       for (uint32_t w = 0; w < 4; w++) {
         uint64_t bits = m.float_bitmap[w];
         while (bits) {

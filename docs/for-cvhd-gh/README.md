@@ -1,7 +1,7 @@
 # Generic deko3d backend fixes from the Hard Corps port (for Castlevania HD and Guardian Heroes)
 
 `backend-fixes-vs-cvhd-7a52b68.patch` applies to cvhd-recomp 7a52b68 (`git apply`). It covers
-`src/gpu/deko3d_backend.cpp`, `src/gpu/dk_gl/dk_gl_shim.{cpp,h}` and `tools/xenos2glsl.py`.
+`src/gpu/deko3d_backend.cpp`, `src/gpu/dk_gl/dk_gl_shim.{cpp,h}`, `src/gpu/shaders/present.frag` and `tools/xenos2glsl.py`.
 Verified on the Linux test host with Hard Corps. The real deko3d driver is untested for items 3, 4 and 7.
 
 1. **Start vertex.** `VGT_INDX_OFFSET` is added to every vertex index. Copy the vertex data from
