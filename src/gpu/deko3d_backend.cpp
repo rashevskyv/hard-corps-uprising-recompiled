@@ -970,7 +970,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       u.offset_y = 0;
       u.width = bw;
       u.height = bh;
-      u.input_pitch = info.pitch;
+      u.input_pitch = info.pitch / fi->block_width;  // Untile wants blocks; the pitch is in texels (DXT: 4 per block)
       u.output_pitch = bw;
       u.input_format_info = fi;
       u.output_format_info = fi;
@@ -978,7 +978,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       texture_conversion::Untile(dst, src, &u);
     } else {
       uint32_t row = bw * bpb;
-      uint32_t src_row = info.pitch * bpb;
+      uint32_t src_row = (info.pitch / fi->block_width) * bpb;
       for (uint32_t y = 0; y < bh; y++) texture_conversion::CopySwapBlock(endian, dst + y * row, src + y * src_row, row);
     }
     DkCopyBuf cb{f.staging.gpu + off, 0, 0};
