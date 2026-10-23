@@ -874,7 +874,7 @@ void dkCmdBufCopyImage(DkCmdBuf c, DkImageView const* src, DkImageRect const* sr
   const ImageData* d = reinterpret_cast<const ImageData*>(dst->pImage->_storage);
   DkImageRect a = *sr, b = *dr;
   c->ops.push_back([=] {
-    if (s->internal == d->internal && !s->depth) {
+    if (s->internal == d->internal) {
       glCopyImageSubData(s->tex, GL_TEXTURE_2D, 0, int(a.x), int(a.y), 0, d->tex, GL_TEXTURE_2D, 0, int(b.x), int(b.y), 0, int(a.width), int(a.height), 1);
     } else {
       glBindFramebuffer(GL_READ_FRAMEBUFFER, G.fbo_read);

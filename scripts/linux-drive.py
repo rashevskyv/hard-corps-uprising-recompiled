@@ -41,7 +41,7 @@ def main():
     env = dict(os.environ)
     env.update({
         'SDL_AUDIODRIVER': env.get('SDL_AUDIODRIVER', 'pulseaudio'),
-        'LD_LIBRARY_PATH': os.path.dirname(a.exe) + ":" + os.path.join(a.root, 'rexglue-sdk/out/linux-amd64') + (':' + env['LD_LIBRARY_PATH'] if env.get('LD_LIBRARY_PATH') else ''),
+        'LD_LIBRARY_PATH': os.path.dirname(a.exe) + ":" + os.environ.get('REXSDK_DIR', '/home/user/rexglue-sdk') + '/out/linux-amd64' + (':' + env['LD_LIBRARY_PATH'] if env.get('LD_LIBRARY_PATH') else ''),
         'VK_ICD_FILENAMES': env.get('VK_ICD_FILENAMES', '/usr/share/vulkan/icd.d/lvp_icd.json'),
         'DISPLAY': a.display,
         'LIBGL_ALWAYS_SOFTWARE': '1',
