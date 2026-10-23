@@ -1,7 +1,7 @@
-diff --git a/switch/host/include/dlfcn.h b/switch/host/include/dlfcn.h
+diff --git b/switch/host/include/dlfcn.h a/switch/host/include/dlfcn.h
 index 8fed3c9..e6a3cab 100644
---- a/switch/host/include/dlfcn.h
-+++ b/switch/host/include/dlfcn.h
+--- b/switch/host/include/dlfcn.h
++++ a/switch/host/include/dlfcn.h
 @@ -9,6 +9,7 @@
  #define RTLD_NOW 2
  #define RTLD_LOCAL 0
@@ -10,10 +10,10 @@ index 8fed3c9..e6a3cab 100644
  
  static inline void* dlopen(const char* filename, int flags) {
      (void)filename;
-diff --git a/switch/host/switch_nx.cpp b/switch/host/switch_nx.cpp
+diff --git b/switch/host/switch_nx.cpp a/switch/host/switch_nx.cpp
 index ffab907..c7af446 100644
---- a/switch/host/switch_nx.cpp
-+++ b/switch/host/switch_nx.cpp
+--- b/switch/host/switch_nx.cpp
++++ a/switch/host/switch_nx.cpp
 @@ -414,7 +414,7 @@ bool pinning = true;
  extern "C" void userAppInit(void) {
      open_log();
@@ -23,10 +23,10 @@ index ffab907..c7af446 100644
      AppletType type = appletGetAppletType();
      const bool application = type == AppletType_Application || type == AppletType_SystemApplication;
      std::printf("[nx] launch: %s (applet type %d)\n",
-diff --git a/switch/host/ui/windowed_app_main_nx.cpp b/switch/host/ui/windowed_app_main_nx.cpp
+diff --git b/switch/host/ui/windowed_app_main_nx.cpp a/switch/host/ui/windowed_app_main_nx.cpp
 index 497c4f7..ed9e366 100644
---- a/switch/host/ui/windowed_app_main_nx.cpp
-+++ b/switch/host/ui/windowed_app_main_nx.cpp
+--- b/switch/host/ui/windowed_app_main_nx.cpp
++++ a/switch/host/ui/windowed_app_main_nx.cpp
 @@ -45,6 +45,10 @@ int main(int argc, char* argv[]) {
        "--fullscreen=true",
        "--log_file=sdmc:/switch/hcu/hcu_rex_log.txt",
@@ -38,10 +38,10 @@ index 497c4f7..ed9e366 100644
    };
    if (deko3d) {
      defaults.push_back("--gpu_backend=deko3d");
-diff --git a/switch/sdk-edits.py b/switch/sdk-edits.py
-index 6fd64fe..62cb140 100644
---- a/switch/sdk-edits.py
-+++ b/switch/sdk-edits.py
+diff --git b/switch/sdk-edits.py a/switch/sdk-edits.py
+index 6fd64fe..2185c5a 100644
+--- b/switch/sdk-edits.py
++++ a/switch/sdk-edits.py
 @@ -376,8 +376,40 @@ reps = [
       '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
       '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
@@ -83,3 +83,23 @@ index 6fd64fe..62cb140 100644
      if old not in src and new not in src:
          raise SystemExit('threading_posix.cpp: anchor not found: ' + old[:60])
      src = src.replace(old, new)
+@@ -1233,3 +1265,19 @@ for f in ('src/graphics/vulkan/render_target_cache.cpp', 'src/graphics/vulkan/te
+     edit(f, [('#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL,
+               '#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL + '#include <atomic>' + NL)], must=False)
+ print('changed (27):', *changed, sep=NL + '  ')
++
++# --- Shader::DumpUcode (the deko3d backend's shaders/missing/ dumps, --dump_shaders): absolute() of an
++# sdmc:/ path prepends "/" on newlib and create_directories then throws (std::terminate at the first
++# missing shader, HCU Eden 0.92). Keep the path as given and create the directory without throwing.
++edit('src/graphics/pipeline/shader/shader.cpp', [
++    ('    target_path = std::filesystem::absolute(target_path);' + NL +
++     '    std::filesystem::create_directories(target_path);' + NL,
++     '#if REX_PLATFORM_SWITCH' + NL +
++     '    std::error_code nx_ec;' + NL +
++     '    std::filesystem::create_directories(target_path, nx_ec);  // sdmc:/... is absolute already' + NL +
++     '#else' + NL +
++     '    target_path = std::filesystem::absolute(target_path);' + NL +
++     '    std::filesystem::create_directories(target_path);' + NL +
++     '#endif' + NL),
++])
++print('changed (DumpUcode):', *changed, sep=NL + '  ')
