@@ -32,3 +32,11 @@ Postponed by the user on 2026-10-23 (to be done later in a cloud session). Appli
    exists, a global A/B swap behind the option, with a plain note that the gameplay buttons move too.
 4. Verify in Eden (private copy `E:\Switch\Eden-hcu\`) with scripted presses (`pad.txt`) and screenshots
    of the save dialog and the character select.
+
+## Technique proven in Guardian Heroes (gh-recomp, 2026-10-23, verified in Eden)
+
+gh-recomp `src/gpu/deko3d_backend.cpp` (`PatchGlyphs`, `SwapAtlasGlyphs`, `ReplaceTitleGlyph`, `DumpTexture`)
+and its CLAUDE.md "button glyphs": dump every distinct texture as a PPM (marker `dk_dump_tex`), find the
+icon cells, swap equal-sized cells in the staged (untiled) data in `UploadTexture` before the GPU copy,
+guarded by format, size and the hue of each cell (A about 70 degrees, B 0, X 216, Y 37); icons baked into
+artwork get a drawn replacement; cvar `button_glyphs`. HCU needs its own dump pass for addresses and cells.
