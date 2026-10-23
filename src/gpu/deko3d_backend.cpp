@@ -46,7 +46,13 @@
 // markers are files next to the directory: dk_dump (image readback at swaps 120 and 600),
 // dk_present_rt (present the widest colour render target instead of the front buffer).
 REXCVAR_DEFINE_STRING(deko3d_shader_dir, "sdmc:/switch/hcu/shaders/", "GPU",
-                      "deko3d backend: directory of shader_<ucode hash>.vert|frag.dksh and present.vert|frag.dksh")
+                      "deko3d backend: directory of shader_<ucode hash>.vert|geom|frag.dksh and present.vert|frag.dksh")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Xenos rectangle lists (3 vertices, the 4th = v1 + v2 - v0): by default through the geometry shader
+// the translator writes next to each vertex shader; the hardware fill-rectangle mode (NV_fill_rectangle,
+// the same semantics) is an option for the console: Eden ignores that mode (one triangle is drawn).
+REXCVAR_DEFINE_BOOL(deko3d_fill_rectangle, false, "GPU",
+                    "deko3d backend: draw rectangle lists with the hardware fill-rectangle mode instead of a geometry shader")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // The Switch host layer's dirty-page bytes (switch/host/memory_nx.cpp): one byte per 4 KB page of the
@@ -137,6 +143,8 @@ class DkShaderObj : public Shader {
       : Shader(type, hash, dwords, count) {}
   DkShader shader{};
   bool loaded = false;
+  DkShader geom{};           // vertex shaders: the rectangle-list geometry shader
+  bool geom_loaded = false;
 };
 
 struct Frame {
@@ -373,6 +381,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     std::snprintf(name, sizeof(name), "%sshader_%016llX.%s.dksh", shader_dir_.c_str(), (unsigned long long)hash,
                   shader_type == xenos::ShaderType::kVertex ? "vert" : "frag");
     shader->loaded = LoadDksh(name, shader->shader);
+    if (shader->loaded && shader_type == xenos::ShaderType::kVertex) {
+      std::snprintf(name, sizeof(name), "%sshader_%016llX.geom.dksh", shader_dir_.c_str(), (unsigned long long)hash);
+      shader->geom_loaded = LoadDksh(name, shader->geom);
+      if (!shader->geom_loaded) LogOnce("geom", "no rectangle-list geometry shader for VS %016llX (%s)", (unsigned long long)hash, name);
+    }
     if (!shader->loaded) {
       missing_shaders_++;
       Log("no DKSH for %s %016llX (%u dwords at %08X): dumping the ucode to %smissing/",
@@ -407,6 +420,43 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (!PrimitiveOf(prim_type, prim, rects)) { LogOnce("prim", "unsupported primitive type %u", uint32_t(prim_type)); skipped_++; return true; }
     Frame& f = frames_[frame_];
     DkCmdBuf cmd = f.cmdbuf;
+    {
+      // Each shader pair's first draw, once: the state a new kind of draw comes with.
+      char key[48];
+      std::snprintf(key, sizeof(key), "pair %016llX %016llX", (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash());
+      auto blend = regs.Get<reg::RB_BLENDCONTROL>();
+      if (!logged_.count(key)) {
+        LogOnce(key, "draw VS %016llX PS %016llX: prim %u n=%u%s, blend %u/%u op %u, mask %x, z %u/%u func %u, %zu vfetch %zu tfetch",
+                (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash(), uint32_t(prim_type), index_count,
+                index_buffer_info ? " indexed" : "", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend),
+                uint32_t(blend.color_comb_fcn), regs.values[XE_GPU_REG_RB_COLOR_MASK] & 0xF, dc.z_enable, dc.z_write_enable,
+                uint32_t(dc.zfunc), vs->vertex_bindings().size(), ps->texture_bindings().size());
+        // Its vertex layout and the first vertices (byte-swapped words as hex and as floats).
+        for (const auto& vb : vs->vertex_bindings()) {
+          auto fetch = regs.GetVertexFetch(vb.fetch_constant);
+          std::string attrs;
+          for (const auto& a : vb.attributes) {
+            char s[64];
+            std::snprintf(s, sizeof(s), " [fmt %u off %u%s%s]", uint32_t(a.fetch_instr.attributes.data_format), a.fetch_instr.attributes.offset,
+                          a.fetch_instr.attributes.is_signed ? " signed" : "", a.fetch_instr.attributes.is_integer ? " integer" : "");
+            attrs += s;
+          }
+          const uint32_t* w = reinterpret_cast<const uint32_t*>(memory_->TranslatePhysical(fetch.address << 2));
+          uint32_t n = std::min<uint32_t>(vb.stride_words * 3, 24);
+          std::string words;
+          for (uint32_t i = 0; i < n && i < fetch.size; i++) {
+            uint32_t v = fetch.endian == xenos::Endian::k8in32 ? __builtin_bswap32(w[i]) : w[i];
+            float fl;
+            std::memcpy(&fl, &v, 4);
+            char s[48];
+            std::snprintf(s, sizeof(s), " %08X(%g)", v, fl);
+            words += s;
+          }
+          Log("  vf%u stride %u words, %u words at %08X endian %u:%s; data%s", vb.fetch_constant, vb.stride_words, fetch.size, fetch.address << 2,
+              uint32_t(fetch.endian), attrs.c_str(), words.c_str());
+        }
+      }
+    }
 
     // Render targets.
     auto surf = regs.Get<reg::RB_SURFACE_INFO>();
@@ -439,10 +489,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
     // Fixed-function state.
     auto su = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
+    // Rectangle lists: the geometry shader makes the 4th vertex, or the hardware mode (cvar).
+    const bool use_gs = rects && vs->geom_loaded && !REXCVAR_GET(deko3d_fill_rectangle);
     DkRasterizerState rs;
     dkRasterizerStateDefaults(&rs);
     rs.cullMode = DkFace_None;  // TODO(cull): cull_front/cull_back once the winding is verified on a picture
-    rs.fillRectangleEnable = rects;
+    rs.fillRectangleEnable = rects && !use_gs;
     (void)su;
     dkCmdBufBindRasterizerState(cmd, &rs);
     auto blend = regs.Get<reg::RB_BLENDCONTROL>();
@@ -469,9 +521,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     ds.stencilTestEnable = 0;
     dkCmdBufBindDepthStencilState(cmd, &ds);
 
-    // Shaders.
-    DkShader const* shaders[2] = {&vs->shader, &ps->shader};
-    dkCmdBufBindShaders(cmd, DkStageFlag_Vertex | DkStageFlag_Fragment, shaders, 2);
+    // Shaders (the whole graphics mask: a stage without a shader here is unbound).
+    DkShader const* shaders[3] = {&vs->shader, &ps->shader, &vs->geom};
+    dkCmdBufBindShaders(cmd, DkStageFlag_GraphicsMask, shaders, use_gs ? 3 : 2);
 
     // Vertex layout and data: one buffer per fetch constant the vertex shader uses.
     DkVtxAttribState attribs[DK_MAX_VERTEX_ATTRIBS];
@@ -488,7 +540,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
       uint32_t stride = vb.stride_words * 4;
       uint32_t bytes = vertex_count * stride;
       uint32_t avail = fetch.size * 4;
-      if (bytes > avail) bytes = avail;
+      if (bytes > avail) {
+        LogOnce("vbclamp", "vertex data clamped: %u vertices x %u bytes = %u, fetch constant %u holds %u bytes (VS %016llX)", vertex_count,
+                stride, bytes, vb.fetch_constant, avail, (unsigned long long)vs->ucode_data_hash());
+        bytes = avail;
+      }
       uint32_t off = f.data.Alloc(bytes ? bytes : 16, 64);
       if (off == UINT32_MAX) { LogOnce("ring", "frame data ring full"); skipped_++; return true; }
       const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2);
@@ -628,7 +684,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       ds.depthWriteEnable = 0;
       dkCmdBufBindDepthStencilState(cmd, &ds);
       DkShader const* shaders[2] = {&present_vs_shader_, &present_fs_shader_};
-      dkCmdBufBindShaders(cmd, DkStageFlag_Vertex | DkStageFlag_Fragment, shaders, 2);
+      dkCmdBufBindShaders(cmd, DkStageFlag_GraphicsMask, shaders, 2);
       dkCmdBufBindVtxAttribState(cmd, nullptr, 0);
       dkCmdBufBindVtxBufferState(cmd, nullptr, 0);
       uint32_t dslot = DescriptorFor(f, front, 0);
@@ -662,11 +718,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     swaps_++;
     if (swaps_ <= 3 || swaps_ % 60 == 0) {
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
-      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads; data %u KB staging %u KB; images %u (%u MB)",
+      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB staging %u KB; images %u (%u MB)",
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
-          frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, f.data.used >> 10, f.staging.used >> 10,
-          image_count_, images_.used >> 20);
+          frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
+          f.data.used >> 10, f.staging.used >> 10, image_count_, images_.used >> 20);
     }
+    dirty_pages_at_swap_ = dirty_pages_;
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = 0;
     frame_ = (frame_ + 1) % kFrames;
     BeginFrame();
@@ -1056,9 +1113,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
       dkCmdBufSetScissors(cmd, 0, &sc, 1);
       if (color_img) dkCmdBufClearColor(cmd, 0, DkColorMask_RGBA, color);
       if (depth_img) dkCmdBufClearDepthStencil(cmd, true, z, 0xFF, 0);
-      if (clears_ < 8) Log("clear %s%s at EDRAM %u/%u pitch %u: rect %u,%u %ux%u color %g %g %g %g z %g (alias x%u)",
-                           color_img ? "color" : "", depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch,
-                           sc.x, sc.y, sc.width, sc.height, color[0], color[1], color[2], color[3], z, scale);
+      {
+        char key[96];
+        std::snprintf(key, sizeof(key), "clear %u %u %u %u %u %u %u %u", uint32_t(mode), color_info.color_base, depth_info.depth_base, pitch,
+                      sc.x, sc.y, sc.width, sc.height);
+        LogOnce(key, "clear %s%s at EDRAM %u/%u pitch %u: rect %u,%u %ux%u color %g %g %g %g z %g (alias x%u)", color_img ? "color" : "",
+                depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
+                color[1], color[2], color[3], z, scale);
+      }
       clears_++;
       frame_clears_++;
     }
@@ -1108,9 +1170,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
       float color[4] = {((c >> 16) & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, (c & 0xFF) / 255.0f, ((c >> 24) & 0xFF) / 255.0f};
       dkCmdBufClearColor(cmd, 0, DkColorMask_RGBA, color);
     }
-    if (resolves_ < 8) Log("resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles,
-                           src_pitch, x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy,
-                           info.IsClearingColor() ? ", then cleared" : "");
+    {
+      // Every distinct resolve (source rect, destination and offset) once: the frame structure.
+      char key[96];
+      std::snprintf(key, sizeof(key), "resolve %u %u %u %u %u %u %08X %u %u", info.color_edram_info.base_tiles, src_pitch, x, y, w, h,
+                    info.copy_dest_base, dx, dy);
+      LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
+              x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
+    }
     resolves_++;
     frame_resolves_++;
     return true;
@@ -1189,7 +1256,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   std::string shader_dir_;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
-  uint64_t dirty_pages_ = 0;
+  uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
   std::unordered_map<uint64_t, DkShaderObj*> shaders_;
   std::unordered_map<uint64_t, HostImage*> targets_;       // EDRAM base/pitch -> render target
   std::unordered_map<uint32_t, HostImage*> guest_images_;  // guest address -> texture / resolve destination

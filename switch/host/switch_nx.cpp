@@ -209,6 +209,8 @@ void print_cpu_profile(u64 period_ticks) {
 // of the NRO; the 2-s line prints the top buckets, addr2line on hcu.elf names the functions.
 struct SampledThread {
     const char* prefix;  // thread name prefix to sample
+    int ordinal;         // the n-th thread with that prefix (the game's XThreads)
+    char name[48];       // the matched thread's name, for the line
     struct Bucket {
         u64 key;  // (pc - _start) >> 8, 0 = free
         u32 count;
@@ -217,7 +219,11 @@ struct SampledThread {
     u32 samples, outside, failed;
     Result last_rc;
 };
-SampledThread sampled[3] = {{"Main XThread"}, {"GPU Commands"}, {"Audio Worker"}};
+// The main thread, the command processor, the audio worker and the game's first six other threads
+// (named "XThread..." by the SDK): a loader thread that goes silent shows where it sits.
+SampledThread sampled[9] = {{"Main XThread", 0}, {"GPU Commands", 0}, {"Audio Worker", 0}, {"XThread", 0},
+                            {"XThread", 1},      {"XThread", 2},      {"XThread", 3},      {"XThread", 4},
+                            {"XThread", 5}};
 Thread sampler_thread;
 volatile bool sampler_running = false;
 
@@ -250,9 +256,12 @@ void sampler_loop(void*) {
         for (SampledThread& st : sampled) {
             Handle handle = INVALID_HANDLE;
             mutexLock(&nx_threads_lock);
+            int seen = 0;
             for (const NxThread& t : nx_threads) {
                 if (t.thread != nullptr && std::strncmp(t.name, st.prefix, std::strlen(st.prefix)) == 0) {
+                    if (seen++ < st.ordinal) continue;
                     handle = t.handle;
+                    std::strncpy(st.name, t.name, sizeof(st.name) - 1);
                     break;
                 }
             }
@@ -280,7 +289,7 @@ void print_pc_profile() {
     for (SampledThread& st : sampled) {
         if (st.samples == 0 && st.failed == 0) continue;
         char line[512];
-        int n = std::snprintf(line, sizeof(line), "[nx] pc %s (%u samples):", st.prefix, st.samples);
+        int n = std::snprintf(line, sizeof(line), "[nx] pc %s (%u samples):", st.name[0] ? st.name : st.prefix, st.samples);
         for (int top = 0; top < 6; top++) {
             SampledThread::Bucket* best = nullptr;
             for (SampledThread::Bucket& b : st.buckets) {

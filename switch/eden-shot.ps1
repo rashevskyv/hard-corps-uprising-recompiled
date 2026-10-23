@@ -2,12 +2,13 @@
 # gate of the native renderer).
 #   powershell -File switch/eden-shot.ps1 -Nro <path.nro> -Out <dir> [-Seconds 30] [-Every 10] [-Keys "40:M,55:C"]
 # Starts eden.exe -g <nro>; every -Every seconds until -Seconds captures every visible top-level
-# window of the Eden process (the game renders in its own window when Eden is not in single-window
-# mode): <dir>\shot-NN-<k>.png, the largest window first. -Keys presses a key at a second (the
-# game window in the foreground, 150 ms hold): letters as in Eden's keyboard mapping
-# (user\config\qt-config.ini: C = A, X = B, V = X, Z = Y, M = +, N = -, Q = L, E = R, WASD = left
-# stick) and UP/DOWN/LEFT/RIGHT (the d-pad). Then closes Eden politely (CloseMainWindow, force
-# after 15 s). Audio stays muted in Eden's config. Never start a second Eden while one runs.
+# window of the Eden process through PrintWindow (the window's own content, whatever lies on top
+# of it; the person using the PC is not interrupted): <dir>\shot-NN-<k>.png, the largest window
+# first. -Keys posts a key to the game window at a second (150 ms hold, no focus change): letters
+# as in Eden's keyboard mapping (user\config\qt-config.ini: C = A, X = B, V = X, Z = Y, M = +,
+# N = -, Q = L, E = R, WASD = left stick) and UP/DOWN/LEFT/RIGHT (the d-pad). Then closes Eden
+# politely (CloseMainWindow, force after 15 s). Audio stays muted in Eden's config. Never start a
+# second Eden while one runs.
 param([Parameter(Mandatory = $true)][string]$Nro, [Parameter(Mandatory = $true)][string]$Out, [int]$Seconds = 30, [int]$Every = 10, [string]$Keys = '')
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -34,25 +35,15 @@ public static class Win32 {
     return list;
   }
   public static string Title(IntPtr h) { var sb = new StringBuilder(256); GetWindowText(h, sb, 256); return sb.ToString(); }
-  // A key press with a hold (the game polls the pad once per frame) into one window only: through
-  // the keyboard when that window could be brought to the foreground, else posted to its queue
-  // (Qt reads WM_KEYDOWN/WM_KEYUP from there), so a key never lands in another window.
-  public static string Press(IntPtr target, byte vk, bool extended, int holdMs) {
-    SetForegroundWindow(target);
-    System.Threading.Thread.Sleep(150);
-    if (GetForegroundWindow() == target) {
-      uint ext = extended ? 1u : 0u;
-      keybd_event(vk, 0, ext, UIntPtr.Zero);
-      System.Threading.Thread.Sleep(holdMs);
-      keybd_event(vk, 0, ext | 2u, UIntPtr.Zero);
-      return "keyboard";
-    }
+  // A key press with a hold (the game polls the pad once per frame), posted to one window's queue
+  // (Qt reads WM_KEYDOWN/WM_KEYUP from there): no focus change, so the person using the PC is not
+  // interrupted and a key never lands in another window. The game took START this way.
+  public static void Press(IntPtr target, byte vk, bool extended, int holdMs) {
     uint scan = MapVirtualKey(vk, 0);
     uint lp = (scan << 16) | 1u | (extended ? (1u << 24) : 0u);
     PostMessage(target, 0x0100, (UIntPtr)vk, (IntPtr)unchecked((int)lp));
     System.Threading.Thread.Sleep(holdMs);
     PostMessage(target, 0x0101, (UIntPtr)vk, (IntPtr)unchecked((int)(lp | 0xC0000000u)));
-    return "posted (no focus)";
   }
 }
 '@
@@ -93,8 +84,8 @@ for ($t = 1; $t -le $Seconds; $t++) {
             if (-not $target) { Write-Output ("{0}s: key {1}: no game window" -f $t, $key); continue }
             $ext = $false
             if ($arrows.ContainsKey($key)) { $vk = [byte]$arrows[$key]; $ext = $true } else { $vk = [byte][char]$key[0] }
-            $how = [Win32]::Press($target.h, $vk, $ext, 150)
-            Write-Output ("{0}s: key {1} -> '{2}' ({3})" -f $t, $key, $target.title, $how)
+            [Win32]::Press($target.h, $vk, $ext, 150)
+            Write-Output ("{0}s: key {1} -> '{2}' (posted)" -f $t, $key, $target.title)
             Start-Sleep -Milliseconds 250
         }
     }
@@ -103,19 +94,14 @@ for ($t = 1; $t -le $Seconds; $t++) {
     if ($wins.Count -eq 0) { Write-Output "${t}s: no window yet"; continue }
     $k = 0
     foreach ($win in $wins) {
-        # The window's own content (PW_RENDERFULLCONTENT, also for Vulkan windows), without taking the
-        # focus: a script in the background cannot raise Eden, so a screen copy showed whatever window
-        # was in front. The screen copy stays as the fallback.
+        # The window's own content (PrintWindow with PW_RENDERFULLCONTENT): other windows on top of
+        # it are not captured and nothing is brought to the foreground.
         $bmp = New-Object System.Drawing.Bitmap $win.w, $win.hh
         $g = [System.Drawing.Graphics]::FromImage($bmp)
         $hdc = $g.GetHdc()
-        $printed = [Win32]::PrintWindow($win.h, $hdc, 2)
+        $ok = [Win32]::PrintWindow($win.h, $hdc, 2)
         $g.ReleaseHdc($hdc)
-        if (-not $printed) {
-            $null = [Win32]::SetForegroundWindow($win.h)
-            Start-Sleep -Milliseconds 300
-            $g.CopyFromScreen($win.r.Left, $win.r.Top, 0, 0, $bmp.Size)
-        }
+        if (-not $ok) { Write-Output "${t}s: PrintWindow failed for '$($win.title)'" }
         $file = Join-Path $Out ("shot-{0:D2}-{1}.png" -f $n, $k)
         $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
         $g.Dispose(); $bmp.Dispose()

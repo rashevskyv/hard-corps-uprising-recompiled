@@ -589,6 +589,32 @@ class Translator:
         return '\n'.join(out) + '\n', meta
 
 
+def geometry_glsl(name, interps):
+    """A pass-through geometry shader for Xenos rectangle lists: 3 vertices per rectangle, the
+    4th = v1 + v2 - v0 (positions and every interpolator extrapolated). deko3d's fill-rectangle
+    mode does the same on the console; Eden ignores that mode, so the backend binds this shader
+    for rectangle-list draws (cvar deko3d_fill_rectangle selects the hardware mode)."""
+    out = ['#version 460', '// hcu xenos2glsl: %s (geom: rectangle lists)' % name,
+           'layout(triangles) in;', 'layout(triangle_strip, max_vertices = 4) out;']
+    for k in interps:
+        out.append('layout(location = %d) in vec4 g_%d[];' % (k, k))
+        out.append('layout(location = %d) out vec4 o_%d;' % (k, k))
+    out.append('void main() {')
+    out.append('  for (int i = 0; i < 3; i++) {')
+    out.append('    gl_Position = gl_in[i].gl_Position;')
+    for k in interps:
+        out.append('    o_%d = g_%d[i];' % (k, k))
+    out.append('    EmitVertex();')
+    out.append('  }')
+    out.append('  gl_Position = gl_in[1].gl_Position + gl_in[2].gl_Position - gl_in[0].gl_Position;')
+    for k in interps:
+        out.append('  o_%d = g_%d[1] + g_%d[2] - g_%d[0];' % (k, k, k, k))
+    out.append('  EmitVertex();')
+    out.append('  EndPrimitive();')
+    out.append('}')
+    return '\n'.join(out) + '\n'
+
+
 def translate_file(path):
     stage = 'vert' if path.endswith('.vert') else 'frag' if path.endswith('.frag') else None
     if stage is None:
@@ -637,6 +663,14 @@ def main():
                 ok += good
             else:
                 ok += 1
+            if meta['stage'] == 'vert':
+                # The rectangle-list geometry shader of this vertex shader (same hash, .geom).
+                gdst = os.path.join(args.out_dir or args.all, stem.replace('.vert', '.geom') + '.glsl')
+                open(gdst, 'w', newline='\n').write(geometry_glsl(meta['name'], meta['interpolators']))
+                if args.check:
+                    good, msg = uam_check(gdst, 'geom')
+                    if not good:
+                        print('FAIL %s: %s' % (os.path.basename(gdst), msg))
         print('%d of %d translated' % (ok, len(files)))
         return
     glsl, meta = translate_file(args.input)

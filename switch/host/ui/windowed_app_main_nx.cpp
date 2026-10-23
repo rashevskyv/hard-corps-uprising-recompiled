@@ -39,6 +39,17 @@ int main(int argc, char* argv[]) {
   // The native renderer (src/gpu/deko3d_backend.cpp): the file sdmc:/switch/hcu/deko3d selects it
   // (it wins over nogpu, so Eden's staging can keep both files).
   const bool deko3d = access("sdmc:/switch/hcu/deko3d", F_OK) == 0;
+  // Extra arguments, one per line, from sdmc:/switch/hcu/args.txt (Eden gives no argv and the
+  // config file path depends on argv[0]): e.g. --log_noisy=true --log_level=trace for a kernel trace.
+  if (FILE* fp = std::fopen("sdmc:/switch/hcu/args.txt", "r")) {
+    char line[512];
+    while (std::fgets(line, sizeof(line), fp)) {
+      std::string a(line);
+      while (!a.empty() && (a.back() == '\n' || a.back() == '\r' || a.back() == ' ')) a.pop_back();
+      if (!a.empty() && a[0] != '#') args.push_back(a);
+    }
+    std::fclose(fp);
+  }
   std::vector<const char*> defaults = {
       "--game_data_root=sdmc:/switch/hcu/game",
       "--user_data_root=sdmc:/switch/hcu/user",

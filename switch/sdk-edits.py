@@ -997,6 +997,44 @@ edit('src/filesystem/devices/host_path_device.cpp', [
      '      auto child_infos = rex::filesystem::ListFiles(current_entry->host_path());' + NL +
      '      auto match = std::find_if(child_infos.begin(), child_infos.end(), [&](const auto& info) {' + NL),
 ])
+# --- Directory opens (the game opens "game:\data\player_dll\" when it leaves the title, to list its
+# character DLLs): a trailing separator left an empty file name (STATUS_NO_SUCH_FILE: 2026-10-23), and
+# libnx cannot open() a directory; a directory handle only serves enumeration through the entry tree.
+edit('src/filesystem/virtual_file_system.cpp', [
+    ('X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view path,' + NL,
+     'X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view path_in,' + NL),
+    ('                                     FileAction* out_action) {' + NL +
+     "  // TODO(gibbed): should 'is_directory' remain as a bool or should it be" + NL,
+     '                                     FileAction* out_action) {' + NL +
+     '  // A directory opened with a trailing separator ("data\\player_dll\\"): without this the name' + NL +
+     '  // is empty and the open fails.' + NL +
+     '  std::string_view path = path_in;' + NL +
+     "  while (!path.empty() && (path.back() == '\\\\' || path.back() == '/')) {" + NL +
+     '    path.remove_suffix(1);' + NL + '  }' + NL +
+     "  // TODO(gibbed): should 'is_directory' remain as a bool or should it be" + NL),
+])
+edit('src/filesystem/devices/host_path_entry.cpp', [
+    ('  auto file_handle = rex::filesystem::FileHandle::OpenExisting(' + NL +
+     '      host_path_, desired_access, static_cast<HostPathDevice*>(device_)->allow_share_delete());' + NL,
+     '#if REX_PLATFORM_SWITCH' + NL +
+     '  if (attributes_ & kFileAttributeDirectory) {' + NL +
+     '    // libnx cannot open() a directory; the handle serves enumeration (the entry tree) only.' + NL +
+     '    *out_file = new HostPathFile(desired_access, this, nullptr);' + NL +
+     '    return X_STATUS_SUCCESS;' + NL + '  }' + NL + '#endif' + NL +
+     '  auto file_handle = rex::filesystem::FileHandle::OpenExisting(' + NL +
+     '      host_path_, desired_access, static_cast<HostPathDevice*>(device_)->allow_share_delete());' + NL),
+])
+edit('src/filesystem/devices/host_path_file.cpp', [
+    ('  if (file_handle_->Read(byte_offset, buffer.data(), buffer.size(), out_bytes_read)) {' + NL,
+     '  if (!file_handle_) {' + NL + '    return X_STATUS_ACCESS_DENIED;  // a directory handle (Switch)' + NL + '  }' + NL +
+     '  if (file_handle_->Read(byte_offset, buffer.data(), buffer.size(), out_bytes_read)) {' + NL),
+    ('  if (file_handle_->Write(byte_offset, buffer.data(), buffer.size(), out_bytes_written)) {' + NL,
+     '  if (!file_handle_) {' + NL + '    return X_STATUS_ACCESS_DENIED;' + NL + '  }' + NL +
+     '  if (file_handle_->Write(byte_offset, buffer.data(), buffer.size(), out_bytes_written)) {' + NL),
+    ('  if (file_handle_->SetLength(length)) {' + NL,
+     '  if (!file_handle_) {' + NL + '    return X_STATUS_ACCESS_DENIED;' + NL + '  }' + NL +
+     '  if (file_handle_->SetLength(length)) {' + NL),
+])
 print('changed (20):', *changed, sep=NL + '  ')
 
 # --- WAIT_REG_MEM statistics (Switch): how often the command processor polls a guest value and how
@@ -1025,14 +1063,86 @@ edit('src/graphics/command_processor.cpp', [
 ])
 print('changed (21):', *changed, sep=NL + '  ')
 
-# --- The audio worker has no backend on the Switch (nop): its loop only woke on every signal of every
-# wait object through the shared condition variable (49% of a core, console 0.65-0.84). It leaves at once.
+# --- The audio worker on the Switch: 0.86-0.111 made it leave at once (no backend; its loop woke on every
+# signal of every wait object, 49% of a core on the console 0.65-0.84). Since 2026-10-23 it stays: the nop
+# system below creates a driver that consumes frames at the real rate, so the guest gets its render-driver
+# callbacks (the game's attract transition after the title waited on its audio engine forever without them).
 edit('src/audio/audio_system.cpp', [
     ('void AudioSystem::WorkerThreadMain() {' + NL + '  // Initialize driver and ringbuffer.' + NL + '  Initialize();' + NL,
      'void AudioSystem::WorkerThreadMain() {' + NL + '  // Initialize driver and ringbuffer.' + NL + '  Initialize();' + NL +
-     '#if REX_PLATFORM_SWITCH' + NL + '  std::printf("[nx] audio: no audio backend, the audio worker leaves\\n");' + NL +
-     '  std::fflush(stdout);' + NL + '  return;' + NL + '#endif' + NL),
+     '#if REX_PLATFORM_SWITCH' + NL + '  std::printf("[nx] audio: audio worker running (frames consumed at 5.33 ms, no device)\\n");' + NL +
+     '  std::fflush(stdout);' + NL + '#endif' + NL),
 ])
+# The nop audio system: a driver per client that "plays" the submitted frames at 256 samples / 48 kHz
+# (5.33 ms each) by releasing the client's semaphore, instead of refusing to create a driver
+# (X_STATUS_NOT_IMPLEMENTED failed XAudioRegisterRenderDriverClient). Written whole: idempotent by content.
+write('src/audio/nop/nop_audio_system.cpp', '''/**
+ * Nop audio system (cvhd-recomp edit of the ReXGlue SDK file, BSD-3): no device, but the frames
+ * the guest submits are consumed at the real rate so its render-driver callbacks keep coming.
+ */
+#include <rex/audio/flags.h>
+#include <rex/audio/nop/nop_audio_system.h>
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+#include <rex/audio/audio_driver.h>
+#include <rex/thread.h>
+
+namespace rex::audio::nop {
+
+namespace {
+// One XAudio render-driver frame: 256 samples per channel at 48 kHz.
+constexpr auto kFrameDuration = std::chrono::microseconds(5333);
+
+class NopAudioDriver : public AudioDriver {
+ public:
+  NopAudioDriver(memory::Memory* memory, rex::thread::Semaphore* semaphore)
+      : AudioDriver(memory), semaphore_(semaphore), thread_([this] { Run(); }) {}
+  ~NopAudioDriver() override {
+    running_ = false;
+    thread_.join();
+  }
+  void SubmitFrame(uint32_t /*samples_ptr*/) override { queued_.fetch_add(1); }
+
+ private:
+  void Run() {
+    while (running_) {
+      std::this_thread::sleep_for(kFrameDuration);
+      if (queued_.load() > 0) {
+        queued_.fetch_sub(1);
+        semaphore_->Release(1, nullptr);  // the frame "played": the worker asks the guest for the next
+      }
+    }
+  }
+  rex::thread::Semaphore* semaphore_;
+  std::atomic<bool> running_{true};
+  std::atomic<int> queued_{0};
+  std::thread thread_;
+};
+}  // namespace
+
+std::unique_ptr<AudioSystem> NopAudioSystem::Create(
+    runtime::FunctionDispatcher* function_dispatcher) {
+  return std::make_unique<NopAudioSystem>(function_dispatcher);
+}
+
+NopAudioSystem::NopAudioSystem(runtime::FunctionDispatcher* function_dispatcher)
+    : AudioSystem(function_dispatcher) {}
+
+NopAudioSystem::~NopAudioSystem() = default;
+
+X_STATUS NopAudioSystem::CreateDriver(size_t /*index*/, rex::thread::Semaphore* semaphore,
+                                      AudioDriver** out_driver) {
+  *out_driver = new NopAudioDriver(memory(), semaphore);
+  return X_STATUS_SUCCESS;
+}
+
+void NopAudioSystem::DestroyDriver(AudioDriver* driver) { delete driver; }
+
+}  // namespace rex::audio::nop
+''')
 print('changed (22):', *changed, sep=NL + '  ')
 
 # --- Command-processor phase timers and statistics once per second, every platform (REXGPU_INFO, so the Linux log and
