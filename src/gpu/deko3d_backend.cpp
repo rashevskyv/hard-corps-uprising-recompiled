@@ -355,6 +355,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
+    no_depth_ = access((debug_dir + "dk_nodepth").c_str(), F_OK) == 0;  // debug A/B: every draw without the depth test
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
     Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
@@ -517,7 +518,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufBindBlendStates(cmd, 0, &bs, 1);
     DkDepthStencilState ds;
     dkDepthStencilStateDefaults(&ds);
-    ds.depthTestEnable = depth && dc.z_enable;
+    ds.depthTestEnable = depth && dc.z_enable && !no_depth_;
     ds.depthWriteEnable = depth && dc.z_write_enable;
     ds.depthCompareOp = CompareOp(dc.zfunc);
     ds.stencilTestEnable = 0;
@@ -1299,6 +1300,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_vs_ = false, present_fs_ = false;
   bool present_target_ = false;
   bool dump_images_ = false;
+  bool no_depth_ = false;
   std::string shader_dir_;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
