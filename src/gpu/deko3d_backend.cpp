@@ -135,6 +135,7 @@ struct HostImage {
   bool from_resolve = false;  // host-native channels: the fetch swizzle is not applied
   uint32_t content_serial = 0;  // the draw serial when the contents were set (upload or resolve); 0 = never
   uint32_t checked_serial = 0;  // the draw serial of the last dirty-page check
+  bool first_bind_logged = false;  // the "bound without an upload" line, once per image
   uint32_t guest_base = 0;    // textures and resolve destinations
   uint32_t edram_base = 0, edram_pitch = 0;  // render targets
 };
@@ -359,6 +360,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
     no_depth_ = access((debug_dir + "dk_nodepth").c_str(), F_OK) == 0;  // debug A/B: every draw without the depth test
     if (access((debug_dir + "dk_texdump").c_str(), F_OK) == 0) tex_dump_dir_ = debug_dir + "texdump/";  // debug: decoded k_8 textures
+    always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: upload at every bind
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
     Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
@@ -943,7 +945,16 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (img->checked_serial == serial_) return img;  // already checked for this draw
     img->checked_serial = serial_;
     // Never filled, or written by the guest (or a file read) after the upload / resolve that filled it.
-    if (img->content_serial && !WrittenSince(base, info.memory.base_size, img->content_serial)) return img;
+    if (img->content_serial && !WrittenSince(base, info.memory.base_size, img->content_serial)) {
+      if (!img->first_bind_logged) {
+        img->first_bind_logged = true;
+        char key[32];
+        std::snprintf(key, sizeof(key), "kept %08X", base);
+        LogOnce(key, "texture at %08X (%s %ux%u) bound without an upload: its image already held %s and no page was written since",
+                base, info.format_info()->name, info.width + 1, info.height + 1, img->from_resolve ? "a resolve" : "an upload");
+      }
+      if (!always_upload_) return img;
+    }
     // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
     if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
     if (img->content_serial) {
@@ -1314,6 +1325,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_target_ = false;
   bool dump_images_ = false;
   bool no_depth_ = false;
+  bool always_upload_ = false;
   std::string tex_dump_dir_;
   uint32_t tex_dumps_ = 0;
   std::string shader_dir_;
