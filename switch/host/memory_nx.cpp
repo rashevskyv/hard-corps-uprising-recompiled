@@ -144,7 +144,11 @@ extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200] = {};
 namespace nx {
 uint8_t* arena_base() { return arena.base; }
 
+// How often the command processor asks for the dirty pages and how many it gets (the 2-s line).
+extern "C" volatile uint64_t rex_nx_flush_calls = 0, rex_nx_flush_pages = 0;
+
 void FlushDirtyPages(rex::memory::Memory& memory) {
+    rex_nx_flush_calls++;
     const uint64_t* words = reinterpret_cast<const uint64_t*>(const_cast<const uint8_t*>(rex_nx_dirty));
     for (uint32_t c = 0; c < 0x200; c++) {
         if (!rex_nx_dirty_coarse[c]) {
@@ -160,6 +164,7 @@ void FlushDirtyPages(rex::memory::Memory& memory) {
                     continue;
                 }
                 rex_nx_dirty[i] = 0;
+                rex_nx_flush_pages++;
                 memory.TriggerPhysicalMemoryCallbacks(rex::thread::global_critical_region::AcquireDirect(),
                                                       0xA0000000u + (i << 12), 0x1000, true, false, false);
             }

@@ -37,6 +37,8 @@ extern char* fake_heap_start;
 extern char* fake_heap_end;
 // Counted by the SDK's command processor (sdk-edits.py, WAIT_REG_MEM), printed every 2 s here.
 volatile uint64_t rex_nx_wait_polls = 0, rex_nx_wait_sleep_ms = 0, rex_nx_wait_yields = 0, rex_nx_wait_slept_ticks = 0;
+// memory_nx.cpp: dirty-page flushes asked by the command processor.
+extern volatile uint64_t rex_nx_flush_calls, rex_nx_flush_pages;
 }
 
 namespace {
@@ -342,6 +344,14 @@ void log_flush_loop(void*) {
                 last_sleep = sleep;
                 last_yields = yields;
                 last_slept = slept;
+                static u64 last_fc = 0, last_fp = 0;
+                const u64 fc = rex_nx_flush_calls, fp = rex_nx_flush_pages;
+                if (fc != last_fc) {
+                    std::printf("[nx] dirty pages: %llu flushes, %llu pages re-marked for upload\n",
+                                (unsigned long long)(fc - last_fc), (unsigned long long)(fp - last_fp));
+                }
+                last_fc = fc;
+                last_fp = fp;
             }
             last_profile = now;
             keep_clocks();
@@ -404,7 +414,7 @@ bool pinning = true;
 extern "C" void userAppInit(void) {
     open_log();
     std::set_terminate(terminate_handler);
-    std::printf("[nx] Hard Corps: Uprising, version " HCU_VERSION ", built " HCU_BUILD_UTC "\n");
+    std::printf("[nx] Castlevania: Harmony of Despair, version " HCU_VERSION ", built " HCU_BUILD_UTC "\n");
     AppletType type = appletGetAppletType();
     const bool application = type == AppletType_Application || type == AppletType_SystemApplication;
     std::printf("[nx] launch: %s (applet type %d)\n",

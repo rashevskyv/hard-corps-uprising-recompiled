@@ -9,7 +9,6 @@
 #define RTLD_NOW 2
 #define RTLD_LOCAL 0
 #define RTLD_GLOBAL 4
-#define RTLD_NOLOAD 8  /* HCU patch 0010: DynamicLibrary::LoadExisting */
 
 static inline void* dlopen(const char* filename, int flags) {
     (void)filename;

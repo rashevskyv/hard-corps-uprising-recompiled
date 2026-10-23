@@ -376,40 +376,8 @@ reps = [
      '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
      '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
      '      }' + NL),
-    # The same wait after HCU patch 0021 (patches/rexglue-sdk), which moved the timeout check.
-    ('      if (infinite_timeout) {' + NL +
-     '        std::this_thread::sleep_for(std::chrono::milliseconds(1));' + NL +
-     '      } else {' + NL +
-     '        auto now = std::chrono::steady_clock::now();' + NL +
-     '        if (now >= end_time) {' + NL +
-     '          return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
-     '        }' + NL +
-     '        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);' + NL +
-     '        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));' + NL +
-     '        std::this_thread::sleep_for(sleep_time);' + NL +
-     '      }' + NL,
-     '      {' + NL +
-     '        const auto cap = std::chrono::milliseconds(20);' + NL +
-     '        auto wait_time = cap;' + NL +
-     '        if (!infinite_timeout) {' + NL +
-     '          auto now = std::chrono::steady_clock::now();' + NL +
-     '          if (now >= end_time) {' + NL +
-     '            return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
-     '          }' + NL +
-     '          wait_time = std::min(std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now), cap);' + NL +
-     '        }' + NL +
-     '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
-     '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
-     '      }' + NL),
 ]
-# Exactly one of the two WaitMultiple variants is present (stock or HCU 0021).
-optional = {reps[-2][0], reps[-1][0]}
-if not any(o in src for o in optional) and not any(n in src for _, n in reps[-2:]):
-    raise SystemExit('threading_posix.cpp: no WaitMultiple poll found')
 for old, new in reps:
-    if old in optional:
-        src = src.replace(old, new)
-        continue
     if old not in src and new not in src:
         raise SystemExit('threading_posix.cpp: anchor not found: ' + old[:60])
     src = src.replace(old, new)
@@ -902,6 +870,28 @@ edit('src/system/xthread.cpp', [
 ])
 print('changed (17):', *changed, sep=NL + '  ')
 
+# --- Extra GPU backends from the game tree (hcu src/gpu/*: the trace backend on every platform, the
+# deko3d backend on the Switch): sources appended to the plugin, and a weak hook plugin_main asks for
+# an unknown backend name before failing. Platform-independent edit.
+edit('src/graphics/CMakeLists.txt', [
+    ('    pipeline/shader/translator_disasm.cpp' + NL + ')' + NL,
+     '    pipeline/shader/translator_disasm.cpp' + NL + ')' + NL +
+     '# Backends from the game tree (hcu): appended by the game CMakeLists before add_subdirectory.' + NL +
+     'list(APPEND REXGPU_XENOS_SOURCES ${REXGPU_XENOS_EXTRA_SOURCES})' + NL),
+])
+edit('src/graphics/plugin_main.cpp', [
+    ('extern "C" REX_GPU_PLUGIN_EXPORT uint32_t rex_gpu_abi_version(void) {' + NL,
+     '// Backends from the game tree (hcu src/gpu/trace_backend.cpp) answer names the plugin does not' + NL +
+     '// know (nullptr = unknown). A required symbol, not a weak default: in the static plugin the' + NL +
+     '// linker would keep a weak default and never pull the game object in (Eden, 2026-10-22).' + NL +
+     'extern "C" rex::system::IGraphicsSystem* rex_gpu_extra_backend(const char* name);' + NL + NL +
+     'extern "C" REX_GPU_PLUGIN_EXPORT uint32_t rex_gpu_abi_version(void) {' + NL),
+    ("  REXLOG_ERROR(\"rexgpu-xenos: requested backend '{}' is not compiled into this plugin\", backend);" + NL,
+     '  if (rex::system::IGraphicsSystem* extra = rex_gpu_extra_backend(std::string(backend).c_str())) {' + NL +
+     '    return extra;' + NL + '  }' + NL +
+     "  REXLOG_ERROR(\"rexgpu-xenos: requested backend '{}' is not compiled into this plugin\", backend);" + NL),
+])
+
 # --- vkDestroyInstance was taken from vk_icdGetInstanceProcAddr(nullptr, ...), which NVK answers with
 # null (instance-level function): every shutdown, also the one after a failed init, ended at pc 0
 # (console 0.55, ~VulkanInstance). Load it with the instance handle like the other instance functions.
@@ -1009,40 +999,237 @@ edit('src/audio/audio_system.cpp', [
 ])
 print('changed (22):', *changed, sep=NL + '  ')
 
-# ===== hcu-switch: edits for HCU's patches/rexglue-sdk on top of the cvhd-recomp edits above =====
-
-# 0009 guest_wake.cpp: REX_PLATFORM_LINUX is also set on the Switch, where <linux/futex.h> does not
-# exist. The Switch has no game-side fence waiter yet (src/gpu_fence_wait.cpp is Windows/Linux), so the
-# wake stays a no-op there.
-edit('src/graphics/guest_wake.cpp', [
-    ('#elif REX_PLATFORM_LINUX' + NL + '#include <climits>' + NL,
-     '#elif REX_PLATFORM_LINUX && !REX_PLATFORM_SWITCH' + NL + '#include <climits>' + NL),
-    ('#elif REX_PLATFORM_LINUX' + NL + '  std::atomic_thread_fence',
-     '#elif REX_PLATFORM_LINUX && !REX_PLATFORM_SWITCH' + NL + '  std::atomic_thread_fence'),
-])
-
-# WAIT_REG_MEM statistics (the `[nx] gpu waits` line of switch_nx.cpp) on HCU's 0003/0025 wait: the
-# 16 yield re-polls, then a 1 ms wait on the vblank event. Edit 21 above anchors on the stock sleep
-# (its extern declarations still apply).
+# --- Command-processor phase timers and statistics once per second, every platform (REXGPU_INFO, so the Linux log and
+# the console's hcu_rex_log.txt carry the same line): ring kicks (CP_RB_WPTR writes), batches
+# executed and dwords consumed, WAIT_REG_MEM packets and their polls, swaps, idle waits. The Linux
+# run is the reference for the console (console 0.84: 2.1 fps, the guest waiting for the ring).
 edit('src/graphics/command_processor.cpp', [
-    ('          rex::thread::Wait(guest_progress_event_.get(), false, std::chrono::milliseconds(1));' + NL,
-     '#if REX_PLATFORM_SWITCH' + NL +
-     '          rex_nx_wait_polls++;' + NL + '          rex_nx_wait_sleep_ms += wait / 0x100;' + NL +
-     '          const uint64_t nx_t0 = rex::chrono::Clock::QueryHostTickCount();' + NL +
-     '#endif' + NL +
-     '          rex::thread::Wait(guest_progress_event_.get(), false, std::chrono::milliseconds(1));' + NL +
-     '#if REX_PLATFORM_SWITCH' + NL +
-     '          rex_nx_wait_slept_ticks += rex::chrono::Clock::QueryHostTickCount() - nx_t0;' + NL +
-     '#endif' + NL),
-    ('          rex::thread::MaybeYield();' + NL + '          ++unmatched_poll_count;' + NL,
-     '#if REX_PLATFORM_SWITCH' + NL + '          rex_nx_wait_yields++;' + NL + '#endif' + NL +
-     '          rex::thread::MaybeYield();' + NL + '          ++unmatched_poll_count;' + NL),
+    ('void CommandProcessor::UpdateWritePointer(uint32_t value) {' + NL + '  write_ptr_index_ = value;' + NL,
+     'void CommandProcessor::UpdateWritePointer(uint32_t value) {' + NL +
+     '  cp_stats.kicks++;' + NL +
+     '  write_ptr_index_ = value;' + NL),
+    ('    read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);' + NL,
+     '    {' + NL +
+     '      const uint32_t nx_before = read_ptr_index_;' + NL +
+     '      const uint64_t nx_b0 = rex::chrono::Clock::QueryHostTickCount();' + NL +
+     '      read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);' + NL +
+     '      cp_stats.batch_ns += (rex::chrono::Clock::QueryHostTickCount() - nx_b0) * 1000000000ull /' + NL +
+     '                           std::max<uint64_t>(1, rex::chrono::Clock::QueryHostTickFrequency());' + NL +
+     '      cp_stats.batches++;' + NL +
+     '      cp_stats.dwords += (read_ptr_index_ >= nx_before) ? (read_ptr_index_ - nx_before)' + NL +
+     '                                                        : (primary_buffer_size_ / 4 - nx_before + read_ptr_index_);' + NL +
+     '    }' + NL),
+    ('  while (worker_running_) {' + NL + '    while (!pending_fns_.empty()) {' + NL,
+     '  while (worker_running_) {' + NL +
+     '    {' + NL +
+     '      const uint64_t now = rex::chrono::Clock::QueryHostTickCount();' + NL +
+     '      const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();' + NL +
+     '      if (cp_stats.last_report_tick == 0) cp_stats.last_report_tick = now;' + NL +
+     '      if (freq && now - cp_stats.last_report_tick >= freq) {' + NL +
+     '        REXGPU_INFO("cp/s: kicks {}, batches {} ({} dwords), waitregmem {} packets {} polls {} ms, swaps {}, idle waits {}",' + NL +
+     '                    cp_stats.kicks.exchange(0), cp_stats.batches.exchange(0), cp_stats.dwords.exchange(0),' + NL +
+     '                    cp_stats.wait_packets.exchange(0), cp_stats.wait_polls.exchange(0),' + NL +
+     '                    cp_stats.wait_poll_ns.exchange(0) / 1000000, cp_stats.swaps.exchange(0),' + NL +
+     '                    cp_stats.idle_waits.exchange(0));' + NL +
+     '        REXGPU_INFO("cp/s time: batches {} ms (draws {} in {} ms, swaps {} ms), idle waits {} ms",' + NL +
+     '                    cp_stats.batch_ns.exchange(0) / 1000000, cp_stats.draws.exchange(0),' + NL +
+     '                    cp_stats.draw_ns.exchange(0) / 1000000, cp_stats.swap_ns.exchange(0) / 1000000,' + NL +
+     '                    cp_stats.idle_ns.exchange(0) / 1000000);' + NL +
+     '        cp_stats.last_report_tick = now;' + NL +
+     '      }' + NL + '    }' + NL +
+     '    while (!pending_fns_.empty()) {' + NL),
+    ('          rex::thread::Wait(write_ptr_index_event_.get(), true,' + NL,
+     '          cp_stats.idle_waits++;' + NL +
+     '          const uint64_t nx_i0 = rex::chrono::Clock::QueryHostTickCount();' + NL +
+     '          rex::thread::Wait(write_ptr_index_event_.get(), true,' + NL),
+    ('  bool is_memory = (wait_info & 0x10) != 0;' + NL,
+     '  bool is_memory = (wait_info & 0x10) != 0;' + NL +
+     '  cp_stats.wait_packets++;' + NL +
+     '  const uint64_t nx_wait_start = rex::chrono::Clock::QueryHostTickCount();' + NL +
+     '  const bool nx_log_this = cp_stats.logged++ < 60;' + NL +
+     '  if (nx_log_this) {' + NL +
+     '    REXGPU_INFO("WAIT_REG_MEM {} 0x{:08X} ref 0x{:08X} mask 0x{:08X} func {} wait 0x{:X}", is_memory ? "mem" : "reg",' + NL +
+     '                poll_reg_addr, ref, mask, wait_info & 0x7, wait);' + NL + '  }' + NL),
+    ('    if (!matched) {' + NL + '      // Wait.' + NL + '      if (wait >= 0x100) {' + NL,
+     '    if (!matched) {' + NL + '      // Wait.' + NL + '      cp_stats.wait_polls++;' + NL + '      if (wait >= 0x100) {' + NL),
+    ('  } while (!matched);' + NL + NL + '  return true;' + NL + '}' + NL + NL + 'bool CommandProcessor::ExecutePacketType3_REG_RMW(',
+     '  } while (!matched);' + NL +
+     '  {' + NL +
+     '    const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();' + NL +
+     '    if (freq) cp_stats.wait_poll_ns += (rex::chrono::Clock::QueryHostTickCount() - nx_wait_start) * 1000000000ull / freq;' + NL +
+     '    if (nx_log_this && freq) {' + NL +
+     '      REXGPU_INFO("  ... satisfied after {} ms", (rex::chrono::Clock::QueryHostTickCount() - nx_wait_start) * 1000 / freq);' + NL +
+     '    }' + NL +
+     '  }' + NL + NL + '  return true;' + NL + '}' + NL + NL + 'bool CommandProcessor::ExecutePacketType3_REG_RMW('),
+    ('  IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);' + NL,
+     '  cp_stats.swaps++;' + NL +
+     '  const uint64_t nx_s0 = rex::chrono::Clock::QueryHostTickCount();' + NL +
+     '  IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);' + NL +
+     '  cp_stats.swap_ns += (rex::chrono::Clock::QueryHostTickCount() - nx_s0) * 1000000000ull /' + NL +
+     '                      std::max<uint64_t>(1, rex::chrono::Clock::QueryHostTickFrequency());' + NL),
+    ('                            std::chrono::milliseconds(wait_time_ms));' + NL,
+     '                            std::chrono::milliseconds(wait_time_ms));' + NL +
+     '          cp_stats.idle_ns += (rex::chrono::Clock::QueryHostTickCount() - nx_i0) * 1000000000ull /' + NL +
+     '                              std::max<uint64_t>(1, rex::chrono::Clock::QueryHostTickFrequency());' + NL),
+    ('      draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,' + NL,
+     '      const uint64_t nx_d0 = rex::chrono::Clock::QueryHostTickCount();' + NL +
+     '      cp_stats.draws++;' + NL +
+     '      draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,' + NL),
+    ('                                 is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);' + NL,
+     '                                 is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);' + NL +
+     '      cp_stats.draw_ns += (rex::chrono::Clock::QueryHostTickCount() - nx_d0) * 1000000000ull /' + NL +
+     '                          std::max<uint64_t>(1, rex::chrono::Clock::QueryHostTickFrequency());' + NL),
 ])
-print('changed (hcu):', *changed, sep=NL + '  ')
+edit('src/graphics/command_processor.cpp', [
+    # Anchored on the WAIT_REG_MEM edit's result (the include + the Switch extern block) so that a
+    # rerun finds this text verbatim: an insert must never be modified by a later edit.
+    ('#include <rex/graphics/command_processor.h>' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL +
+     'extern "C" volatile uint64_t rex_nx_wait_polls, rex_nx_wait_sleep_ms, rex_nx_wait_yields, rex_nx_wait_slept_ticks;  // switch_nx.cpp' + NL +
+     '#endif' + NL,
+     '#include <rex/graphics/command_processor.h>' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL +
+     'extern "C" volatile uint64_t rex_nx_wait_polls, rex_nx_wait_sleep_ms, rex_nx_wait_yields, rex_nx_wait_slept_ticks;  // switch_nx.cpp' + NL +
+     '#endif' + NL + '#include <algorithm>' + NL + '#include <atomic>' + NL + '#include <rex/chrono/clock.h>' + NL +
+     'namespace {' + NL +
+     'struct CpStats {' + NL +
+     '  std::atomic<uint64_t> kicks{0}, batches{0}, dwords{0}, wait_packets{0}, wait_polls{0}, wait_poll_ns{0},' + NL +
+     '      swaps{0}, idle_waits{0}, batch_ns{0}, draw_ns{0}, draws{0}, swap_ns{0}, idle_ns{0}, logged{0};' + NL +
+     '  uint64_t last_report_tick = 0;' + NL +
+     '};' + NL + 'CpStats cp_stats;' + NL +
+     '}  // namespace' + NL),
+])
+print('changed (23):', *changed, sep=NL + '  ')
 
-# 0006 RtlEnterCriticalSection spin: __builtin_arm_yield is clang's; GCC (devkitA64) takes the instruction.
-edit('src/kernel/xboxkrnl/xboxkrnl_rtl.cpp', [
-    ('#elif defined(__aarch64__)' + NL + '  __builtin_arm_yield();' + NL,
-     '#elif defined(__aarch64__)' + NL + '  __asm__ volatile("yield");' + NL),
+# --- Phases inside the Vulkan IssueDraw (every platform; printed once per second from
+# OnPrimaryBufferEnd): Linux spends the whole second in IssueDraw, ~4.8 ms per draw, with the thread
+# mostly blocked; the console ~4 ms per draw. Which step blocks?
+edit('src/graphics/vulkan/command_processor.cpp', [
+    ('#include <rex/graphics/vulkan/command_processor.h>' + NL,
+     '#include <rex/graphics/vulkan/command_processor.h>' + NL + '#include <atomic>' + NL + '#include <rex/chrono/clock.h>' + NL +
+     'namespace {' + NL +
+     'std::atomic<uint64_t> nx_phase_ticks[8];' + NL +
+     'std::atomic<uint64_t> nx_sub_ticks[8];  // 0 analyze vs, 1 analyze ps, 2 BeginSubmission, 3 fence wait, 4 texture begin, 5 prim begin' + NL +
+     'std::atomic<uint64_t> nx_sub_counts[8];  // 0 BeginSubmission calls, 1 opening frames, 2 new submissions, 3 fence waits' + NL +
+     '#define NX_SUB(i, call)                                                              \\' + NL +
+     '  do {                                                                               \\' + NL +
+     '    const uint64_t nx_s0 = rex::chrono::Clock::QueryHostTickCount();                 \\' + NL +
+     '    call;                                                                            \\' + NL +
+     '    nx_sub_ticks[i] += rex::chrono::Clock::QueryHostTickCount() - nx_s0;             \\' + NL +
+     '  } while (0)' + NL +
+     'uint64_t nx_phase_report_tick = 0;' + NL +
+     '}  // namespace' + NL +
+     'namespace rex::graphics::vulkan {' + NL +
+     '// 0 transfer calls, 1 transfers, 2 resolve clears, 3 texture loads, 4 texture bytes, 5 upload bytes, 6 resolves (IssueCopy)' + NL +
+     'std::atomic<uint64_t> nx_gpu_work[8];' + NL +
+     '}  // namespace rex::graphics::vulkan' + NL +
+     '#define NX_PHASE(i) do { const uint64_t nx_now = rex::chrono::Clock::QueryHostTickCount(); nx_phase_ticks[i] += nx_now - nx_t; nx_t = nx_now; } while (0)' + NL),
+    ('  memexport_ranges_.clear();' + NL,
+     '  uint64_t nx_t = rex::chrono::Clock::QueryHostTickCount();' + NL + '  memexport_ranges_.clear();' + NL),
+    ('    if (!primitive_processor_->Process(primitive_processing_result)) {' + NL,
+     '    NX_PHASE(0);' + NL + '    if (!primitive_processor_->Process(primitive_processing_result)) {' + NL),
+    ('    vertex_shader_modification = pipeline_cache_->GetCurrentVertexShaderModification(' + NL,
+     '    NX_PHASE(1);' + NL + '    vertex_shader_modification = pipeline_cache_->GetCurrentVertexShaderModification(' + NL),
+    ('  texture_cache_->RequestTextures(used_texture_mask);' + NL,
+     '  NX_PHASE(2);' + NL + '  texture_cache_->RequestTextures(used_texture_mask);' + NL + '  NX_PHASE(3);' + NL),
+    ('  if (!pipeline_cache_->ConfigurePipeline(vertex_shader_translation, pixel_shader_translation,' + NL,
+     '  NX_PHASE(4);' + NL + '  if (!pipeline_cache_->ConfigurePipeline(vertex_shader_translation, pixel_shader_translation,' + NL),
+    ('  UpdateDynamicState(viewport_info, primitive_polygonal, normalized_depth_control);' + NL,
+     '  NX_PHASE(5);' + NL + '  UpdateDynamicState(viewport_info, primitive_polygonal, normalized_depth_control);' + NL),
+    ('  if (!UpdateBindings(vertex_shader, pixel_shader)) {' + NL,
+     '  NX_PHASE(6);' + NL + '  if (!UpdateBindings(vertex_shader, pixel_shader)) {' + NL),
+    ('      shared_memory_->RangeWrittenByGpu(memexport_range.base_address_dwords << 2,' + NL,
+     '      NX_PHASE(7);' + NL + '      shared_memory_->RangeWrittenByGpu(memexport_range.base_address_dwords << 2,' + NL),
+    ('void VulkanCommandProcessor::OnPrimaryBufferEnd() {' + NL,
+     'void VulkanCommandProcessor::OnPrimaryBufferEnd() {' + NL +
+     '  {' + NL +
+     '    const uint64_t now = rex::chrono::Clock::QueryHostTickCount();' + NL +
+     '    const uint64_t freq = rex::chrono::Clock::QueryHostTickFrequency();' + NL +
+     '    if (nx_phase_report_tick == 0) nx_phase_report_tick = now;' + NL +
+     '    if (freq && now - nx_phase_report_tick >= freq) {' + NL +
+     '      REXGPU_INFO("draw phases ms: pre {} prim {} shaders {} textures {} rt {} pipeline {} state {} bind+vb+draw {}",' + NL +
+     '                  nx_phase_ticks[0].exchange(0) * 1000 / freq, nx_phase_ticks[1].exchange(0) * 1000 / freq,' + NL +
+     '                  nx_phase_ticks[2].exchange(0) * 1000 / freq, nx_phase_ticks[3].exchange(0) * 1000 / freq,' + NL +
+     '                  nx_phase_ticks[4].exchange(0) * 1000 / freq, nx_phase_ticks[5].exchange(0) * 1000 / freq,' + NL +
+     '                  nx_phase_ticks[6].exchange(0) * 1000 / freq, nx_phase_ticks[7].exchange(0) * 1000 / freq);' + NL +
+     '      nx_phase_report_tick = now;' + NL +
+     '    }' + NL + '  }' + NL),
 ])
-print('changed (hcu 0006):', *changed, sep=NL + '  ')
+print('changed (25):', *changed, sep=NL + '  ')
+
+# --- Sub-timers of the "pre" phase (every platform): the shader analyses, BeginSubmission and its
+# parts (the fence wait when a frame opens, the texture cache's and primitive processor's submission
+# setup), with counts of draws that found no open submission or frame.
+edit('src/graphics/vulkan/command_processor.cpp', [
+    # (the sub-timer definitions are part of the phase-timer insert above)
+    ('  pipeline_cache_->AnalyzeShaderUcode(*vertex_shader);' + NL + '  bool memexport_used_vertex = vertex_shader->memexport_eM_written() != 0;' + NL,
+     '  NX_SUB(0, pipeline_cache_->AnalyzeShaderUcode(*vertex_shader));' + NL + '  bool memexport_used_vertex = vertex_shader->memexport_eM_written() != 0;' + NL),
+    ('        pipeline_cache_->AnalyzeShaderUcode(*pixel_shader);' + NL + '        if (!draw_util::IsPixelShaderNeededWithRasterization(*pixel_shader, regs)) {' + NL,
+     '        NX_SUB(1, pipeline_cache_->AnalyzeShaderUcode(*pixel_shader));' + NL + '        if (!draw_util::IsPixelShaderNeededWithRasterization(*pixel_shader, regs)) {' + NL),
+    ('  for (uint32_t i = 0; i < 2; ++i) {' + NL + '    if (!BeginSubmission(true)) {' + NL + '      return draw_fail("begin_submission");' + NL + '    }' + NL,
+     '  for (uint32_t i = 0; i < 2; ++i) {' + NL + '    const uint64_t nx_bs0 = rex::chrono::Clock::QueryHostTickCount();' + NL +
+     '    const bool nx_bs_ok = BeginSubmission(true);' + NL +
+     '    nx_sub_ticks[2] += rex::chrono::Clock::QueryHostTickCount() - nx_bs0;' + NL +
+     '    if (!nx_bs_ok) {' + NL + '      return draw_fail("begin_submission");' + NL + '    }' + NL),
+    ('  bool is_opening_frame = is_guest_command && !frame_open_;' + NL + '  if (submission_open_ && !is_opening_frame) {' + NL + '    return true;' + NL + '  }' + NL,
+     '  bool is_opening_frame = is_guest_command && !frame_open_;' + NL + '  nx_sub_counts[0]++;' + NL +
+     '  if (submission_open_ && !is_opening_frame) {' + NL + '    return true;' + NL + '  }' + NL +
+     '  if (is_opening_frame) nx_sub_counts[1]++;' + NL + '  if (!submission_open_) nx_sub_counts[2]++;' + NL),
+    ('  CheckSubmissionFenceAndDeviceLoss(await_submission);' + NL + '  if (device_lost_ || submission_completed_ < await_submission) {' + NL,
+     '  NX_SUB(3, CheckSubmissionFenceAndDeviceLoss(await_submission));' + NL + '  if (device_lost_ || submission_completed_ < await_submission) {' + NL),
+    ('    primitive_processor_->BeginSubmission();' + NL + NL + '    texture_cache_->BeginSubmission(GetCurrentSubmission());' + NL,
+     '    NX_SUB(5, primitive_processor_->BeginSubmission());' + NL + NL + '    NX_SUB(4, texture_cache_->BeginSubmission(GetCurrentSubmission()));' + NL),
+    ('  if (await_submission > submission_completed_) {' + NL + '    VkResult wait_result =' + NL,
+     '  if (await_submission > submission_completed_) {' + NL + '    nx_sub_counts[3]++;' + NL + '    VkResult wait_result =' + NL),
+    ('      nx_phase_report_tick = now;' + NL,
+     '      REXGPU_INFO("pre sub ms: analyze vs {} ps {}, BeginSubmission {} (calls {}, opening frames {}, new submissions {}, fence waits {} in {} ms, texture begin {} ms, prim begin {} ms)",' + NL +
+     '                  nx_sub_ticks[0].exchange(0) * 1000 / freq, nx_sub_ticks[1].exchange(0) * 1000 / freq,' + NL +
+     '                  nx_sub_ticks[2].exchange(0) * 1000 / freq, nx_sub_counts[0].exchange(0), nx_sub_counts[1].exchange(0),' + NL +
+     '                  nx_sub_counts[2].exchange(0), nx_sub_counts[3].exchange(0), nx_sub_ticks[3].exchange(0) * 1000 / freq,' + NL +
+     '                  nx_sub_ticks[4].exchange(0) * 1000 / freq, nx_sub_ticks[5].exchange(0) * 1000 / freq);' + NL +
+     '      nx_phase_report_tick = now;' + NL),
+])
+print('changed (26):', *changed, sep=NL + '  ')
+
+# --- GPU work generators per second (every platform): render-target transfer passes, texture loads
+# (count and guest bytes), shared-memory upload bytes, resolves. Linux: the command processor waits
+# ~500 ms per frame for the previous frame's GPU work in BeginSubmission; the console shows 478 ms.
+edit('src/graphics/vulkan/command_processor.cpp', [
+    # (nx_gpu_work is defined by the phase-timer insert above)
+    ('bool VulkanCommandProcessor::IssueCopy() {' + NL,
+     'bool VulkanCommandProcessor::IssueCopy() {' + NL + '  nx_gpu_work[6]++;' + NL),
+    ('      REXGPU_INFO("pre sub ms: analyze vs {} ps {}, BeginSubmission {} (calls {}, opening frames {}, new submissions {}, fence waits {} in {} ms, texture begin {} ms, prim begin {} ms)",' + NL,
+     '      REXGPU_INFO("gpu work/s: rt transfer passes {} ({} transfers, {} resolve clears), texture loads {} ({} KB), shared memory uploads {} KB, resolves {}",' + NL +
+     '                  nx_gpu_work[0].exchange(0), nx_gpu_work[1].exchange(0), nx_gpu_work[2].exchange(0), nx_gpu_work[3].exchange(0),' + NL +
+     '                  nx_gpu_work[4].exchange(0) >> 10, nx_gpu_work[5].exchange(0) >> 10, nx_gpu_work[6].exchange(0));' + NL +
+     '      REXGPU_INFO("pre sub ms: analyze vs {} ps {}, BeginSubmission {} (calls {}, opening frames {}, new submissions {}, fence waits {} in {} ms, texture begin {} ms, prim begin {} ms)",' + NL),
+])
+edit('src/graphics/vulkan/render_target_cache.cpp', [
+    ('    const Transfer::Rectangle* resolve_clear_rectangle) {' + NL + '  assert_true(GetPath() == Path::kHostRenderTargets);' + NL,
+     '    const Transfer::Rectangle* resolve_clear_rectangle) {' + NL + '  assert_true(GetPath() == Path::kHostRenderTargets);' + NL +
+     '  {' + NL +
+     '    extern std::atomic<uint64_t> nx_gpu_work[8];' + NL +
+     '    nx_gpu_work[0]++;' + NL +
+     '    if (render_target_transfers) {' + NL +
+     '      for (uint32_t nx_i = 0; nx_i < render_target_count; ++nx_i) nx_gpu_work[1] += render_target_transfers[nx_i].size();' + NL +
+     '    }' + NL +
+     '    if (render_target_resolve_clear_values && resolve_clear_rectangle) nx_gpu_work[2]++;' + NL +
+     '  }' + NL),
+])
+edit('src/graphics/vulkan/texture_cache.cpp', [
+    ('  VulkanTexture& vulkan_texture = static_cast<VulkanTexture&>(texture);' + NL + '  TextureKey texture_key = vulkan_texture.key();' + NL + NL + '  // Get the pipeline.' + NL,
+     '  VulkanTexture& vulkan_texture = static_cast<VulkanTexture&>(texture);' + NL + '  TextureKey texture_key = vulkan_texture.key();' + NL +
+     '  {' + NL + '    extern std::atomic<uint64_t> nx_gpu_work[8];' + NL + '    nx_gpu_work[3]++;' + NL +
+     '    nx_gpu_work[4] += (load_base ? texture.GetGuestBaseSize() : 0) + (load_mips ? texture.GetGuestMipsSize() : 0);' + NL + '  }' + NL + NL +
+     '  // Get the pipeline.' + NL),
+])
+edit('src/graphics/vulkan/shared_memory.cpp', [
+    ('    const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) {' + NL + '  if (upload_page_ranges.empty()) {' + NL + '    return true;' + NL + '  }' + NL,
+     '    const std::vector<std::pair<uint32_t, uint32_t>>& upload_page_ranges) {' + NL + '  if (upload_page_ranges.empty()) {' + NL + '    return true;' + NL + '  }' + NL +
+     '  {' + NL + '    extern std::atomic<uint64_t> nx_gpu_work[8];' + NL +
+     '    for (const auto& nx_r : upload_page_ranges) nx_gpu_work[5] += uint64_t(nx_r.second) << page_size_log2();' + NL + '  }' + NL),
+])
+for f in ('src/graphics/vulkan/render_target_cache.cpp', 'src/graphics/vulkan/texture_cache.cpp', 'src/graphics/vulkan/shared_memory.cpp'):
+    edit(f, [('#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL,
+              '#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL + '#include <atomic>' + NL)], must=False)
+print('changed (27):', *changed, sep=NL + '  ')
