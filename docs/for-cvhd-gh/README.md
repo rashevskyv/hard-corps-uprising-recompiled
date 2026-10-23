@@ -22,3 +22,7 @@ Verified on the Linux test host with Hard Corps. The real deko3d driver is untes
 9. `tools/xenos2glsl.py`: `maxas` / `maxasf` and `c[N+a0]` (address register), in the patch.
 10. `tools/stfs_extract.py`: the volume descriptor offsets of the cvhd copy are off by one byte for this package
     (its loop never ended). The copy in this repo follows Free60: size, reserved, block separation, count (2), start (3).
+11. Cheaper draw path (CPU, matters on the Switch): integer keys for the first-time logs (no `snprintf` per draw),
+    one texture binding per fetch constant (a shader may read one constant nine times), only the float constants
+    a shader reads are copied to the write-combined buffer (`constant_register_map`), depth pieces merged once per
+    depth resolve.
