@@ -989,7 +989,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     DkImageView view;
     dkImageViewDefaults(&view, &img.image);
     DkImageRect rect{0, 0, 0, width, height, 1};
-    if (!tex_dump_dir_.empty() && info.format == xenos::TextureFormat::k_8 && tex_dumps_ < 24) {
+    if (!tex_dump_dir_.empty() && info.format == xenos::TextureFormat::k_8 && tex_dumps_ < 400) {
       // Debug (the file dk_texdump next to the shader dir): the decoded bytes, one per texel, as
       // texdump/<guest address>_<w>x<h>[_tiled].k8 (view them as an 8-bit grey image on the PC).
       tex_dumps_++;
