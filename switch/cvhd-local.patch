@@ -1,0 +1,85 @@
+diff --git b/switch/host/include/dlfcn.h a/switch/host/include/dlfcn.h
+index 8fed3c9..e6a3cab 100644
+--- b/switch/host/include/dlfcn.h
++++ a/switch/host/include/dlfcn.h
+@@ -9,6 +9,7 @@
+ #define RTLD_NOW 2
+ #define RTLD_LOCAL 0
+ #define RTLD_GLOBAL 4
++#define RTLD_NOLOAD 8  /* HCU patch 0010: DynamicLibrary::LoadExisting */
+ 
+ static inline void* dlopen(const char* filename, int flags) {
+     (void)filename;
+diff --git b/switch/host/switch_nx.cpp a/switch/host/switch_nx.cpp
+index eba1f4d..04ba86b 100644
+--- b/switch/host/switch_nx.cpp
++++ a/switch/host/switch_nx.cpp
+@@ -423,7 +423,7 @@ bool pinning = true;
+ extern "C" void userAppInit(void) {
+     open_log();
+     std::set_terminate(terminate_handler);
+-    std::printf("[nx] Castlevania: Harmony of Despair, version " HCU_VERSION ", built " HCU_BUILD_UTC "\n");
++    std::printf("[nx] Hard Corps: Uprising, version " HCU_VERSION ", built " HCU_BUILD_UTC "\n");
+     AppletType type = appletGetAppletType();
+     const bool application = type == AppletType_Application || type == AppletType_SystemApplication;
+     std::printf("[nx] launch: %s (applet type %d)\n",
+diff --git b/switch/host/ui/windowed_app_main_nx.cpp a/switch/host/ui/windowed_app_main_nx.cpp
+index 8417aa7..a18befe 100644
+--- b/switch/host/ui/windowed_app_main_nx.cpp
++++ a/switch/host/ui/windowed_app_main_nx.cpp
+@@ -56,6 +56,10 @@ int main(int argc, char* argv[]) {
+       "--fullscreen=true",
+       "--log_file=sdmc:/switch/hcu/hcu_rex_log.txt",
+       "--gpu_plugin=xenos",
++      // config/hard_corps_uprising.toml: the full (purchased) license, the 16:9 Original guest video mode.
++      "--license_mask=1",
++      "--video_mode_width=853",
++      "--video_mode_height=480",
+   };
+   if (deko3d) {
+     defaults.push_back("--gpu_backend=deko3d");
+diff --git b/switch/sdk-edits.py a/switch/sdk-edits.py
+index 40ecc95..6090385 100644
+--- b/switch/sdk-edits.py
++++ a/switch/sdk-edits.py
+@@ -376,8 +376,40 @@ reps = [
+      '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
+      '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
+      '      }' + NL),
++    # The same wait after HCU patch 0021 (patches/rexglue-sdk), which moved the timeout check.
++    ('      if (infinite_timeout) {' + NL +
++     '        std::this_thread::sleep_for(std::chrono::milliseconds(1));' + NL +
++     '      } else {' + NL +
++     '        auto now = std::chrono::steady_clock::now();' + NL +
++     '        if (now >= end_time) {' + NL +
++     '          return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
++     '        }' + NL +
++     '        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);' + NL +
++     '        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));' + NL +
++     '        std::this_thread::sleep_for(sleep_time);' + NL +
++     '      }' + NL,
++     '      {' + NL +
++     '        const auto cap = std::chrono::milliseconds(20);' + NL +
++     '        auto wait_time = cap;' + NL +
++     '        if (!infinite_timeout) {' + NL +
++     '          auto now = std::chrono::steady_clock::now();' + NL +
++     '          if (now >= end_time) {' + NL +
++     '            return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
++     '          }' + NL +
++     '          wait_time = std::min(std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now), cap);' + NL +
++     '        }' + NL +
++     '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
++     '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
++     '      }' + NL),
+ ]
++# Exactly one of the two WaitMultiple variants is present (stock or HCU 0021).
++optional = {reps[-2][0], reps[-1][0]}
++if not any(o in src for o in optional) and not any(n in src for _, n in reps[-2:]):
++    raise SystemExit('threading_posix.cpp: no WaitMultiple poll found')
+ for old, new in reps:
++    if old in optional:
++        src = src.replace(old, new)
++        continue
+     if old not in src and new not in src:
+         raise SystemExit('threading_posix.cpp: anchor not found: ' + old[:60])
+     src = src.replace(old, new)
