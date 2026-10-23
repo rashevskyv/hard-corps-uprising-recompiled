@@ -1,3 +1,25 @@
+diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
+index f2077a1..f7dbd2a 100644
+--- b/src/gpu/deko3d_backend.cpp
++++ a/src/gpu/deko3d_backend.cpp
+@@ -970,7 +970,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+       u.offset_y = 0;
+       u.width = bw;
+       u.height = bh;
+-      u.input_pitch = info.pitch;
++      u.input_pitch = info.pitch / fi->block_width;  // Untile wants blocks; the pitch is in texels (DXT: 4 per block)
+       u.output_pitch = bw;
+       u.input_format_info = fi;
+       u.output_format_info = fi;
+@@ -978,7 +978,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+       texture_conversion::Untile(dst, src, &u);
+     } else {
+       uint32_t row = bw * bpb;
+-      uint32_t src_row = info.pitch * bpb;
++      uint32_t src_row = (info.pitch / fi->block_width) * bpb;
+       for (uint32_t y = 0; y < bh; y++) texture_conversion::CopySwapBlock(endian, dst + y * row, src + y * src_row, row);
+     }
+     DkCopyBuf cb{f.staging.gpu + off, 0, 0};
 diff --git b/switch/eden-shot.ps1 a/switch/eden-shot.ps1
 index 1f4c830..ccc1fd9 100644
 --- b/switch/eden-shot.ps1
