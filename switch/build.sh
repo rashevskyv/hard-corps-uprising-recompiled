@@ -25,8 +25,22 @@ CLI=$SDK/out/linux-amd64/Release/rexglue
 
 mkdir -p "$SRC"
 rsync -rlc --delete --exclude /out --exclude /game --exclude /generated --exclude /.git "$GIT_DIR/" "$SRC/"
+# The edits are applied to a clean SDK whenever they changed: re-running a newer sdk-edits.py on an
+# SDK that holds an older one's inserts keeps stale code (0.106: the old "audio worker leaves" edit
+# next to the new audio driver, and the game hung after its intro movie). The SDK's HEAD is the
+# commit with patches/rexglue-sdk applied.
+EDITS_STAMP=$(cat "$SRC/switch/sdk-edits.py" "$SRC/switch/sdk-edits-hcu.py" | sha1sum | cut -c1-40)
+if [ "$(cat "$SDK/.hcu-edits-stamp" 2>/dev/null)" != "$EDITS_STAMP" ]; then
+    echo "sdk edits changed: resetting $SDK to $(git -C "$SDK" rev-parse --short HEAD)"
+    git -C "$SDK" checkout -q -- . && git -C "$SDK" clean -fdq
+    git -C "$SDK" submodule foreach -q 'git checkout -q -- . && git clean -fdq'
+    rm -f "$SDK/.hcu-edits-stamp"
+fi
 python3 "$SRC/switch/sdk-edits.py" "$SDK"
 python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
+# A second pass: some sdk-edits.py inserts anchor on text an earlier insert of the same run writes.
+python3 "$SRC/switch/sdk-edits.py" "$SDK" > /dev/null
+echo "$EDITS_STAMP" > "$SDK/.hcu-edits-stamp"
 # The CLI embeds the codegen templates: a template edit needs `cmake --build ... --target rexglue`.
 if [ ! -f "$SRC/generated/default/sources.cmake" ]; then
     (cd "$SRC" && "$CLI" codegen hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1)         || { tail -20 "$ROOT/codegen.log"; exit 1; }
