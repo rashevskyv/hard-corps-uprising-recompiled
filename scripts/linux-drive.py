@@ -52,6 +52,13 @@ def main():
     env.setdefault('HCU_DK_GL_DUMP', os.path.join(out, 'frames') + ':30')
     d = env['HCU_DK_GL_DUMP'].split(':')[0]
     os.makedirs(d, exist_ok=True)
+    # A killed game leaves its 4.8 GB guest arena in /dev/shm (tmpfs, 16 GB here): later runs die at start.
+    for f in os.listdir('/dev/shm'):
+        if f.startswith('xenia_memory_'):
+            try:
+                os.unlink('/dev/shm/' + f)
+            except OSError:
+                pass
     xvfb = subprocess.Popen(['Xvfb', a.display, '-screen', '0', '1280x720x24'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
     log = os.path.join(out, 'hcu.log')
@@ -145,6 +152,12 @@ def main():
         if game.poll() is None:
             game.kill()
         xvfb.terminate()
+        for f in os.listdir('/dev/shm'):
+            if f.startswith('xenia_memory_'):
+                try:
+                    os.unlink('/dev/shm/' + f)
+                except OSError:
+                    pass
         print('done after %.0fs (exit %s)' % (time.time() - t0, game.poll()), flush=True)
 
 

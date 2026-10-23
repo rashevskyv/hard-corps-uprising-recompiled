@@ -313,6 +313,10 @@ bool TextureFormatOf(xenos::TextureFormat f, DkImageFormat& out, bool& reversed)
     case TF::k_16_16_FLOAT: out = DkImageFormat_RG16_Float; return true;
     case TF::k_16: out = DkImageFormat_R16_Unorm; return true;
     case TF::k_16_16: out = DkImageFormat_RG16_Unorm; return true;
+    // Resolves of 2_10_10_10 and 8_8_8_8 targets (HCU's blur chain and post effects read them back as textures,
+    // fetch formats "AS_16_16_16_16" = the resolve expanded to 64 bits): the host image keeps the target's format.
+    case TF::k_2_10_10_10: case TF::k_2_10_10_10_AS_16_16_16_16: out = DkImageFormat_RGB10A2_Unorm; return true;
+    case TF::k_8_8_8_8_AS_16_16_16_16: out = DkImageFormat_RGBA8_Unorm; return true;
     // A depth resolve target (HCU's stage shadow map, 8-tap compare in the pixel shader): the host depth image, sampled as depth.
     case TF::k_24_8: case TF::k_24_8_FLOAT: out = DkImageFormat_Z24S8; return true;
     default: return false;
@@ -439,6 +443,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
+    no_depth_copy_ = access((debug_dir + "dk_nodepthcopy").c_str(), F_OK) == 0;  // debug A/B: depth resolves are ignored (shadow maps stay empty)
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
     Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
@@ -857,7 +862,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     HostImage* front = nullptr;
     if (guest_images_.count(frontbuffer_ptr) && frontbuffer_width && frontbuffer_height) {
       // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
-      front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, DkImageFormat_RGBA8_Unorm, false);
+      front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, guest_images_[frontbuffer_ptr]->format, false);
     }
     if (present_target_) {
       // Debug (the file sdmc:/switch/hcu/dk_present_rt): show the widest colour render target itself,
@@ -1648,6 +1653,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
                 cy, cw, ch, z, info.rb_depth_clear & 0xFF);
       }
     }
+    if (info.IsCopyingDepth() && no_depth_copy_) return true;
     if (info.IsCopyingDepth()) {
       // A depth resolve into a texture (the stage's shadow map): the depth image is copied into a depth
       // image aliased at the destination address, which the pixel shaders then sample as a k_24_8 texture.
@@ -1689,7 +1695,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
     (void)dest_pitch; (void)dest_height;
     uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
-    HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, DkImageFormat_RGBA8_Unorm, true);  // gh: exact size (the aligned one made it ping-pong with the texture bind)
+    // The destination keeps the target's host format (RGB10A2, RGBA16F), so the raw image copy is exact and the
+    // texture fetch of the resolve finds an image of its own format. sRGB targets resolve to plain RGBA8: the
+    // guest reads the stored (gamma-encoded) bytes as a normal texture.
+    DkImageFormat dst_format = src->format == DkImageFormat_RGBA8_Unorm_sRGB ? DkImageFormat_RGBA8_Unorm : src->format;
+    HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, dst_format, true);  // gh: exact size (the aligned one made it ping-pong with the texture bind)
     if (!dst) return true;
     dst->from_resolve = true;
     dst->content_serial = serial_;
@@ -1818,6 +1828,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_vs_ = false, present_fs_ = false;
   bool present_target_ = false;
   bool dump_images_ = false;
+  bool no_depth_copy_ = false;
   std::string shader_dir_;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
