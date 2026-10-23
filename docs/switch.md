@@ -61,6 +61,11 @@ backend, `nopin` turns thread placement off.
 | 0.113.d9cc178 | Eden, deko3d, 300 s | START/A to the first stage: the HUD draws, the scene is grey; 32 stage shaders dumped |
 | 0.116.bc9e4d8 | Eden, deko3d, 320 s | 45 of 45 shaders (xenos2glsl: `maxas` and `c[N+a0]` added); stage: HUD, 1P marker and a light-column effect draw, the level and the player do not. 235 draws, 31 resolves, 10 clears per frame, 0 skipped, 0 without shader; `unsupported texture format k_24_8` (a depth texture sampled) |
 
+| 0.116.bc9e4d8 | console | pushed (NRO SHA-1 899d5ebd, 73 DKSH, `deko3d` marker); replaces the NVK 0.89, which died with `out of host memory` in NVK and `std::bad_alloc` |
+| 0.119.223193d | Eden, deko3d | resolves clear depth now (`resolve clears depth at EDRAM 720 pitch 1280 ... to 1`); the stage still grey |
+| 0.120.793fc06 | Eden, deko3d, `dk_nodepth` | with the depth test off the level appears: depth is the cause |
+| 0.122.458c237 | Eden, deko3d, 280 s | **first stage renders** (rocks, wreck, airships, depth order right), 30 fps in Eden. Cause: `CompareOp` passed the Xenos compare function through, but Xenos counts from kNever = 0 and deko3d from Never = 1 (LEQUAL was EQUAL). The player sprite looks missing (only a red shape) |
+
 NVK builds are not run on the console (user decision, 2026-10-23): the renderer is deko3d, Eden is the gate.
 
 ## deko3d renderer
