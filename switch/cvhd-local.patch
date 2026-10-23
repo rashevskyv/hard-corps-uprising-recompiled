@@ -1,8 +1,16 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index f2077a1..cf32207 100644
+index f2077a1..2dc9f8f 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
-@@ -168,7 +168,9 @@ struct SysConstants {
+@@ -135,6 +135,7 @@ struct HostImage {
+   bool from_resolve = false;  // host-native channels: the fetch swizzle is not applied
+   uint32_t content_serial = 0;  // the draw serial when the contents were set (upload or resolve); 0 = never
+   uint32_t checked_serial = 0;  // the draw serial of the last dirty-page check
++  bool first_bind_logged = false;  // the "bound without an upload" line, once per image
+   uint32_t guest_base = 0;    // textures and resolve destinations
+   uint32_t edram_base = 0, edram_pitch = 0;  // render targets
+ };
+@@ -168,7 +169,9 @@ struct SysConstants {
    uint32_t bools[8];
  };
  
@@ -13,15 +21,17 @@ index f2077a1..cf32207 100644
  
  DkBlendFactor BlendFactor(xenos::BlendFactor f) {
    switch (f) {
-@@ -355,6 +357,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -355,6 +358,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
      present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
      dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
 +    no_depth_ = access((debug_dir + "dk_nodepth").c_str(), F_OK) == 0;  // debug A/B: every draw without the depth test
++    if (access((debug_dir + "dk_texdump").c_str(), F_OK) == 0) tex_dump_dir_ = debug_dir + "texdump/";  // debug: decoded k_8 textures
++    always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: upload at every bind
      present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
      present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
      Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
-@@ -517,7 +520,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -517,7 +523,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
      dkCmdBufBindBlendStates(cmd, 0, &bs, 1);
      DkDepthStencilState ds;
      dkDepthStencilStateDefaults(&ds);
@@ -30,7 +40,25 @@ index f2077a1..cf32207 100644
      ds.depthWriteEnable = depth && dc.z_write_enable;
      ds.depthCompareOp = CompareOp(dc.zfunc);
      ds.stencilTestEnable = 0;
-@@ -970,7 +973,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -939,7 +945,16 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     if (img->checked_serial == serial_) return img;  // already checked for this draw
+     img->checked_serial = serial_;
+     // Never filled, or written by the guest (or a file read) after the upload / resolve that filled it.
+-    if (img->content_serial && !WrittenSince(base, info.memory.base_size, img->content_serial)) return img;
++    if (img->content_serial && !WrittenSince(base, info.memory.base_size, img->content_serial)) {
++      if (!img->first_bind_logged) {
++        img->first_bind_logged = true;
++        char key[32];
++        std::snprintf(key, sizeof(key), "kept %08X", base);
++        LogOnce(key, "texture at %08X (%s %ux%u) bound without an upload: its image already held %s and no page was written since",
++                base, info.format_info()->name, info.width + 1, info.height + 1, img->from_resolve ? "a resolve" : "an upload");
++      }
++      if (!always_upload_ || img->from_resolve) return img;  // a resolve image has no guest copy to upload
++    }
+     // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
+     if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
+     if (img->content_serial) {
+@@ -970,7 +985,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
        u.offset_y = 0;
        u.width = bw;
        u.height = bh;
@@ -39,7 +67,7 @@ index f2077a1..cf32207 100644
        u.output_pitch = bw;
        u.input_format_info = fi;
        u.output_format_info = fi;
-@@ -978,7 +981,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -978,13 +993,23 @@ class Deko3dCommandProcessor : public CommandProcessor {
        texture_conversion::Untile(dst, src, &u);
      } else {
        uint32_t row = bw * bpb;
@@ -48,7 +76,23 @@ index f2077a1..cf32207 100644
        for (uint32_t y = 0; y < bh; y++) texture_conversion::CopySwapBlock(endian, dst + y * row, src + y * src_row, row);
      }
      DkCopyBuf cb{f.staging.gpu + off, 0, 0};
-@@ -1157,6 +1160,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     DkImageView view;
+     dkImageViewDefaults(&view, &img.image);
+     DkImageRect rect{0, 0, 0, width, height, 1};
++    if (!tex_dump_dir_.empty() && info.format == xenos::TextureFormat::k_8 && tex_dumps_ < 400) {
++      // Debug (the file dk_texdump next to the shader dir): the decoded bytes, one per texel, as
++      // texdump/<guest address>_<w>x<h>[_tiled].k8 (view them as an 8-bit grey image on the PC).
++      tex_dumps_++;
++      mkdir(tex_dump_dir_.c_str(), 0777);
++      char name[256];
++      std::snprintf(name, sizeof(name), "%s%08X_%ux%u%s.k8", tex_dump_dir_.c_str(), info.memory.base_address, bw, bh,
++                    info.is_tiled ? "_tiled" : "");
++      if (FILE* fp = std::fopen(name, "wb")) { std::fwrite(dst, 1, bytes, fp); std::fclose(fp); }
++    }
+     dkCmdBufCopyBufferToImage(f.cmdbuf, &cb, &view, &rect, 0);
+     dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
+     uploads_++;
+@@ -1157,6 +1182,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -77,18 +121,61 @@ index f2077a1..cf32207 100644
      if (info.IsCopyingDepth()) {
        LogOnce("depthresolve", "depth resolve to %08X ignored", info.copy_dest_base);
        return true;
-@@ -1277,6 +1302,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1277,6 +1324,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
    bool dump_images_ = false;
 +  bool no_depth_ = false;
++  bool always_upload_ = false;
++  std::string tex_dump_dir_;
++  uint32_t tex_dumps_ = 0;
    std::string shader_dir_;
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
+diff --git b/switch/eden-deko3d.ps1 a/switch/eden-deko3d.ps1
+index c6fe56a..239fc18 100644
+--- b/switch/eden-deko3d.ps1
++++ a/switch/eden-deko3d.ps1
+@@ -9,14 +9,14 @@
+ # the Switch pad driver itself (switch/host/input/nx_input_driver.cpp): no keyboard focus needed.
+ param([int]$Seconds = 90, [int]$Every = 10, [string]$Keys = '', [string]$Tag = '')
+ $ErrorActionPreference = 'Stop'
+-$dir = 'E:\Switch\Eden\user\sdmc\switch\hcu'
++$dir = 'E:\Switch\Eden-hcu\user\sdmc\switch\hcu'
+ $stage = '/root/hcu/src/out/build/switch/stage'
+-$sd = '/mnt/e/Switch/Eden/user/sdmc/switch/hcu'
++$sd = '/mnt/e/Switch/Eden-hcu/user/sdmc/switch/hcu'
+ $dumps = '/root/hcu/shaders_trace'
+ $version = wsl -u root -e bash -lc "set -e; rm -rf $sd/shaders; cp -r $stage/shaders $sd/shaders; cp $stage/hcu.nro $sd/hcu.nro; touch $sd/deko3d; mkdir -p $sd/shaders/missing; grep -o '0[.][0-9]*[.][0-9a-f+]*' /root/hcu/src/out/build/switch/hcu_version.h | head -1"
+ $version = ($version | Select-Object -Last 1).Trim()
+ if (-not $version) { throw 'staging failed (no version)' }
+-Remove-Item "$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log\eden_log.txt' -ErrorAction SilentlyContinue
++Remove-Item "$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden-hcu\user\log\eden_log.txt' -ErrorAction SilentlyContinue
+ $out = "E:\conker-data\eden-runs\hcu-$version-deko3d"
+ if ($Tag) { $out += "-$Tag" }
+ Write-Output "Eden deko3d: hcu $version for $Seconds s, screenshots every $Every s, keys '$Keys' -> $out"
+@@ -24,7 +24,7 @@ Remove-Item "$dir\pad.txt" -ErrorAction SilentlyContinue
+ if ($Keys) { ($Keys -split ',' | ForEach-Object { $_.Trim() }) -join "`n" | Set-Content -Path "$dir\pad.txt" -Encoding ascii }
+ & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\eden-shot.ps1" -Nro "$dir\hcu.nro" -Out $out -Seconds $Seconds -Every $Every
+ New-Item -ItemType Directory -Force $out | Out-Null
+-foreach ($f in @("$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log\eden_log.txt')) {
++foreach ($f in @("$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden-hcu\user\log\eden_log.txt')) {
+     if (Test-Path $f) { Copy-Item $f $out -Force }
+ }
+ if (Test-Path "$dir\hcu_log.txt") {
 diff --git b/switch/eden-shot.ps1 a/switch/eden-shot.ps1
-index 1f4c830..ccc1fd9 100644
+index 1f4c830..8f9d552 100644
 --- b/switch/eden-shot.ps1
 +++ a/switch/eden-shot.ps1
+@@ -47,7 +47,7 @@ public static class Win32 {
+   }
+ }
+ '@
+-$eden = 'E:\Switch\Eden\eden.exe'
++$eden = 'E:\Switch\Eden-hcu\eden.exe'
+ if (Get-Process eden -ErrorAction SilentlyContinue | Where-Object Path -eq $eden) { throw "Eden ($eden) is already running: not starting a second one" }
+ New-Item -ItemType Directory -Force $Out | Out-Null
+ # The key schedule: second -> key name.
 @@ -77,7 +77,7 @@ for ($t = 1; $t -le $Seconds; $t++) {
      if ($p.HasExited) { Write-Output "Eden exited at ${t}s"; break }
      if ($schedule.ContainsKey($t)) {
