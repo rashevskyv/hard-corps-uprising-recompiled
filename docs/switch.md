@@ -51,3 +51,20 @@ backend, `nopin` turns thread placement off.
 | Build | Where | Result |
 | --- | --- | --- |
 | 0.89.e9aca07 | Eden, null GPU, 3 min | PASS: 3300 swaps; 60 fps at first, 14-20 fps later (Eden's JIT speed). 4 missing xam ordinals (2815, 2816, 2827, 2832), as in Castlevania |
+| 0.92-0.95 | Eden, deko3d | `std::terminate` at the first missing shader (`Shader::DumpUcode`: `absolute()` of `sdmc:/`). cvhd-recomp 383b501 writes the dumps with stdio |
+| 0.100.4a42f50 | Eden, deko3d, 120 s | runs, 12-23 fps; 11 missing shaders dumped (all 11 translate with xenos2glsl + uam) |
+| 0.102.a1ec3d6 | Eden, deko3d, 150 s | **first picture**: the intro movie (police car scene) at 12-15 fps in Eden; 0 missing shaders, 2 draws per frame |
+
+NVK builds are not run on the console (user decision, 2026-10-23): the renderer is deko3d, Eden is the gate.
+
+## deko3d renderer
+
+The backend is cvhd-recomp's (`src/gpu/deko3d_backend.cpp`, docs/native-renderer-plan.md section 8 there),
+shared through `switch/sync-cvhd.sh`. The file `sdmc:/switch/hcu/deko3d` selects it. Shaders: the backend
+dumps the ucode of each shader without a DKSH into `sdmc:/switch/hcu/shaders/missing/`;
+`switch/eden-deko3d.ps1` copies them to `/root/hcu/shaders_trace/`, and the next `switch/build.sh`
+translates them (`tools/xenos2glsl.py`, uam) into `out/build/switch/stage/shaders/`.
+
+Eden: `powershell -File switch/eden-deko3d.ps1 -Seconds 150 -Every 25 [-Keys "160:M"]` (Eden keys: C = A,
+X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screenshots and logs in
+`E:\conker-data\eden-runs\hcu-<version>-deko3d[-tag]\`.

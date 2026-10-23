@@ -77,7 +77,7 @@ for ($t = 1; $t -le $Seconds; $t++) {
     if ($p.HasExited) { Write-Output "Eden exited at ${t}s"; break }
     if ($schedule.ContainsKey($t)) {
         # The game's render window: by title when it names the game, else the largest window.
-        $wins = Get-GameWindows $p
+        $wins = @(Get-GameWindows $p)  # @(): one window has no .Count in Windows PowerShell 5.1
         $target = $wins | Where-Object { $_.title -match 'Castlevania|hcu|FPS' } | Select-Object -First 1
         if (-not $target -and $wins.Count -gt 0) { $target = $wins[0] }
         foreach ($key in $schedule[$t]) {
@@ -90,7 +90,7 @@ for ($t = 1; $t -le $Seconds; $t++) {
         }
     }
     if ($t % $Every -ne 0) { continue }
-    $wins = Get-GameWindows $p
+    $wins = @(Get-GameWindows $p)  # @(): one window has no .Count in Windows PowerShell 5.1
     if ($wins.Count -eq 0) { Write-Output "${t}s: no window yet"; continue }
     $k = 0
     foreach ($win in $wins) {
