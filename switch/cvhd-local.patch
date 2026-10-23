@@ -39,7 +39,7 @@ index 497c4f7..ed9e366 100644
    if (deko3d) {
      defaults.push_back("--gpu_backend=deko3d");
 diff --git b/switch/sdk-edits.py a/switch/sdk-edits.py
-index 6fd64fe..2185c5a 100644
+index 6fd64fe..dab2425 100644
 --- b/switch/sdk-edits.py
 +++ a/switch/sdk-edits.py
 @@ -376,8 +376,40 @@ reps = [
@@ -83,7 +83,7 @@ index 6fd64fe..2185c5a 100644
      if old not in src and new not in src:
          raise SystemExit('threading_posix.cpp: anchor not found: ' + old[:60])
      src = src.replace(old, new)
-@@ -1233,3 +1265,19 @@ for f in ('src/graphics/vulkan/render_target_cache.cpp', 'src/graphics/vulkan/te
+@@ -1233,3 +1265,31 @@ for f in ('src/graphics/vulkan/render_target_cache.cpp', 'src/graphics/vulkan/te
      edit(f, [('#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL,
                '#include <rex/graphics/vulkan/' + f.split('/')[-1].replace('.cpp', '.h') + '>' + NL + '#include <atomic>' + NL)], must=False)
  print('changed (27):', *changed, sep=NL + '  ')
@@ -101,5 +101,17 @@ index 6fd64fe..2185c5a 100644
 +     '    target_path = std::filesystem::absolute(target_path);' + NL +
 +     '    std::filesystem::create_directories(target_path);' + NL +
 +     '#endif' + NL),
++    # The same code in Shader::DumpUcode itself (the pair above takes the first copy, the translation dump).
++    ('    target_path = std::filesystem::absolute(target_path);' + NL +
++     '    std::filesystem::create_directories(target_path);' + NL + '  }' + NL + NL +
++     '  const char* type_extension',
++     '#if REX_PLATFORM_SWITCH' + NL +
++     '    std::error_code nx_ec;' + NL +
++     '    std::filesystem::create_directories(target_path, nx_ec);  // sdmc:/... is absolute already' + NL +
++     '#else' + NL +
++     '    target_path = std::filesystem::absolute(target_path);' + NL +
++     '    std::filesystem::create_directories(target_path);' + NL +
++     '#endif' + NL + '  }' + NL + NL +
++     '  const char* type_extension'),
 +])
 +print('changed (DumpUcode):', *changed, sep=NL + '  ')
