@@ -1279,5 +1279,17 @@ edit('src/graphics/pipeline/shader/shader.cpp', [
      '    target_path = std::filesystem::absolute(target_path);' + NL +
      '    std::filesystem::create_directories(target_path);' + NL +
      '#endif' + NL),
+    # The same code in Shader::DumpUcode itself (the pair above takes the first copy, the translation dump).
+    ('    target_path = std::filesystem::absolute(target_path);' + NL +
+     '    std::filesystem::create_directories(target_path);' + NL + '  }' + NL + NL +
+     '  const char* type_extension',
+     '#if REX_PLATFORM_SWITCH' + NL +
+     '    std::error_code nx_ec;' + NL +
+     '    std::filesystem::create_directories(target_path, nx_ec);  // sdmc:/... is absolute already' + NL +
+     '#else' + NL +
+     '    target_path = std::filesystem::absolute(target_path);' + NL +
+     '    std::filesystem::create_directories(target_path);' + NL +
+     '#endif' + NL + '  }' + NL + NL +
+     '  const char* type_extension'),
 ])
 print('changed (DumpUcode):', *changed, sep=NL + '  ')
