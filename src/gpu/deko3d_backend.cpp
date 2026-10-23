@@ -358,6 +358,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
     no_depth_ = access((debug_dir + "dk_nodepth").c_str(), F_OK) == 0;  // debug A/B: every draw without the depth test
+    if (access((debug_dir + "dk_texdump").c_str(), F_OK) == 0) tex_dump_dir_ = debug_dir + "texdump/";  // debug: decoded k_8 textures
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
     Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
@@ -988,6 +989,16 @@ class Deko3dCommandProcessor : public CommandProcessor {
     DkImageView view;
     dkImageViewDefaults(&view, &img.image);
     DkImageRect rect{0, 0, 0, width, height, 1};
+    if (!tex_dump_dir_.empty() && info.format == xenos::TextureFormat::k_8 && tex_dumps_ < 24) {
+      // Debug (the file dk_texdump next to the shader dir): the decoded bytes, one per texel, as
+      // texdump/<guest address>_<w>x<h>[_tiled].k8 (view them as an 8-bit grey image on the PC).
+      tex_dumps_++;
+      mkdir(tex_dump_dir_.c_str(), 0777);
+      char name[256];
+      std::snprintf(name, sizeof(name), "%s%08X_%ux%u%s.k8", tex_dump_dir_.c_str(), info.memory.base_address, bw, bh,
+                    info.is_tiled ? "_tiled" : "");
+      if (FILE* fp = std::fopen(name, "wb")) { std::fwrite(dst, 1, bytes, fp); std::fclose(fp); }
+    }
     dkCmdBufCopyBufferToImage(f.cmdbuf, &cb, &view, &rect, 0);
     dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
     uploads_++;
@@ -1303,6 +1314,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_target_ = false;
   bool dump_images_ = false;
   bool no_depth_ = false;
+  std::string tex_dump_dir_;
+  uint32_t tex_dumps_ = 0;
   std::string shader_dir_;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
