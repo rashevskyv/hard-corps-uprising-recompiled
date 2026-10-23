@@ -168,7 +168,9 @@ struct SysConstants {
   uint32_t bools[8];
 };
 
-DkCompareOp CompareOp(xenos::CompareFunction f) { return DkCompareOp(uint32_t(f)); }
+// Xenos counts from kNever = 0, deko3d from DkCompareOp_Never = 1 (HCU 0.120: LEQUAL became EQUAL, the
+// depth-tested 3D level never showed).
+DkCompareOp CompareOp(xenos::CompareFunction f) { return DkCompareOp(uint32_t(f) + 1); }
 
 DkBlendFactor BlendFactor(xenos::BlendFactor f) {
   switch (f) {
