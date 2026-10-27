@@ -107,7 +107,12 @@ void Log(const char* fmt, ...) {
   std::vprintf(fmt, ap);
   std::printf("\n");
   va_end(ap);
+#ifndef __SWITCH__
   std::fflush(stdout);
+#endif
+  // On the Switch stdout is the SD log, buffered by the host layer and flushed twice a second: a flush
+  // per line is a filesystem call (a kernel wait of a millisecond or more on FAT) in the command
+  // thread. HCU console 0.160: tens of image lines per stage frame made 63-66 ms of "draws" per frame.
 }
 
 void DebugCallback(void*, const char* context, DkResult result, const char* message) {
@@ -1161,10 +1166,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     swaps_++;
     if (swaps_ <= 3 || swaps_ % 60 == 0) {
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
-      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB staging %u KB; images %u (%u MB)",
+      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB staging %u KB; images %u (%u MB), %u image flips so far",
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
           frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
-          f.data.used >> 10, f.staging.used >> 10, image_count_, images_.used >> 20);
+          f.data.used >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
       // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
       // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
       uint32_t n = swaps_ <= 3 ? 1 : 60;
@@ -1443,7 +1448,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (!fresh) return nullptr;
         fresh->guest_base = base;
         if (create_w || create_h) ClearNewImage(fresh);
-        Log("image at %08X recreated: format %u -> %u, %ux%u -> %ux%u", base, uint32_t(img->format), uint32_t(format), img->width,
+        if (image_flips_++ < 40) Log("image at %08X recreated: format %u -> %u, %ux%u -> %ux%u", base, uint32_t(img->format), uint32_t(format), img->width,
             img->height, fresh->width, fresh->height);
         it->second = fresh;
         RecycleImage(img);
@@ -1471,7 +1476,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       resized->content_serial = img->content_serial;
       resized->checked_serial = img->checked_serial;
       resized->guest_base = base;
-      Log("image at %08X resized %ux%u -> %ux%u", base, img->width, img->height, width, height);
+      if (image_flips_++ < 40) Log("image at %08X resized %ux%u -> %ux%u", base, img->width, img->height, width, height);
       it->second = resized;
       RecycleImage(img);  // gh: its pool memory is reused by the next request of its size
       return resized;
@@ -2047,7 +2052,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     std::vprintf(fmt, ap);
     std::printf("\n");
     va_end(ap);
+#ifndef __SWITCH__
     std::fflush(stdout);
+#endif
   }
 
   DkDevice device_ = nullptr;
@@ -2087,6 +2094,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool First(uint64_t key) { return seen_.insert(key).second; }
   uint32_t swaps_ = 0, draws_ = 0, skipped_ = 0, missing_draws_ = 0, missing_shaders_ = 0, clears_ = 0, resolves_ = 0;
   uint32_t image_count_ = 0, uploads_ = 0, reuploads_ = 0;
+  uint32_t image_flips_ = 0;  // recreated + resized images, all frames (the first 40 are logged)
   uint64_t upload_bytes_ = 0;
   uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0;
 };
