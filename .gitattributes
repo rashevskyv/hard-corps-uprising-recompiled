@@ -15,3 +15,4 @@ switch/** text eol=lf
 tools/nro_nacp.py text eol=lf
 src/gpu/** text eol=lf
 tools/xenos2glsl.py text eol=lf
+src/nx_audout_driver.h text eol=lf
