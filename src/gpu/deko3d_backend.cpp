@@ -1435,12 +1435,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // The image at a guest address (resolve destinations, textures). A fetch or a swap asks for the
   // exact size (a resolve created it with the aligned height: resized once, contents copied); a
   // resolve asks for a minimum size (`at_least`) and creates with the aligned size (`create_w/h`).
+  // 32-bit colour formats that read the same through a sampler (an 8-bit and a 10-bit colour image).
+  static bool IsColor32(DkImageFormat f) { return f == DkImageFormat_RGBA8_Unorm || f == DkImageFormat_RGB10A2_Unorm; }
+
+  // `texture`: a texture fetch asking for the image. The image of a resolve is then used as it is when its colour
+  // format reads the same (HCU's blur chain: a 2_10_10_10 target resolved, then fetched as 8_8_8_8) and when it is at
+  // least as large (the resolve's aligned size, the fetch's exact one). Console 0.160 recreated or resized about
+  // thirty such images every frame.
   HostImage* GuestImage(Frame& f, uint32_t base, uint32_t width, uint32_t height, DkImageFormat format, bool at_least,
-                        uint32_t create_w = 0, uint32_t create_h = 0) {
+                        uint32_t create_w = 0, uint32_t create_h = 0, bool texture = false) {
     auto it = guest_images_.find(base);
     if (it != guest_images_.end()) {
       HostImage* img = it->second;
-      if (img->format != format) {
+      const bool compat = texture && img->from_resolve && IsColor32(img->format) && IsColor32(format);
+      if (img->format != format && !compat) {
         // The memory was reused with another format (a texture over an old resolve destination or the
         // reverse): a new image. ponytail: the old image's pool memory is not reclaimed (bump pool);
         // a free list when the pool fills in a stage.
@@ -1456,6 +1464,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       }
       if (img->width == width && img->height == height) return img;
       if (at_least && width <= img->width && height <= img->height) return img;
+      if (texture && img->from_resolve && width <= img->width && height <= img->height) return img;
       if (at_least) {
         width = std::max(width, img->width);
         height = std::max(height, img->height);
@@ -1531,7 +1540,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     uint32_t base = info.memory.base_address;
     // TextureInfo keeps the fetch constant's fields: the size minus one.
-    HostImage* img = GuestImage(f, base, info.width + 1, info.height + 1, format, format == DkImageFormat_Z24S8);
+    HostImage* img = GuestImage(f, base, info.width + 1, info.height + 1, format, format == DkImageFormat_Z24S8, 0, 0, true);
     if (!img) return nullptr;
     if (format == DkImageFormat_Z24S8) {
       // Only a depth resolve fills a depth image. One never resolved here (a sample before the first
@@ -1559,6 +1568,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (img->from_resolve && img->resolve_swap == swaps_ + 1) return img;
     // Never filled, or written by the guest (or a file read) after the upload / resolve that filled it.
     if (img->content_serial && !MemoryChanged(*img, base, info.memory.base_size) && (!always_upload_ || img->from_resolve)) return img;
+    if (img->format != format) {
+      // An upload needs an image of the texture's own format: the resolve's (a compatible colour format, taken
+      // as it was above) was only a stand-in for a fetch of its contents.
+      img = GuestImage(f, base, info.width + 1, info.height + 1, format, false);
+      if (!img) return nullptr;
+      img->checked_serial = serial_;
+    }
     // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
     if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
     if (img->content_serial) {
