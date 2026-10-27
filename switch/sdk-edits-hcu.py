@@ -80,3 +80,32 @@ edit('src/kernel/xboxkrnl/xboxkrnl_rtl.cpp', [
      '#elif defined(__aarch64__)' + NL + '  __asm__ volatile("yield");' + NL),
 ])
 print('changed (hcu 0006):', *changed, sep=NL + '  ')
+
+# Switch audio (from gh-recomp): the guest frames go to libnx audout (src/nx_audout_driver.h) instead of the
+# silent nop driver. The header is copied next to nop_audio_system.cpp, which creates it on __SWITCH__.
+def nx_audio(s):
+    if 'hcu-edits: audout' in s:
+        return s
+    anchor = '#include <rex/thread.h>' + NL
+    assert anchor in s, 'nop_audio_system.cpp include anchor'
+    s = s.replace(anchor, anchor + '#ifdef __SWITCH__  // hcu-edits: audout' + NL +
+                  '#include "nx_audout_driver.h"' + NL + '#endif' + NL, 1)
+    old = '  *out_driver = new NopAudioDriver(memory(), semaphore);' + NL
+    assert old in s, 'nop CreateDriver'
+    return s.replace(old, '#ifdef __SWITCH__' + NL + '  *out_driver = new NxAudoutDriver(memory(), semaphore);' + NL +
+                     '#else' + NL + old + '#endif' + NL, 1)
+
+
+import shutil
+_nop = os.path.join(SDK, 'src/audio/nop/nop_audio_system.cpp')
+_hdr_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'nx_audout_driver.h')
+_hdr_dst = os.path.join(SDK, 'src/audio/nop/nx_audout_driver.h')
+if not os.path.exists(_hdr_dst) or open(_hdr_src, 'rb').read() != open(_hdr_dst, 'rb').read():
+    shutil.copyfile(_hdr_src, _hdr_dst)
+    changed.append('src/audio/nop/nx_audout_driver.h')
+_s = open(_nop, encoding='utf-8').read()
+_t = nx_audio(_s)
+if _t != _s:
+    open(_nop, 'w', encoding='utf-8', newline=NL).write(_t)
+    changed.append('src/audio/nop/nop_audio_system.cpp')
+print('changed (hcu audio):', *changed, sep=NL + '  ')

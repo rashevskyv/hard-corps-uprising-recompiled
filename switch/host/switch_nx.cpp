@@ -13,6 +13,12 @@
 
 #include "hcu_version.h"  // written by switch/build.sh: HCU_VERSION, HCU_BUILD_UTC
 
+// The version for the on-screen strip of the deko3d backend.
+extern "C" const char* rex_nx_version(void) { return HCU_VERSION; }
+// The audout driver (src/nx_audout_driver.h) plays while this is 1. No in-game toggle yet; the file
+// sdmc:/switch/hcu/mute silences it.
+extern "C" volatile int rex_nx_sound = 1;
+
 extern "C" {
 // libnx's own exit (init.c): __appExit (userAppExit, then the services), then the function from
 // envGetExitFuncPtr. No static destructors.

@@ -383,6 +383,78 @@ DkImageSwizzle SwizzleOf(uint32_t s) {
   }
 }
 
+// ----- on-screen version / fps strip (from gh-recomp) ---------------------------------------------
+// Every build shows its version on screen (and the fps). There is no ImGui under deko3d: a 5x7 bitmap font
+// rendered on the CPU into a small RGBA image per frame in flight, drawn with the present shaders into a
+// viewport at the bottom-left corner. The file overlay_off next to the shader dir hides it.
+extern "C" const char* rex_nx_version(void);
+
+constexpr uint32_t kOverlayW = 512, kOverlayH = 20, kOverlayScale = 2;
+
+struct Glyph {
+  char ch;
+  uint8_t rows[7];  // 5 bits per row, bit 4 = leftmost pixel
+};
+constexpr Glyph kGlyphs[] = {
+    {' ', {0, 0, 0, 0, 0, 0, 0}},
+    {'.', {0, 0, 0, 0, 0, 12, 12}},
+    {'+', {0, 4, 4, 31, 4, 4, 0}},
+    {'0', {14, 17, 19, 21, 25, 17, 14}},
+    {'1', {4, 12, 4, 4, 4, 4, 14}},
+    {'2', {14, 17, 1, 2, 4, 8, 31}},
+    {'3', {30, 1, 1, 14, 1, 1, 30}},
+    {'4', {2, 6, 10, 18, 31, 2, 2}},
+    {'5', {31, 16, 30, 1, 1, 17, 14}},
+    {'6', {6, 8, 16, 30, 17, 17, 14}},
+    {'7', {31, 1, 2, 4, 8, 8, 8}},
+    {'8', {14, 17, 17, 14, 17, 17, 14}},
+    {'9', {14, 17, 17, 15, 1, 2, 12}},
+    {'a', {0, 0, 14, 1, 15, 17, 15}},
+    {'b', {16, 16, 22, 25, 17, 17, 30}},
+    {'c', {0, 0, 14, 16, 16, 17, 14}},
+    {'d', {1, 1, 13, 19, 17, 17, 15}},
+    {'e', {0, 0, 14, 17, 31, 16, 14}},
+    {'f', {6, 9, 8, 28, 8, 8, 8}},
+    {'G', {14, 17, 16, 23, 17, 17, 15}},
+    {'H', {17, 17, 17, 31, 17, 17, 17}},
+    {'v', {0, 0, 17, 17, 17, 10, 4}},
+    {'p', {0, 0, 30, 17, 30, 16, 16}},
+    {'s', {0, 0, 15, 16, 14, 1, 30}},
+    {'g', {0, 15, 17, 17, 15, 1, 14}},
+    {'i', {4, 0, 12, 4, 4, 4, 14}},
+    {'k', {16, 16, 18, 20, 24, 20, 18}},
+    {'l', {12, 4, 4, 4, 4, 4, 14}},
+    {'m', {0, 0, 26, 21, 21, 21, 21}},
+    {'n', {0, 0, 22, 25, 17, 17, 17}},
+    {'o', {0, 0, 14, 17, 17, 17, 14}},
+    {'r', {0, 0, 22, 25, 16, 16, 16}},
+    {'t', {8, 8, 30, 8, 8, 9, 6}},
+    {'u', {0, 0, 17, 17, 17, 19, 13}},
+    {'x', {0, 0, 17, 10, 4, 10, 17}},
+    {'y', {0, 0, 17, 17, 15, 1, 14}},
+    {'>', {8, 4, 2, 1, 2, 4, 8}},
+    {':', {0, 12, 12, 0, 12, 12, 0}},
+};
+
+// Fills px (kOverlayW x kOverlayH, RGBA8 little-endian = 0xAABBGGRR) with `text` in white on black.
+void RenderOverlayText(uint32_t* px, const char* text) {
+  for (uint32_t i = 0; i < kOverlayW * kOverlayH; i++) px[i] = 0xFF000000u;
+  uint32_t pen = 4;
+  for (const char* p = text; *p && pen + 6 * kOverlayScale <= kOverlayW; p++) {
+    const Glyph* g = nullptr;
+    for (const Glyph& cand : kGlyphs) if (cand.ch == *p) { g = &cand; break; }
+    if (g) {
+      for (uint32_t row = 0; row < 7; row++)
+        for (uint32_t col = 0; col < 5; col++)
+          if (g->rows[row] & (16u >> col))
+            for (uint32_t sy = 0; sy < kOverlayScale; sy++)
+              for (uint32_t sx = 0; sx < kOverlayScale; sx++)
+                px[(3 + row * kOverlayScale + sy) * kOverlayW + pen + col * kOverlayScale + sx] = 0xFFFFFFFFu;
+    }
+    pen += 6 * kOverlayScale;
+  }
+}
+
 class Deko3dCommandProcessor : public CommandProcessor {
  public:
   using CommandProcessor::CommandProcessor;
@@ -456,6 +528,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
     always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: textures upload at every bind (missed dirty pages = stale sprites)
+    overlay_on_ = access((debug_dir + "overlay_off").c_str(), F_OK) != 0;  // the version + fps strip
     no_depth_copy_ = access((debug_dir + "dk_nodepthcopy").c_str(), F_OK) == 0;  // debug A/B: depth resolves are ignored (shadow maps stay empty)
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
@@ -944,6 +1017,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
       trace_vf_.clear();
     }
 #endif
+    // The on-screen strip (gh-recomp): the version and the fps, uploaded into this frame's image before the present pass.
+    HostImage* overlay = nullptr;
+    if (overlay_on_) {
+      const uint64_t now = armGetSystemTick();
+      if (!fps_tick_) fps_tick_ = now;
+      fps_frames_++;
+      if (now - fps_tick_ >= armGetSystemTickFreq()) {
+        fps_x10_ = uint32_t(uint64_t(fps_frames_) * 10 * armGetSystemTickFreq() / (now - fps_tick_));
+        fps_tick_ = now;
+        fps_frames_ = 0;
+      }
+      if (!overlay_[frame_]) overlay_[frame_] = CreateImage(kOverlayW, kOverlayH, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
+      overlay = overlay_[frame_];
+      if (overlay) {
+        char text[64];
+        std::snprintf(text, sizeof(text), "HCU %s  %u.%u fps", rex_nx_version(), fps_x10_ / 10, fps_x10_ % 10);
+        if (std::strcmp(text, overlay_text_) != 0) {
+          RenderOverlayText(overlay_px_.data(), text);
+          std::memcpy(overlay_text_, text, sizeof(overlay_text_));
+        }
+        const uint32_t bytes = kOverlayW * kOverlayH * 4;
+        const uint32_t off = f.staging.Alloc(bytes, 0x100);
+        if (off != UINT32_MAX) {
+          std::memcpy(f.staging.cpu + off, overlay_px_.data(), bytes);
+          DkCopyBuf cb{f.staging.gpu + off, 0, 0};
+          DkImageView ov;
+          dkImageViewDefaults(&ov, &overlay->image);
+          DkImageRect rect{0, 0, 0, kOverlayW, kOverlayH, 1};
+          dkCmdBufCopyBufferToImage(cmd, &cb, &ov, &rect, 0);
+          dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+        } else {
+          overlay = nullptr;
+        }
+      }
+    }
     if (swaps_ < 5) Log("swap #%u: acquiring a swapchain image", swaps_ + 1);
     int slot;
     {
@@ -1005,6 +1113,19 @@ class Deko3dCommandProcessor : public CommandProcessor {
           dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, &ramp_buf, 1);
         }
         dkCmdBufDraw(cmd, DkPrimitive_Triangles, 3, 1, 0, 0);
+      }
+      if (overlay) {
+        const uint32_t oslot = DescriptorFor(f, overlay, 0);
+        if (oslot != UINT32_MAX) {
+          const uint32_t ox = 8, oy = kPresentHeight - kOverlayH - 8;
+          DkViewport ovp{float(ox), float(oy), float(kOverlayW), float(kOverlayH), 0.0f, 1.0f};
+          dkCmdBufSetViewports(cmd, 0, &ovp, 1);
+          DkScissor osc{ox, oy, kOverlayW, kOverlayH};
+          dkCmdBufSetScissors(cmd, 0, &osc, 1);
+          DkResHandle oh = dkMakeTextureHandle(oslot, 0);  // nearest, clamp
+          dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &oh, 1);
+          dkCmdBufDraw(cmd, DkPrimitive_Triangles, 3, 1, 0, 0);
+        }
       }
     }
     dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
@@ -1941,6 +2062,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_target_ = false;
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
+  bool overlay_on_ = true;
+  HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
+  char overlay_text_[64] = {};
+  uint64_t fps_tick_ = 0;
+  uint32_t fps_frames_ = 0, fps_x10_ = 0;
+  std::vector<uint32_t> overlay_px_ = std::vector<uint32_t>(kOverlayW * kOverlayH);
   bool always_upload_ = false;
   uint64_t us_draw_ = 0, us_copy_ = 0, us_fence_ = 0, us_acquire_ = 0, us_submit_ = 0;  // ScopedUs counters of the 60-swap log
   uint32_t depth_resolves_ = 0;  // depth resolves so far (MergeDepthPieces looks again when it changed)
