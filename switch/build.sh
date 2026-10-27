@@ -37,9 +37,10 @@ if [ "$(cat "$SDK/.hcu-edits-stamp" 2>/dev/null)" != "$EDITS_STAMP" ]; then
     rm -f "$SDK/.hcu-edits-stamp"
 fi
 python3 "$SRC/switch/sdk-edits.py" "$SDK"
-python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
 # A second pass: some sdk-edits.py inserts anchor on text an earlier insert of the same run writes.
 python3 "$SRC/switch/sdk-edits.py" "$SDK" > /dev/null
+# The HCU edits last: sdk-edits.py rewrites whole files (nop_audio_system.cpp), which would drop them.
+python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
 echo "$EDITS_STAMP" > "$SDK/.hcu-edits-stamp"
 # The CLI embeds the codegen templates: a template edit needs `cmake --build ... --target rexglue`.
 if [ ! -f "$SRC/generated/default/sources.cmake" ]; then
