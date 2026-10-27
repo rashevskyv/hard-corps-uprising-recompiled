@@ -21,6 +21,13 @@ case "$ACTION" in
         curl -sS --ftp-create-dirs -T "$NRO" "$URL/hcu.nro.part"
         local_sha=$(sha1sum "$NRO" | cut -c1-40)
         remote_sha=$(curl -sS "$URL/hcu.nro.part" | sha1sum | cut -c1-40)
+        # A read right after a 170 MB upload has returned wrong bytes once (the file itself was fine):
+        # read it up to two more times before giving up.
+        for retry in 1 2; do
+            [ "$local_sha" = "$remote_sha" ] && break
+            sleep 10
+            remote_sha=$(curl -sS "$URL/hcu.nro.part" | sha1sum | cut -c1-40)
+        done
         if [ "$local_sha" != "$remote_sha" ]; then
             echo "VERIFY FAILED: local $local_sha, console $remote_sha (hcu.nro unchanged)" >&2
             exit 1
