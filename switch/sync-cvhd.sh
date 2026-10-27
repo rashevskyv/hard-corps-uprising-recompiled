@@ -13,6 +13,7 @@ FILES="switch/host switch/sdk-edits.py switch/eden-shot.ps1 switch/eden-deko3d.p
 ARCHIVE=$(mktemp)
 # Archive first: a failing git (wrong commit, ownership check) must not leave the tree half deleted.
 git -C "$CVHD" archive -o "$ARCHIVE" "$COMMIT" $FILES
+tar -tf "$ARCHIVE" > /dev/null || { echo "sync-cvhd: the archive of $COMMIT is not a valid tar; nothing was changed" >&2; rm -f "$ARCHIVE"; exit 1; }
 rm -rf switch/host src/gpu
 tar -xf "$ARCHIVE"
 rm -f "$ARCHIVE"
