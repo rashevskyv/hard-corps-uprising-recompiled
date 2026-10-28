@@ -1041,18 +1041,21 @@ index 2205439..d38d812 100644
    uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0;
  };
 diff --git b/src/gpu/dk_gl/dk_gl_shim.cpp a/src/gpu/dk_gl/dk_gl_shim.cpp
-index 95e0b83..6ab44fd 100644
+index 95e0b83..a063417 100644
 --- b/src/gpu/dk_gl/dk_gl_shim.cpp
 +++ a/src/gpu/dk_gl/dk_gl_shim.cpp
-@@ -59,6 +59,7 @@ namespace {
+@@ -59,7 +59,9 @@ namespace {
    X(LinkProgram, LINKPROGRAM) X(GetProgramiv, GETPROGRAMIV) X(GetProgramInfoLog, GETPROGRAMINFOLOG) \
    X(UseProgram, USEPROGRAM) X(DeleteShader, DELETESHADER) X(CullFace, CULLFACE) X(FrontFace, FRONTFACE) \
    X(PolygonMode, POLYGONMODE) X(GetError, GETERROR) X(Finish, FINISH) X(ClearColor, CLEARCOLOR) \
+-  X(Clear, CLEAR) X(BlendColor, BLENDCOLOR) X(GetTexImage, GETTEXIMAGE) X(DeleteProgram, DELETEPROGRAM)
 +  X(StencilFuncSeparate, STENCILFUNCSEPARATE) X(StencilOpSeparate, STENCILOPSEPARATE) X(StencilMaskSeparate, STENCILMASKSEPARATE) \
-   X(Clear, CLEAR) X(BlendColor, BLENDCOLOR) X(GetTexImage, GETTEXIMAGE) X(DeleteProgram, DELETEPROGRAM)
++  X(Clear, CLEAR) X(BlendColor, BLENDCOLOR) X(GetTexImage, GETTEXIMAGE) X(DeleteProgram, DELETEPROGRAM) \
++  X(PolygonOffset, POLYGONOFFSET)
  
  #define DECL(name, upper) PFNGL##upper##PROC gl##name = nullptr;
-@@ -212,6 +213,7 @@ struct Exec {
+ GL_FUNCS(DECL)
+@@ -212,6 +214,7 @@ struct Exec {
    DkColorWriteState colorwrite{};
    DkBlendState blend{};
    DkDepthStencilState ds{};
@@ -1060,7 +1063,7 @@ index 95e0b83..6ab44fd 100644
    const DkShader* shaders[5] = {};  // by stage: vertex, tess ctrl, tess eval, geometry, fragment
    std::vector<DkVtxAttribState> attribs;
    std::vector<DkVtxBufferState> vbufs;
-@@ -308,6 +310,19 @@ GLenum CompareFunc(DkCompareOp op) {
+@@ -308,6 +311,19 @@ GLenum CompareFunc(DkCompareOp op) {
    }
  }
  
@@ -1080,7 +1083,7 @@ index 95e0b83..6ab44fd 100644
  GLenum BlendFactorOf(DkBlendFactor f) {
    switch (f) {
      case DkBlendFactor_Zero: return GL_ZERO;
-@@ -483,7 +498,21 @@ void ApplyFixedState() {
+@@ -483,13 +499,29 @@ void ApplyFixedState() {
    if (E.ds.depthTestEnable && E.depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
    glDepthMask(E.ds.depthWriteEnable && E.depth ? GL_TRUE : GL_FALSE);
    glDepthFunc(CompareFunc(DkCompareOp(E.ds.depthCompareOp)));
@@ -1103,7 +1106,15 @@ index 95e0b83..6ab44fd 100644
    if (E.rast.cullMode == DkFace_None) glDisable(GL_CULL_FACE);
    else {
      glEnable(GL_CULL_FACE);
-@@ -701,8 +730,21 @@ void WritePpm(const char* path, const uint8_t* rgba, uint32_t w, uint32_t h, boo
+     glCullFace(E.rast.cullMode == DkFace_Front ? GL_FRONT : E.rast.cullMode == DkFace_Back ? GL_BACK : GL_FRONT_AND_BACK);
+   }
+   glFrontFace(E.rast.frontFace == DkFrontFace_CCW ? GL_CCW : GL_CW);
++  if (E.rast.depthBiasEnableMask) glEnable(GL_POLYGON_OFFSET_FILL);
++  else glDisable(GL_POLYGON_OFFSET_FILL);
+ }
+ 
+ bool VertexFormatOf(const DkVtxAttribState& a, GLint& comps, GLenum& type, GLboolean& norm, bool& integer) {
+@@ -701,8 +733,21 @@ void WritePpm(const char* path, const uint8_t* rgba, uint32_t w, uint32_t h, boo
  // ----- public: shim extras --------------------------------------------------------------------------------
  void dkglDumpImage(const DkImage* image, const char* path) {
    const ImageData* d = reinterpret_cast<const ImageData*>(image->_storage);
@@ -1126,7 +1137,7 @@ index 95e0b83..6ab44fd 100644
    glBindTexture(GL_TEXTURE_2D, d->tex);
    glDisable(GL_FRAMEBUFFER_SRGB);
    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-@@ -816,6 +858,20 @@ void dkCmdBufBindRasterizerState(DkCmdBuf c, DkRasterizerState const* s) { DkRas
+@@ -816,6 +861,20 @@ void dkCmdBufBindRasterizerState(DkCmdBuf c, DkRasterizerState const* s) { DkRas
  void dkCmdBufBindColorState(DkCmdBuf c, DkColorState const* s) { DkColorState v = *s; c->ops.push_back([=] { E.colorstate = v; }); }
  void dkCmdBufBindColorWriteState(DkCmdBuf c, DkColorWriteState const* s) { DkColorWriteState v = *s; c->ops.push_back([=] { E.colorwrite = v; }); }
  void dkCmdBufBindBlendStates(DkCmdBuf c, uint32_t, DkBlendState const states[], uint32_t) { DkBlendState v = states[0]; c->ops.push_back([=] { E.blend = v; }); }
@@ -1147,7 +1158,7 @@ index 95e0b83..6ab44fd 100644
  void dkCmdBufBindDepthStencilState(DkCmdBuf c, DkDepthStencilState const* s) { DkDepthStencilState v = *s; c->ops.push_back([=] { E.ds = v; }); }
  
  void dkCmdBufBindVtxAttribState(DkCmdBuf c, DkVtxAttribState const attribs[], uint32_t n) {
-@@ -874,7 +930,7 @@ void dkCmdBufCopyImage(DkCmdBuf c, DkImageView const* src, DkImageRect const* sr
+@@ -874,7 +933,7 @@ void dkCmdBufCopyImage(DkCmdBuf c, DkImageView const* src, DkImageRect const* sr
    const ImageData* d = reinterpret_cast<const ImageData*>(dst->pImage->_storage);
    DkImageRect a = *sr, b = *dr;
    c->ops.push_back([=] {
@@ -1156,7 +1167,7 @@ index 95e0b83..6ab44fd 100644
        glCopyImageSubData(s->tex, GL_TEXTURE_2D, 0, int(a.x), int(a.y), 0, d->tex, GL_TEXTURE_2D, 0, int(b.x), int(b.y), 0, int(a.width), int(a.height), 1);
      } else {
        glBindFramebuffer(GL_READ_FRAMEBUFFER, G.fbo_read);
-@@ -1028,3 +1084,8 @@ void dkSamplerDescriptorInitialize(DkSamplerDescriptor* obj, DkSampler const* s)
+@@ -1028,3 +1087,8 @@ void dkSamplerDescriptorInitialize(DkSamplerDescriptor* obj, DkSampler const* s)
  }
  
  }  // extern "C"
@@ -1227,11 +1238,15 @@ index 8fed3c9..e6a3cab 100644
  static inline void* dlopen(const char* filename, int flags) {
      (void)filename;
 diff --git b/switch/host/switch_nx.cpp a/switch/host/switch_nx.cpp
-index eba1f4d..f3d238a 100644
+index eba1f4d..c09626f 100644
 --- b/switch/host/switch_nx.cpp
 +++ a/switch/host/switch_nx.cpp
-@@ -13,6 +13,12 @@
+@@ -11,8 +11,16 @@
  
+ #include <switch.h>
+ 
++#include <rex/nx_hook_counter.h>
++
  #include "hcu_version.h"  // written by switch/build.sh: HCU_VERSION, HCU_BUILD_UTC
  
 +// The version for the on-screen strip of the deko3d backend.
@@ -1243,7 +1258,7 @@ index eba1f4d..f3d238a 100644
  extern "C" {
  // libnx's own exit (init.c): __appExit (userAppExit, then the services), then the function from
  // envGetExitFuncPtr. No static destructors.
-@@ -250,10 +256,46 @@ void sample_pc(SampledThread& st, u64 pc) {
+@@ -250,10 +258,67 @@ void sample_pc(SampledThread& st, u64 pc) {
      }
  }
  
@@ -1282,6 +1297,27 @@ index eba1f4d..f3d238a 100644
 +    }
 +}
 +
++// Calls per 30 s of the hooked guest functions and kernel exports (REX_HOOK counters, all threads).
++void print_hook_counts() {
++    static u32 last[1024];
++    struct Row { const char* name; u32 delta; };
++    static Row rows[1024];
++    int n = 0, idx = 0;
++    for (rex_nx::HookCounter* h = rex_nx::HookCounter::head(); h != nullptr && idx < 1024; h = h->next, idx++) {
++        const u32 now = h->n;
++        if (now != last[idx]) rows[n++] = {h->name, now - last[idx]};
++        last[idx] = now;
++    }
++    std::printf("[hooks] calls in the last 30 s, top 40 of %d:\n", n);
++    for (int top = 0; top < 40; top++) {
++        int best = -1;
++        for (int i = 0; i < n; i++) if (rows[i].delta != 0 && (best < 0 || rows[i].delta > rows[best].delta)) best = i;
++        if (best < 0) break;
++        std::printf("[hooks] %s %u\n", rows[best].name, rows[best].delta);
++        rows[best].delta = 0;
++    }
++}
++
  void sampler_loop(void*) {
 -    while (sampler_running) {
 -        svcSleepThread(10'000'000LL);
@@ -1292,7 +1328,7 @@ index eba1f4d..f3d238a 100644
              Handle handle = INVALID_HANDLE;
              mutexLock(&nx_threads_lock);
              int seen = 0;
-@@ -280,6 +322,7 @@ void sampler_loop(void*) {
+@@ -280,6 +345,7 @@ void sampler_loop(void*) {
                  continue;
              }
              sample_pc(st, ctx.pc.x);
@@ -1300,15 +1336,18 @@ index eba1f4d..f3d238a 100644
          }
      }
  }
-@@ -327,6 +370,7 @@ void log_flush_loop(void*) {
+@@ -327,6 +393,10 @@ void log_flush_loop(void*) {
                          (unsigned long long)(used >> 20));
              print_cpu_profile(now - last_profile);
              print_pc_profile();
-+            if (tick % 60 == 0) print_main_prof();
++            if (tick % 60 == 0) {
++                print_main_prof();
++                print_hook_counts();
++            }
              {
                  // The GPU register window 0x7FC80000 folds onto physical 0xC80000: a guest store that
                  // codegen did not recognise as MMIO lands there instead of in the command processor.
-@@ -423,7 +467,7 @@ bool pinning = true;
+@@ -423,7 +493,7 @@ bool pinning = true;
  extern "C" void userAppInit(void) {
      open_log();
      std::set_terminate(terminate_handler);
