@@ -43,8 +43,11 @@ python3 "$SRC/switch/sdk-edits.py" "$SDK" > /dev/null
 python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
 echo "$EDITS_STAMP" > "$SDK/.hcu-edits-stamp"
 # The CLI embeds the codegen templates: a template edit needs `cmake --build ... --target rexglue`.
-if [ ! -f "$SRC/generated/default/sources.cmake" ]; then
-    (cd "$SRC" && "$CLI" codegen hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1)         || { tail -20 "$ROOT/codegen.log"; exit 1; }
+# Generated code depends on the manifest and its config includes: regenerate when they change.
+CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml | sha1sum | cut -c1-40)
+if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.hcu-codegen-stamp" 2>/dev/null)" != "$CG_STAMP" ]; then
+    (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1)         || { tail -20 "$ROOT/codegen.log"; exit 1; }
+    echo "$CG_STAMP" > "$SRC/generated/.hcu-codegen-stamp"
 fi
 
 COUNT=$(git -c safe.directory="*" -C "$GIT_DIR" rev-list --count HEAD 2>/dev/null || echo 0)

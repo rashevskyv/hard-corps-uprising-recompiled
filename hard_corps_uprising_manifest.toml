@@ -6,4 +6,9 @@ game_root = "game/extracted"
 [entrypoint]
 file_path = "game/extracted/default.xex"
 out_directory_path = "generated/default"
+# Codegen flags: registers as locals (only [entrypoint] is read). Step 1: the safe four.
+cr_as_local = true
+ctr_as_local = true
+xer_as_local = true
+reserved_as_local = true
 includes = ["config/overrides.toml", "config/discovered-functions.toml"]
