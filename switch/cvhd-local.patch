@@ -1185,7 +1185,7 @@ index 8fed3c9..e6a3cab 100644
  static inline void* dlopen(const char* filename, int flags) {
      (void)filename;
 diff --git b/switch/host/switch_nx.cpp a/switch/host/switch_nx.cpp
-index eba1f4d..5175e7e 100644
+index eba1f4d..8f22ce0 100644
 --- b/switch/host/switch_nx.cpp
 +++ a/switch/host/switch_nx.cpp
 @@ -13,6 +13,12 @@
@@ -1201,7 +1201,74 @@ index eba1f4d..5175e7e 100644
  extern "C" {
  // libnx's own exit (init.c): __appExit (userAppExit, then the services), then the function from
  // envGetExitFuncPtr. No static destructors.
-@@ -423,7 +429,7 @@ bool pinning = true;
+@@ -250,10 +256,48 @@ void sample_pc(SampledThread& st, u64 pc) {
+     }
+ }
+ 
++// The main thread alone, 4 times finer (64-byte buckets, every 4 ms) and kept over 30 s: the 2-s
++// lines only list the top six 256-byte buckets, which is nothing when the profile is flat.
++struct MainProfile {
++    u64 key[8192];  // (pc - _start) >> 6, 0 = free
++    u32 count[8192];
++    u32 total;
++} main_prof;
++
++void main_prof_add(u64 pc) {
++    const u64 base = reinterpret_cast<u64>(&_start);
++    if (pc < base || pc - base >= 0x10000000ull) return;
++    const u64 key = ((pc - base) >> 6) + 1;
++    main_prof.total++;
++    for (u32 i = (u32)(key * 2654435761u) % 8192, n = 0; n < 64; i = (i + 1) % 8192, n++) {
++        if (main_prof.key[i] == key) { main_prof.count[i]++; return; }
++        if (main_prof.key[i] == 0) { main_prof.key[i] = key; main_prof.count[i] = 1; return; }
++    }
++}
++
++void print_main_prof() {
++    static MainProfile snap;
++    std::memcpy(&snap, &main_prof, sizeof(snap));
++    std::memset(&main_prof, 0, sizeof(main_prof));
++    std::printf("[prof] main thread, %u samples, top 300 buckets of 64 bytes (offset count):
++", snap.total);
++    for (int top = 0; top < 300; top++) {
++        u32 best = 0, best_count = 0;
++        for (u32 i = 0; i < 8192; i++) {
++            if (snap.key[i] != 0 && snap.count[i] > best_count) { best = i; best_count = snap.count[i]; }
++        }
++        if (best_count == 0) break;
++        std::printf("[prof] +0x%llX %u
++", (unsigned long long)((snap.key[best] - 1) << 6), best_count);
++        snap.key[best] = 0;
++    }
++}
++
+ void sampler_loop(void*) {
+-    while (sampler_running) {
+-        svcSleepThread(10'000'000LL);
++    for (unsigned iter = 0; sampler_running; iter++) {
++        svcSleepThread(4'000'000LL);
+         for (SampledThread& st : sampled) {
++            if (&st != &sampled[0] && iter % 3 != 0) continue;
+             Handle handle = INVALID_HANDLE;
+             mutexLock(&nx_threads_lock);
+             int seen = 0;
+@@ -280,6 +324,7 @@ void sampler_loop(void*) {
+                 continue;
+             }
+             sample_pc(st, ctx.pc.x);
++            if (&st == &sampled[0]) main_prof_add(ctx.pc.x);
+         }
+     }
+ }
+@@ -327,6 +372,7 @@ void log_flush_loop(void*) {
+                         (unsigned long long)(used >> 20));
+             print_cpu_profile(now - last_profile);
+             print_pc_profile();
++            if (tick % 60 == 0) print_main_prof();
+             {
+                 // The GPU register window 0x7FC80000 folds onto physical 0xC80000: a guest store that
+                 // codegen did not recognise as MMIO lands there instead of in the command processor.
+@@ -423,7 +469,7 @@ bool pinning = true;
  extern "C" void userAppInit(void) {
      open_log();
      std::set_terminate(terminate_handler);
