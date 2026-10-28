@@ -279,16 +279,14 @@ void print_main_prof() {
     static MainProfile snap;
     std::memcpy(&snap, &main_prof, sizeof(snap));
     std::memset(&main_prof, 0, sizeof(main_prof));
-    std::printf("[prof] main thread, %u samples, top 300 buckets of 64 bytes (offset count):
-", snap.total);
+    std::printf("[prof] main thread, %u samples, top 300 buckets of 64 bytes (offset count):\n", snap.total);
     for (int top = 0; top < 300; top++) {
         u32 best = 0, best_count = 0;
         for (u32 i = 0; i < 8192; i++) {
             if (snap.key[i] != 0 && snap.count[i] > best_count) { best = i; best_count = snap.count[i]; }
         }
         if (best_count == 0) break;
-        std::printf("[prof] +0x%llX %u
-", (unsigned long long)((snap.key[best] - 1) << 6), best_count);
+        std::printf("[prof] +0x%llX %u\n", (unsigned long long)((snap.key[best] - 1) << 6), best_count);
         snap.key[best] = 0;
     }
 }

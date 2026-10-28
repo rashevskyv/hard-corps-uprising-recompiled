@@ -121,15 +121,15 @@ edit('resources/templates/codegen/pch_h.inja', [
      '  if (a >= 0x7F000000u && a < 0x80000000u) return 0x21000000ll;  // GPU writeback window: physical 0-16 MB' + NL +
      '  return 0;' + NL + '}' + NL,
      'struct RexNxOffsets {' + NL +
-     '  s32 v[256];' + NL +
+     '  int32_t v[256];' + NL +
      '  constexpr RexNxOffsets() : v{} {' + NL +
      '    for (u32 i = 0; i < 256; i++) {' + NL +
-     '      s64 o = 0;' + NL +
+     '      int64_t o = 0;' + NL +
      '      if (i >= 0xE0u) o = -0x40000000ll + 0x1000;' + NL +
      '      else if (i >= 0xC0u) o = -0x20000000ll;' + NL +
      '      else if (i >= 0x90u && i < 0xA0u) o = -0x10000000ll;' + NL +
      '      else if (i == 0x7Fu) o = 0x21000000ll;  // GPU writeback window: physical 0-16 MB' + NL +
-     '      v[i] = (s32)o;' + NL +
+     '      v[i] = (int32_t)o;' + NL +
      '    }' + NL +
      '  }' + NL + '};' + NL +
      'static constexpr RexNxOffsets rex_nx_offsets{};' + NL +
