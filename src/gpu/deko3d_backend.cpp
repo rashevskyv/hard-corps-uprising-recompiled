@@ -392,7 +392,15 @@ DkImageSwizzle SwizzleOf(uint32_t s) {
 // Every build shows its version on screen (and the fps). There is no ImGui under deko3d: a 5x7 bitmap font
 // rendered on the CPU into a small RGBA image per frame in flight, drawn with the present shaders into a
 // viewport at the bottom-left corner. The file overlay_off next to the shader dir hides it.
+#ifdef __SWITCH__
 extern "C" const char* rex_nx_version(void);
+#else
+// The Linux test host has no libnx: nanosecond ticks and no version string.
+#include <chrono>
+static inline uint64_t armGetSystemTick() { return uint64_t(std::chrono::steady_clock::now().time_since_epoch().count()); }
+static inline uint64_t armGetSystemTickFreq() { return 1000000000ull; }
+static inline const char* rex_nx_version() { return "linux"; }
+#endif
 
 constexpr uint32_t kOverlayW = 512, kOverlayH = 20, kOverlayScale = 2;
 
