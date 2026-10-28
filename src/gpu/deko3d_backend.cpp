@@ -799,6 +799,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
     rs.cullMode = DkFace_None;  // TODO(cull): cull_front/cull_back once the winding is verified on a picture
     rs.fillRectangleEnable = rects && !use_gs;
     (void)su;
+    {
+      // With the clipper disabled the guest keeps geometry that lies in front of the near plane or behind the far one.
+      auto clip = regs.Get<reg::PA_CL_CLIP_CNTL>();
+      rs.depthClampEnable = clip.clip_disable;
+      char key[48];
+      std::snprintf(key, sizeof(key), "clip %u %u", uint32_t(clip.clip_disable), uint32_t(clip.dx_clip_space_def));
+      LogOnce(key, "clip control: clip_disable %u dx_clip_space_def %u (first draw VS %016llX)", uint32_t(clip.clip_disable),
+              uint32_t(clip.dx_clip_space_def), (unsigned long long)vs->ucode_data_hash());
+    }
     dkCmdBufBindRasterizerState(cmd, &rs);
     auto blend = regs.Get<reg::RB_BLENDCONTROL>();
     bool blend_enabled = !(blend.color_srcblend == xenos::BlendFactor::kOne && blend.color_destblend == xenos::BlendFactor::kZero &&
