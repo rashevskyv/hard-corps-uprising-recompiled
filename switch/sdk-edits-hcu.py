@@ -109,3 +109,30 @@ if _t != _s:
     open(_nop, 'w', encoding='utf-8', newline=NL).write(_t)
     changed.append('src/audio/nop/nop_audio_system.cpp')
 print('changed (hcu audio):', *changed, sep=NL + '  ')
+
+# The generated code's address fold (rex_nx_host_offset) was a chain of four compares per guest load or
+# store, about 17 instructions for one `ldr` (seen in hcu-0.172's disassembly). Every boundary of the
+# rules is a multiple of 16 MB, so one 256-entry table indexed by the top byte gives the same offset.
+edit('resources/templates/codegen/pch_h.inja', [
+    ('static inline __attribute__((always_inline)) int64_t rex_nx_host_offset(u32 a) {' + NL +
+     '  if (a >= 0xE0000000u) return -0x40000000ll + 0x1000;' + NL +
+     '  if (a >= 0xC0000000u) return -0x20000000ll;' + NL +
+     '  if (a >= 0x90000000u && a < 0xA0000000u) return -0x10000000ll;' + NL +
+     '  if (a >= 0x7F000000u && a < 0x80000000u) return 0x21000000ll;  // GPU writeback window: physical 0-16 MB' + NL +
+     '  return 0;' + NL + '}' + NL,
+     'struct RexNxOffsets {' + NL +
+     '  s32 v[256];' + NL +
+     '  constexpr RexNxOffsets() : v{} {' + NL +
+     '    for (u32 i = 0; i < 256; i++) {' + NL +
+     '      s64 o = 0;' + NL +
+     '      if (i >= 0xE0u) o = -0x40000000ll + 0x1000;' + NL +
+     '      else if (i >= 0xC0u) o = -0x20000000ll;' + NL +
+     '      else if (i >= 0x90u && i < 0xA0u) o = -0x10000000ll;' + NL +
+     '      else if (i == 0x7Fu) o = 0x21000000ll;  // GPU writeback window: physical 0-16 MB' + NL +
+     '      v[i] = (s32)o;' + NL +
+     '    }' + NL +
+     '  }' + NL + '};' + NL +
+     'static constexpr RexNxOffsets rex_nx_offsets{};' + NL +
+     'static inline __attribute__((always_inline)) int64_t rex_nx_host_offset(u32 a) { return rex_nx_offsets.v[a >> 24]; }' + NL),
+])
+print('changed (hcu fold):', *changed, sep=NL + '  ')
