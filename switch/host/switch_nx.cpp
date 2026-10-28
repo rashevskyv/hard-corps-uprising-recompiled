@@ -11,6 +11,8 @@
 
 #include <switch.h>
 
+#include <rex/nx_hook_counter.h>
+
 #include "hcu_version.h"  // written by switch/build.sh: HCU_VERSION, HCU_BUILD_UTC
 
 // The version for the on-screen strip of the deko3d backend.
@@ -291,6 +293,27 @@ void print_main_prof() {
     }
 }
 
+// Calls per 30 s of the hooked guest functions and kernel exports (REX_HOOK counters, all threads).
+void print_hook_counts() {
+    static u32 last[1024];
+    struct Row { const char* name; u32 delta; };
+    static Row rows[1024];
+    int n = 0, idx = 0;
+    for (rex_nx::HookCounter* h = rex_nx::HookCounter::head(); h != nullptr && idx < 1024; h = h->next, idx++) {
+        const u32 now = h->n;
+        if (now != last[idx]) rows[n++] = {h->name, now - last[idx]};
+        last[idx] = now;
+    }
+    std::printf("[hooks] calls in the last 30 s, top 40 of %d:\n", n);
+    for (int top = 0; top < 40; top++) {
+        int best = -1;
+        for (int i = 0; i < n; i++) if (rows[i].delta != 0 && (best < 0 || rows[i].delta > rows[best].delta)) best = i;
+        if (best < 0) break;
+        std::printf("[hooks] %s %u\n", rows[best].name, rows[best].delta);
+        rows[best].delta = 0;
+    }
+}
+
 void sampler_loop(void*) {
     for (unsigned iter = 0; sampler_running; iter++) {
         svcSleepThread(4'000'000LL);
@@ -370,7 +393,10 @@ void log_flush_loop(void*) {
                         (unsigned long long)(used >> 20));
             print_cpu_profile(now - last_profile);
             print_pc_profile();
-            if (tick % 60 == 0) print_main_prof();
+            if (tick % 60 == 0) {
+                print_main_prof();
+                print_hook_counts();
+            }
             {
                 // The GPU register window 0x7FC80000 folds onto physical 0xC80000: a guest store that
                 // codegen did not recognise as MMIO lands there instead of in the command processor.
