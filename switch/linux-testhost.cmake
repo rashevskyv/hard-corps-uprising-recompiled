@@ -14,6 +14,6 @@ set(REXGPU_XENOS_EXTRA_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/deko3d_backend.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/dk_gl/dk_gl_shim.cpp")
 include(generated/rexglue.cmake)
-add_executable(hcu switch/hcu_nx_main.cpp src/crt_native.cpp)
+add_executable(hcu switch/hcu_nx_main.cpp src/crt_native.cpp src/prolog_native.cpp)
 rexglue_setup_target(hcu GPU_PLUGINS xenos)
 target_include_directories(hcu PRIVATE "${REXSDK_DIR}/thirdparty/imgui" src)
