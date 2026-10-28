@@ -871,6 +871,7 @@ void dkCmdBufSetStencil(DkCmdBuf c, DkFace face, uint8_t mask, uint8_t funcRef, 
   });
 }
 void dkCmdBufSetBlendConst(DkCmdBuf c, float r, float g, float b, float a) { c->ops.push_back([=] { glBlendColor(r, g, b, a); }); }
+void dkCmdBufSetDepthBias(DkCmdBuf c, float constant, float clamp, float slope) { c->ops.push_back([=] { glPolygonOffset(slope, constant); }); }
 void dkCmdBufBindDepthStencilState(DkCmdBuf c, DkDepthStencilState const* s) { DkDepthStencilState v = *s; c->ops.push_back([=] { E.ds = v; }); }
 
 void dkCmdBufBindVtxAttribState(DkCmdBuf c, DkVtxAttribState const attribs[], uint32_t n) {

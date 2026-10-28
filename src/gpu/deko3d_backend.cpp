@@ -544,6 +544,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
     always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: textures upload at every bind (missed dirty pages = stale sprites)
     overlay_on_ = access((debug_dir + "overlay_off").c_str(), F_OK) != 0;  // the version + fps strip
+    if (FILE* zb = std::fopen((debug_dir + "dk_zbias").c_str(), "r")) {  // debug A/B: the colour-pass depth bias in depth units (0 = off)
+      char text[32] = {};
+      if (std::fgets(text, sizeof(text), zb)) z_bias_ = float(std::atof(text));
+      std::fclose(zb);
+    }
     no_depth_copy_ = access((debug_dir + "dk_nodepthcopy").c_str(), F_OK) == 0;  // debug A/B: depth resolves are ignored (shadow maps stay empty)
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
@@ -803,6 +808,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // Rectangle lists: the geometry shader makes the 4th vertex, or the hardware mode (cvar).
     const bool use_gs = rects && vs->geom_loaded && !REXCVAR_GET(deko3d_fill_rectangle);
     DkRasterizerState rs;
+    bool z_biased = false;
     dkRasterizerStateDefaults(&rs);
     rs.cullMode = DkFace_None;  // TODO(cull): cull_front/cull_back once the winding is verified on a picture
     rs.fillRectangleEnable = rects && !use_gs;
@@ -811,12 +817,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // With the clipper disabled the guest keeps geometry that lies in front of the near plane or behind the far one.
       auto clip = regs.Get<reg::PA_CL_CLIP_CNTL>();
       rs.depthClampEnable = clip.clip_disable;
+      // The colour pass of a mesh repeats its depth pre-pass with another vertex shader (depth func LESS or LEQUAL): the two
+      // positions differ in the last bits on a real GPU, and the whole mesh fails the test. The colour pass is pulled closer.
+      z_biased = z_bias_ != 0.f && writes_color && dc.z_enable && (uint32_t(dc.zfunc) == 1 || uint32_t(dc.zfunc) == 3);
+      rs.depthBiasEnableMask = z_biased ? 1 : 0;
       char key[48];
       std::snprintf(key, sizeof(key), "clip %u %u", uint32_t(clip.clip_disable), uint32_t(clip.dx_clip_space_def));
       LogOnce(key, "clip control: clip_disable %u dx_clip_space_def %u (first draw VS %016llX)", uint32_t(clip.clip_disable),
               uint32_t(clip.dx_clip_space_def), (unsigned long long)vs->ucode_data_hash());
     }
     dkCmdBufBindRasterizerState(cmd, &rs);
+    if (z_biased) dkCmdBufSetDepthBias(cmd, z_bias_, 0.f, 0.f);
     auto blend = regs.Get<reg::RB_BLENDCONTROL>();
     bool blend_enabled = !(blend.color_srcblend == xenos::BlendFactor::kOne && blend.color_destblend == xenos::BlendFactor::kZero &&
                            blend.color_comb_fcn == xenos::BlendOp::kAdd && blend.alpha_srcblend == xenos::BlendFactor::kOne &&
@@ -2104,6 +2115,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_target_ = false;
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
+  float z_bias_ = -16.f;
   bool overlay_on_ = true;
   HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
   char overlay_text_[64] = {};
