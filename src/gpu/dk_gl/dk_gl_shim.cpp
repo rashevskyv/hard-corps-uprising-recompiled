@@ -60,7 +60,8 @@ namespace {
   X(UseProgram, USEPROGRAM) X(DeleteShader, DELETESHADER) X(CullFace, CULLFACE) X(FrontFace, FRONTFACE) \
   X(PolygonMode, POLYGONMODE) X(GetError, GETERROR) X(Finish, FINISH) X(ClearColor, CLEARCOLOR) \
   X(StencilFuncSeparate, STENCILFUNCSEPARATE) X(StencilOpSeparate, STENCILOPSEPARATE) X(StencilMaskSeparate, STENCILMASKSEPARATE) \
-  X(Clear, CLEAR) X(BlendColor, BLENDCOLOR) X(GetTexImage, GETTEXIMAGE) X(DeleteProgram, DELETEPROGRAM)
+  X(Clear, CLEAR) X(BlendColor, BLENDCOLOR) X(GetTexImage, GETTEXIMAGE) X(DeleteProgram, DELETEPROGRAM) \
+  X(PolygonOffset, POLYGONOFFSET)
 
 #define DECL(name, upper) PFNGL##upper##PROC gl##name = nullptr;
 GL_FUNCS(DECL)
@@ -519,6 +520,8 @@ void ApplyFixedState() {
     glCullFace(E.rast.cullMode == DkFace_Front ? GL_FRONT : E.rast.cullMode == DkFace_Back ? GL_BACK : GL_FRONT_AND_BACK);
   }
   glFrontFace(E.rast.frontFace == DkFrontFace_CCW ? GL_CCW : GL_CW);
+  if (E.rast.depthBiasEnableMask) glEnable(GL_POLYGON_OFFSET_FILL);
+  else glDisable(GL_POLYGON_OFFSET_FILL);
 }
 
 bool VertexFormatOf(const DkVtxAttribState& a, GLint& comps, GLenum& type, GLboolean& norm, bool& integer) {
