@@ -1185,7 +1185,7 @@ index 8fed3c9..e6a3cab 100644
  static inline void* dlopen(const char* filename, int flags) {
      (void)filename;
 diff --git b/switch/host/switch_nx.cpp a/switch/host/switch_nx.cpp
-index eba1f4d..8f22ce0 100644
+index eba1f4d..f3d238a 100644
 --- b/switch/host/switch_nx.cpp
 +++ a/switch/host/switch_nx.cpp
 @@ -13,6 +13,12 @@
@@ -1201,7 +1201,7 @@ index eba1f4d..8f22ce0 100644
  extern "C" {
  // libnx's own exit (init.c): __appExit (userAppExit, then the services), then the function from
  // envGetExitFuncPtr. No static destructors.
-@@ -250,10 +256,48 @@ void sample_pc(SampledThread& st, u64 pc) {
+@@ -250,10 +256,46 @@ void sample_pc(SampledThread& st, u64 pc) {
      }
  }
  
@@ -1228,16 +1228,14 @@ index eba1f4d..8f22ce0 100644
 +    static MainProfile snap;
 +    std::memcpy(&snap, &main_prof, sizeof(snap));
 +    std::memset(&main_prof, 0, sizeof(main_prof));
-+    std::printf("[prof] main thread, %u samples, top 300 buckets of 64 bytes (offset count):
-+", snap.total);
++    std::printf("[prof] main thread, %u samples, top 300 buckets of 64 bytes (offset count):\n", snap.total);
 +    for (int top = 0; top < 300; top++) {
 +        u32 best = 0, best_count = 0;
 +        for (u32 i = 0; i < 8192; i++) {
 +            if (snap.key[i] != 0 && snap.count[i] > best_count) { best = i; best_count = snap.count[i]; }
 +        }
 +        if (best_count == 0) break;
-+        std::printf("[prof] +0x%llX %u
-+", (unsigned long long)((snap.key[best] - 1) << 6), best_count);
++        std::printf("[prof] +0x%llX %u\n", (unsigned long long)((snap.key[best] - 1) << 6), best_count);
 +        snap.key[best] = 0;
 +    }
 +}
@@ -1252,7 +1250,7 @@ index eba1f4d..8f22ce0 100644
              Handle handle = INVALID_HANDLE;
              mutexLock(&nx_threads_lock);
              int seen = 0;
-@@ -280,6 +324,7 @@ void sampler_loop(void*) {
+@@ -280,6 +322,7 @@ void sampler_loop(void*) {
                  continue;
              }
              sample_pc(st, ctx.pc.x);
@@ -1260,7 +1258,7 @@ index eba1f4d..8f22ce0 100644
          }
      }
  }
-@@ -327,6 +372,7 @@ void log_flush_loop(void*) {
+@@ -327,6 +370,7 @@ void log_flush_loop(void*) {
                          (unsigned long long)(used >> 20));
              print_cpu_profile(now - last_profile);
              print_pc_profile();
@@ -1268,7 +1266,7 @@ index eba1f4d..8f22ce0 100644
              {
                  // The GPU register window 0x7FC80000 folds onto physical 0xC80000: a guest store that
                  // codegen did not recognise as MMIO lands there instead of in the command processor.
-@@ -423,7 +469,7 @@ bool pinning = true;
+@@ -423,7 +467,7 @@ bool pinning = true;
  extern "C" void userAppInit(void) {
      open_log();
      std::set_terminate(terminate_handler);
