@@ -505,6 +505,9 @@ class Translator:
         out = ['#version 460', '// hcu xenos2glsl: %s (%s)' % (self.name, self.stage)]
         ind = '  '
         if self.stage == 'vert':
+            # The same position in a depth pre-pass and in the colour pass (two shaders) must match bit for bit,
+            # or the colour pass fails its LEQUAL test (missing meshes, z-fighting).
+            out.append('invariant gl_Position;')
             for a in self.attrs:
                 out.append('layout(location = %d) in vec4 in_%d;  // vf%d offset %d %s' % (
                     a['index'], a['index'], a['slot'], a['offset_words'], a['format']))
