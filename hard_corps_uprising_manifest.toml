@@ -6,9 +6,10 @@ game_root = "game/extracted"
 [entrypoint]
 file_path = "game/extracted/default.xex"
 out_directory_path = "generated/default"
-# Codegen flags: registers as locals (only [entrypoint] is read). non_argument + non_volatile hung the game after the first shaders (0.174): not set.
+# Codegen flags: registers as locals (only [entrypoint] is read). non_argument + non_volatile together hung the game after the first shaders (0.174); 0.191 tries non_volatile alone.
 cr_as_local = true
 ctr_as_local = true
 xer_as_local = true
 reserved_as_local = true
+non_volatile_as_local = true
 includes = ["config/overrides.toml", "config/discovered-functions.toml"]
