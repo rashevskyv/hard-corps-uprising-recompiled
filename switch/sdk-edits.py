@@ -352,22 +352,36 @@ reps = [
     ('#if REX_PLATFORM_LINUX' + NL, '#if REX_PLATFORM_LINUX && !REX_PLATFORM_SWITCH' + NL),
     # WaitMultiple polled every 1 ms (try-lock all handles, check, sleep): on Horizon that cost the
     # audio worker half a core and every multi-object wait of the guest the same (console 0.65).
-    # Every signal now also bumps a generation and notifies one shared condition variable; the waiter
-    # reads the generation before its check and sleeps until it changes (20 ms cap). The wait is in
-    # microseconds: in whole milliseconds the last part of a timeout rounded to 0, and alertable waits
-    # are 1 ms slices, so they spun all the time (hcu 0.191: the audio worker at 75-80 % of a core).
+    # A multi-waiter now registers on each of its handles and sleeps on its own condition variable;
+    # a signal (each cond_.notify_all, under the handle's lock) wakes only the waiters of that handle.
+    # (hcu 0.200-0.208 had one global mutex + condition variable for this: every signal took it and
+    # woke every multi-waiter, and the main thread spent a quarter of its time in svcArbitrateLock.)
+    # The wait is in microseconds with a 20 ms cap: in whole milliseconds the last part of a timeout
+    # rounded to 0, and alertable waits are 1 ms slices, so they spun all the time (hcu 0.191).
     ('  virtual void* native_handle() const {' + NL + '    return const_cast<std::condition_variable&>(cond_).native_handle();' + NL + '  }' + NL,
      '  virtual void* native_handle() const {' + NL + '    return const_cast<std::condition_variable&>(cond_).native_handle();' + NL + '  }' + NL +
-     '  static std::mutex& multi_mutex() {' + NL + '    static std::mutex m;' + NL + '    return m;' + NL + '  }' + NL +
-     '  static std::condition_variable& multi_cond() {' + NL + '    static std::condition_variable c;' + NL + '    return c;' + NL + '  }' + NL +
-     '  static std::atomic<uint64_t>& multi_gen() {' + NL + '    static std::atomic<uint64_t> g{0};' + NL + '    return g;' + NL + '  }' + NL +
-     '  static void NotifyMulti() {' + NL + '    multi_gen().fetch_add(1);' + NL +
-     '    { std::lock_guard<std::mutex> lock(multi_mutex()); }  // a waiter is before its check or inside its wait' + NL +
-     '    multi_cond().notify_all();' + NL + '  }' + NL),
-    ('    while (true) {' + NL + '      size_t first_signaled = std::numeric_limits<size_t>::max();' + NL,
-     '    while (true) {' + NL + '      const uint64_t multi_gen0 = multi_gen().load();' + NL +
-     '      size_t first_signaled = std::numeric_limits<size_t>::max();' + NL),
+     '  struct MultiWaiter {' + NL + '    std::mutex m;' + NL + '    std::condition_variable cv;' + NL + '    std::atomic<bool> woken{false};' + NL + '  };' + NL +
+     '  std::vector<MultiWaiter*> multi_waiters_;  // guarded by mutex_' + NL +
+     '  // With mutex_ held, after the state changed: wake the multi-waiters of this handle.' + NL +
+     '  void NotifyMulti() {' + NL +
+     '    for (MultiWaiter* w : multi_waiters_) {' + NL +
+     '      std::lock_guard<std::mutex> lock(w->m);' + NL + '      w->woken = true;' + NL + '      w->cv.notify_one();' + NL + '    }' + NL + '  }' + NL +
+     '  // Sleep until one of the handles signals (or wait_time): registered on each, checked at registration.' + NL +
+     '  static void MultiWaitOn(const std::vector<PosixConditionBase*>& handles, std::chrono::microseconds wait_time) {' + NL +
+     '    MultiWaiter waiter;' + NL +
+     '    for (PosixConditionBase* h : handles) {' + NL +
+     '      std::lock_guard<std::mutex> lock(h->mutex_);' + NL +
+     '      h->multi_waiters_.push_back(&waiter);' + NL +
+     '      if (h->signaled()) waiter.woken = true;' + NL + '    }' + NL +
+     '    {' + NL + '      std::unique_lock<std::mutex> lock(waiter.m);' + NL +
+     '      waiter.cv.wait_for(lock, wait_time, [&] { return waiter.woken.load(); });' + NL + '    }' + NL +
+     '    for (PosixConditionBase* h : handles) {' + NL +
+     '      std::lock_guard<std::mutex> lock(h->mutex_);' + NL +
+     '      auto& v = h->multi_waiters_;' + NL +
+     '      for (size_t i = 0; i < v.size(); i++) {' + NL +
+     '        if (v[i] == &waiter) {' + NL + '          v.erase(v.begin() + i);' + NL + '          break;' + NL + '        }' + NL + '      }' + NL + '    }' + NL + '  }' + NL),
     ('cond_.notify_all();', 'cond_.notify_all();' + NL + '    NotifyMulti();'),
+    ('thread->handle_.cond_.notify_all();' + NL + '    NotifyMulti();', 'thread->handle_.cond_.notify_all();' + NL + '    thread->handle_.NotifyMulti();'),
     ('      if (timeout == std::chrono::milliseconds::max()) {' + NL +
      '        std::this_thread::sleep_for(std::chrono::milliseconds(1));' + NL +
      '      } else {' + NL +
@@ -379,10 +393,9 @@ reps = [
      '        const auto cap = std::chrono::milliseconds(20);' + NL +
      '        const auto wait_time =' + NL +
      '            (timeout == std::chrono::milliseconds::max())' + NL +
-     '                ? cap' + NL +
+     '                ? std::chrono::microseconds(cap)' + NL +
      '                : std::min<std::chrono::microseconds>(std::chrono::duration_cast<std::chrono::microseconds>(end_time - now), cap);' + NL +
-     '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
-     '        multi_cond().wait_for(multi_lock, wait_time, [&] { return multi_gen().load() != multi_gen0; });' + NL +
+     '        MultiWaitOn(handles, wait_time);' + NL +
      '      }' + NL),
     # The same wait after HCU patch 0021 (patches/rexglue-sdk), which moved the timeout check.
     ('      if (infinite_timeout) {' + NL +
@@ -406,8 +419,7 @@ reps = [
      '          }' + NL +
      '          wait_time = std::min<std::chrono::microseconds>(std::chrono::duration_cast<std::chrono::microseconds>(end_time - now), cap);' + NL +
      '        }' + NL +
-     '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
-     '        multi_cond().wait_for(multi_lock, wait_time, [&] { return multi_gen().load() != multi_gen0; });' + NL +
+     '        MultiWaitOn(handles, wait_time);' + NL +
      '      }' + NL),
 ]
 # Exactly one of the two WaitMultiple variants is present (stock or HCU 0021).
