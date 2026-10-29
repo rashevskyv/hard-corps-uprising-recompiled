@@ -18,4 +18,6 @@ add_compile_definitions(HCU_LINUX_TESTHOST)
 include(generated/rexglue.cmake)
 add_executable(hcu switch/hcu_nx_main.cpp src/crt_native.cpp src/prolog_native.cpp src/frame_meter.cpp)
 rexglue_setup_target(hcu GPU_PLUGINS xenos)
+# The GPU plugin (dlopen) reads the CPU-work meter from the executable (rex_nx_meter_*, rex_nx_cp_wait_ticks).
+set_target_properties(hcu PROPERTIES ENABLE_EXPORTS ON)
 target_include_directories(hcu PRIVATE "${REXSDK_DIR}/thirdparty/imgui" src)
