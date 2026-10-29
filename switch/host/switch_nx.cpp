@@ -277,7 +277,53 @@ void main_prof_add(u64 pc) {
     }
 }
 
+// Main-thread samples that sit in svcArbitrateLock (a contended mutex, a quarter of the 0.201 profile):
+// the first return addresses of the frame chain (libnx mutexLock builds a frame record on its slow path),
+// counted per chain of four and printed with the profile, to name the lock and its users.
+struct LockChains {
+    u64 key[512][4];
+    u32 count[512];
+    u32 total;
+} lock_chains;
+
+void lock_chain_add(const ThreadContext& ctx) {
+    const u64 base = reinterpret_cast<u64>(&_start);
+    const u64 sp = ctx.sp.x;
+    u64 fp = ctx.fp.x, ret[4] = {};
+    for (int i = 0; i < 4; i++) {
+        // Only inside the paused thread's own stack, upward, 16-aligned: never chase a register value.
+        if (fp < sp || fp >= sp + 0x40000 || (fp & 15) != 0) break;
+        const u64* rec = reinterpret_cast<const u64*>(fp);
+        const u64 lr = rec[1];
+        ret[i] = (lr >= base && lr - base < 0x10000000ull) ? lr - base : 0;
+        if (rec[0] <= fp) break;
+        fp = rec[0];
+    }
+    lock_chains.total++;
+    const u64 h = (ret[0] * 31 + ret[1]) * 31 + ret[2] + ret[3] * 7;
+    for (u32 i = (u32)(h * 2654435761u) % 512, n = 0; n < 512; i = (i + 1) % 512, n++) {
+        if (lock_chains.count[i] && std::memcmp(lock_chains.key[i], ret, sizeof(ret)) == 0) { lock_chains.count[i]++; return; }
+        if (!lock_chains.count[i]) { std::memcpy(lock_chains.key[i], ret, sizeof(ret)); lock_chains.count[i] = 1; return; }
+    }
+}
+
+void print_lock_chains() {
+    static LockChains snap;
+    std::memcpy(&snap, &lock_chains, sizeof(snap));
+    std::memset(&lock_chains, 0, sizeof(lock_chains));
+    std::printf("[lock] main thread in svcArbitrateLock: %u samples, top chains (return addresses):\n", snap.total);
+    for (int top = 0; top < 12; top++) {
+        u32 best = 0, best_count = 0;
+        for (u32 i = 0; i < 512; i++) if (snap.count[i] > best_count) { best = i; best_count = snap.count[i]; }
+        if (!best_count) break;
+        std::printf("[lock] %u +0x%llX +0x%llX +0x%llX +0x%llX\n", best_count, (unsigned long long)snap.key[best][0],
+                    (unsigned long long)snap.key[best][1], (unsigned long long)snap.key[best][2], (unsigned long long)snap.key[best][3]);
+        snap.count[best] = 0;
+    }
+}
+
 void print_main_prof() {
+    print_lock_chains();
     static MainProfile snap;
     std::memcpy(&snap, &main_prof, sizeof(snap));
     std::memset(&main_prof, 0, sizeof(main_prof));
@@ -345,7 +391,11 @@ void sampler_loop(void*) {
                 continue;
             }
             sample_pc(st, ctx.pc.x);
-            if (&st == &sampled[0]) main_prof_add(ctx.pc.x);
+            if (&st == &sampled[0]) {
+                main_prof_add(ctx.pc.x);
+                const u64 lock_svc = reinterpret_cast<u64>(&svcArbitrateLock);
+                if (ctx.pc.x >= lock_svc && ctx.pc.x < lock_svc + 8) lock_chain_add(ctx);
+            }
         }
     }
 }
