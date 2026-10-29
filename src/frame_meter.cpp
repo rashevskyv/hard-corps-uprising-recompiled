@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 
+#define REX_NX_METER_IMPL  // the real meter entry points, not the header's weak defaults
 #include <rex/chrono/clock.h>
 #include <rex/hook.h>
 
