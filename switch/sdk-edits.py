@@ -352,13 +352,21 @@ reps = [
     ('#if REX_PLATFORM_LINUX' + NL, '#if REX_PLATFORM_LINUX && !REX_PLATFORM_SWITCH' + NL),
     # WaitMultiple polled every 1 ms (try-lock all handles, check, sleep): on Horizon that cost the
     # audio worker half a core and every multi-object wait of the guest the same (console 0.65).
-    # Every signal now also notifies one shared condition variable, and the waiter sleeps on it
-    # (capped at 20 ms against a wake-up lost between its check and its wait).
+    # Every signal now also bumps a generation and notifies one shared condition variable; the waiter
+    # reads the generation before its check and sleeps until it changes (20 ms cap). The wait is in
+    # microseconds: in whole milliseconds the last part of a timeout rounded to 0, and alertable waits
+    # are 1 ms slices, so they spun all the time (hcu 0.191: the audio worker at 75-80 % of a core).
     ('  virtual void* native_handle() const {' + NL + '    return const_cast<std::condition_variable&>(cond_).native_handle();' + NL + '  }' + NL,
      '  virtual void* native_handle() const {' + NL + '    return const_cast<std::condition_variable&>(cond_).native_handle();' + NL + '  }' + NL +
      '  static std::mutex& multi_mutex() {' + NL + '    static std::mutex m;' + NL + '    return m;' + NL + '  }' + NL +
      '  static std::condition_variable& multi_cond() {' + NL + '    static std::condition_variable c;' + NL + '    return c;' + NL + '  }' + NL +
-     '  static void NotifyMulti() { multi_cond().notify_all(); }' + NL),
+     '  static std::atomic<uint64_t>& multi_gen() {' + NL + '    static std::atomic<uint64_t> g{0};' + NL + '    return g;' + NL + '  }' + NL +
+     '  static void NotifyMulti() {' + NL + '    multi_gen().fetch_add(1);' + NL +
+     '    { std::lock_guard<std::mutex> lock(multi_mutex()); }  // a waiter is before its check or inside its wait' + NL +
+     '    multi_cond().notify_all();' + NL + '  }' + NL),
+    ('    while (true) {' + NL + '      size_t first_signaled = std::numeric_limits<size_t>::max();' + NL,
+     '    while (true) {' + NL + '      const uint64_t multi_gen0 = multi_gen().load();' + NL +
+     '      size_t first_signaled = std::numeric_limits<size_t>::max();' + NL),
     ('cond_.notify_all();', 'cond_.notify_all();' + NL + '    NotifyMulti();'),
     ('      if (timeout == std::chrono::milliseconds::max()) {' + NL +
      '        std::this_thread::sleep_for(std::chrono::milliseconds(1));' + NL +
@@ -372,9 +380,9 @@ reps = [
      '        const auto wait_time =' + NL +
      '            (timeout == std::chrono::milliseconds::max())' + NL +
      '                ? cap' + NL +
-     '                : std::min(std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now), cap);' + NL +
+     '                : std::min<std::chrono::microseconds>(std::chrono::duration_cast<std::chrono::microseconds>(end_time - now), cap);' + NL +
      '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
-     '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
+     '        multi_cond().wait_for(multi_lock, wait_time, [&] { return multi_gen().load() != multi_gen0; });' + NL +
      '      }' + NL),
     # The same wait after HCU patch 0021 (patches/rexglue-sdk), which moved the timeout check.
     ('      if (infinite_timeout) {' + NL +
@@ -390,16 +398,16 @@ reps = [
      '      }' + NL,
      '      {' + NL +
      '        const auto cap = std::chrono::milliseconds(20);' + NL +
-     '        auto wait_time = cap;' + NL +
+     '        std::chrono::microseconds wait_time = cap;' + NL +
      '        if (!infinite_timeout) {' + NL +
      '          auto now = std::chrono::steady_clock::now();' + NL +
      '          if (now >= end_time) {' + NL +
      '            return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
      '          }' + NL +
-     '          wait_time = std::min(std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now), cap);' + NL +
+     '          wait_time = std::min<std::chrono::microseconds>(std::chrono::duration_cast<std::chrono::microseconds>(end_time - now), cap);' + NL +
      '        }' + NL +
      '        std::unique_lock<std::mutex> multi_lock(multi_mutex());' + NL +
-     '        multi_cond().wait_for(multi_lock, wait_time);' + NL +
+     '        multi_cond().wait_for(multi_lock, wait_time, [&] { return multi_gen().load() != multi_gen0; });' + NL +
      '      }' + NL),
 ]
 # Exactly one of the two WaitMultiple variants is present (stock or HCU 0021).
