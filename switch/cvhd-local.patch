@@ -1238,7 +1238,7 @@ index 8fed3c9..e6a3cab 100644
  static inline void* dlopen(const char* filename, int flags) {
      (void)filename;
 diff --git b/switch/host/switch_nx.cpp a/switch/host/switch_nx.cpp
-index eba1f4d..c09626f 100644
+index eba1f4d..2fee2fe 100644
 --- b/switch/host/switch_nx.cpp
 +++ a/switch/host/switch_nx.cpp
 @@ -11,8 +11,16 @@
@@ -1258,6 +1258,18 @@ index eba1f4d..c09626f 100644
  extern "C" {
  // libnx's own exit (init.c): __appExit (userAppExit, then the services), then the function from
  // envGetExitFuncPtr. No static destructors.
+@@ -219,9 +227,9 @@ struct SampledThread {
+     u32 samples, outside, failed;
+     Result last_rc;
+ };
+-// The main thread, the command processor, the audio worker and the game's first six other threads
++// The main thread, the command processor, the first audio client thread and the game's first six other threads
+ // (named "XThread..." by the SDK): a loader thread that goes silent shows where it sits.
+-SampledThread sampled[9] = {{"Main XThread", 0}, {"GPU Commands", 0}, {"Audio Worker", 0}, {"XThread", 0},
++SampledThread sampled[9] = {{"Main XThread", 0}, {"GPU Commands", 0}, {"Audio Client", 0}, {"XThread", 0},
+                             {"XThread", 1},      {"XThread", 2},      {"XThread", 3},      {"XThread", 4},
+                             {"XThread", 5}};
+ Thread sampler_thread;
 @@ -250,10 +258,67 @@ void sample_pc(SampledThread& st, u64 pc) {
      }
  }
@@ -1356,6 +1368,14 @@ index eba1f4d..c09626f 100644
      AppletType type = appletGetAppletType();
      const bool application = type == AppletType_Application || type == AppletType_SystemApplication;
      std::printf("[nx] launch: %s (applet type %d)\n",
+@@ -466,6 +536,7 @@ const Placement placements[] = {
+     {"GPU Commands", 0x28, 1, 0x2},
+     {"GPU VSync", 0x27, 2, 0x4},
+     {"Audio Worker", 0x2A, 2, 0x4},
++    {"Audio Client", 0x2A, 1, 0x6},  // one per guest audio client (the SDK edit in sdk-edits-hcu.py)
+     {"XMA", 0x2B, 2, 0x4},
+     {"XThread", 0x3B, 1, 0x6},  // the game's other threads, time-sliced on cores 1-2
+ };
 diff --git b/switch/host/ui/windowed_app_main_nx.cpp a/switch/host/ui/windowed_app_main_nx.cpp
 index cca561a..5f8f3ff 100644
 --- b/switch/host/ui/windowed_app_main_nx.cpp
