@@ -44,6 +44,7 @@ add_executable(hcu
     switch/hcu_nx_main.cpp
     src/crt_native.cpp
     src/prolog_native.cpp
+    src/frame_meter.cpp
     src/gpu_fence_wait.cpp
 )
 rexglue_setup_target(hcu GPU_PLUGINS xenos)

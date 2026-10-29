@@ -33,6 +33,7 @@
         total_us += us;
         if (us > max_us) max_us = us;
         if (us > 5000) ++over5;
+        __atomic_fetch_add(&rex_nx_audio_cb_us, us, __ATOMIC_RELAXED);
         if (t1 - last_print > std::chrono::seconds(5)) {
           last_print = t1;
           std::printf("[nx] audio client thread %zu: callbacks %llu, mean %llu us, max %llu us, %llu over 5 ms\n", (size_t)index,

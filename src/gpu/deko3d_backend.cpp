@@ -394,6 +394,9 @@ DkImageSwizzle SwizzleOf(uint32_t s) {
 // viewport at the bottom-left corner. The file overlay_off next to the shader dir hides it.
 #ifdef __SWITCH__
 extern "C" const char* rex_nx_version(void);
+// The CPU-work meter (hcu src/frame_meter.cpp): this thread's blocked time per swap, and the strip text.
+extern "C" void rex_nx_meter_cp_swap(uint64_t block_us_total);
+extern "C" char rex_nx_meter_text[48];
 #else
 // The Linux test host has no libnx: nanosecond ticks and no version string.
 #include <chrono>
@@ -402,7 +405,7 @@ static inline uint64_t armGetSystemTickFreq() { return 1000000000ull; }
 static inline const char* rex_nx_version() { return "linux"; }
 #endif
 
-constexpr uint32_t kOverlayW = 512, kOverlayH = 20, kOverlayScale = 2;
+constexpr uint32_t kOverlayW = 768, kOverlayH = 20, kOverlayScale = 2;
 
 struct Glyph {
   char ch;
@@ -1066,8 +1069,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (!overlay_[frame_]) overlay_[frame_] = CreateImage(kOverlayW, kOverlayH, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
       overlay = overlay_[frame_];
       if (overlay) {
-        char text[64];
-        std::snprintf(text, sizeof(text), "HCU %s  %u.%u fps", rex_nx_version(), fps_x10_ / 10, fps_x10_ % 10);
+        char text[96];
+        std::snprintf(text, sizeof(text), "HCU %s  %u.%u fps  %s", rex_nx_version(), fps_x10_ / 10, fps_x10_ % 10, rex_nx_meter_text);
         if (std::strcmp(text, overlay_text_) != 0) {
           RenderOverlayText(overlay_px_.data(), text);
           std::memcpy(overlay_text_, text, sizeof(overlay_text_));
@@ -1091,6 +1094,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     int slot;
     {
       ScopedUs timer(us_acquire_);
+      ScopedUs meter(meter_block_us_);
       slot = dkQueueAcquireImage(queue_, swapchain_);
     }
     if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
@@ -1191,6 +1195,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
             w && h ? px[(h / 2) * w + w / 2] : 0, w && h ? px[(3 * h / 4) * w + 3 * w / 4] : 0, w && h ? px[(h - 1) * w + w - 1] : 0);
       }
     }
+    rex_nx_meter_cp_swap(meter_block_us_);
     swaps_++;
     if (swaps_ <= 3 || swaps_ % 60 == 0) {
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
@@ -1269,6 +1274,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       DkResult r;
       {
         ScopedUs timer(us_fence_);
+        ScopedUs meter(meter_block_us_);
         r = dkFenceWait(&f.fence, 2000000000ll);  // 2 s: a hang is logged, not silent
       }
       if (r != DkResult_Success) Log("frame %u: fence wait result %d (GPU hang?)", frame_, int(r));
@@ -2118,11 +2124,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
   float z_bias_ = -16.f;
   bool overlay_on_ = true;
   HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
-  char overlay_text_[64] = {};
+  char overlay_text_[96] = {};
   uint64_t fps_tick_ = 0;
   uint32_t fps_frames_ = 0, fps_x10_ = 0;
   std::vector<uint32_t> overlay_px_ = std::vector<uint32_t>(kOverlayW * kOverlayH);
   bool always_upload_ = false;
+  uint64_t meter_block_us_ = 0;  // fence wait + acquire, never reset (the CPU-work meter)
   uint64_t us_draw_ = 0, us_copy_ = 0, us_fence_ = 0, us_acquire_ = 0, us_submit_ = 0;  // ScopedUs counters of the 60-swap log
   uint32_t depth_resolves_ = 0;  // depth resolves so far (MergeDepthPieces looks again when it changed)
   std::string shader_dir_;
