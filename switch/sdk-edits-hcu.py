@@ -182,3 +182,84 @@ edit('src/codegen/builders/context.cpp', [
      '          name.find("vmx") == std::string::npos) {' + NL),
 ])
 print('changed (hcu vector registers in ctx):', *changed, sep=NL + '  ')
+
+# WaitMultiple (several handles) polled every 1 ms and slept the rest of a slice in whole milliseconds:
+# below 1 ms that is sleep_for(0), a spin. Alertable waits come in 1 ms slices, so an alertable wait on
+# several handles spun all the time (the audio worker's WaitAny: 75-80 % of core 2 on the console, 0.191;
+# the guest calls KeWaitForMultipleObjects ~1100 times a second). Now every signal (each cond_.notify_all)
+# bumps a generation and wakes the multi-waiters, which sleep until it changes, at most 1 ms (a fallback poll).
+_tp = os.path.join(SDK, 'src/core/threading_posix.cpp')
+_s = open(_tp, encoding='utf-8').read()
+if 'RexNotifyMultiWait' not in _s:
+    def _once(src, old, new):
+        assert src.count(old) == 1, 'threading_posix.cpp anchor: ' + old[:50]
+        return src.replace(old, new, 1)
+    _s = _s.replace('cond_.notify_all();', 'cond_.notify_all(); RexNotifyMultiWait();')
+    _s = _once(_s, NL + 'class PosixConditionBase {' + NL,
+               NL + '// hcu-edits: WaitMultiple sleeps until any handle is signaled (see switch/sdk-edits-hcu.py).' + NL +
+               'static std::atomic<uint64_t> rex_multi_wait_gen{0};' + NL +
+               'static std::atomic<int> rex_multi_waiters{0};' + NL +
+               'static std::mutex rex_multi_wait_mutex;' + NL +
+               'static std::condition_variable rex_multi_wait_cv;' + NL +
+               'static inline void RexNotifyMultiWait() {' + NL +
+               '  rex_multi_wait_gen.fetch_add(1);' + NL +
+               '  if (rex_multi_waiters.load() > 0) {' + NL +
+               '    std::lock_guard<std::mutex> lock(rex_multi_wait_mutex);' + NL +
+               '    rex_multi_wait_cv.notify_all();' + NL +
+               '  }' + NL + '}' + NL + NL +
+               'class PosixConditionBase {' + NL)
+    _s = _once(_s, '    while (true) {' + NL + '      size_t first_signaled = std::numeric_limits<size_t>::max();' + NL,
+               '    while (true) {' + NL + '      const uint64_t multi_gen = rex_multi_wait_gen.load();' + NL +
+               '      size_t first_signaled = std::numeric_limits<size_t>::max();' + NL)
+    _s = _once(_s,
+               '      if (infinite_timeout) {' + NL +
+               '        std::this_thread::sleep_for(std::chrono::milliseconds(1));' + NL +
+               '      } else {' + NL +
+               '        auto now = std::chrono::steady_clock::now();' + NL +
+               '        if (now >= end_time) {' + NL +
+               '          return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
+               '        }' + NL +
+               '        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);' + NL +
+               '        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));' + NL +
+               '        std::this_thread::sleep_for(sleep_time);' + NL +
+               '      }' + NL,
+               '      auto now = std::chrono::steady_clock::now();' + NL +
+               '      if (!infinite_timeout && now >= end_time) {' + NL +
+               '        return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);' + NL +
+               '      }' + NL +
+               '      auto until = now + std::chrono::milliseconds(1);' + NL +
+               '      if (!infinite_timeout && end_time < until) until = end_time;' + NL +
+               '      rex_multi_waiters.fetch_add(1);' + NL +
+               '      {' + NL +
+               '        std::unique_lock<std::mutex> lock(rex_multi_wait_mutex);' + NL +
+               '        rex_multi_wait_cv.wait_until(lock, until, [&] { return rex_multi_wait_gen.load() != multi_gen; });' + NL +
+               '      }' + NL +
+               '      rex_multi_waiters.fetch_sub(1);' + NL)
+    open(_tp, 'w', encoding='utf-8', newline=NL).write(_s)
+    changed.append('src/core/threading_posix.cpp')
+
+# Switch audio (from gh-recomp, docs/SWITCH-AUDIO.md there): one host thread per guest audio client
+# (switch/audio_client_threads.inc) instead of the single audio worker running every guest callback in turn;
+# the worker itself only waits for the shutdown event.
+_inc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'audio_client_threads.inc'), encoding='utf-8').read()
+edit('src/audio/audio_system.cpp', [
+    ('namespace rex::audio {' + NL,
+     'namespace rex::audio {' + NL + '#if REX_PLATFORM_SWITCH' + NL +
+     'static system::KernelState* hcu_kernel_state = nullptr;' + NL + 'static uint32_t hcu_client_gen[8];' + NL + '#endif' + NL),
+    ('X_STATUS AudioSystem::Setup(system::KernelState* kernel_state) {' + NL,
+     'X_STATUS AudioSystem::Setup(system::KernelState* kernel_state) {' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL + '  hcu_kernel_state = kernel_state;' + NL + '#endif' + NL),
+    ('  clients_[index] = {driver, callback, callback_arg, ptr, true};' + NL,
+     '  clients_[index] = {driver, callback, callback_arg, ptr, true};' + NL + _inc),
+    ('  clients_[index] = {nullptr, 0, 0, 0, false};' + NL,
+     '  clients_[index] = {nullptr, 0, 0, 0, false};' + NL + '#if REX_PLATFORM_SWITCH' + NL +
+     '  ++hcu_client_gen[index];' + NL + '#endif' + NL),
+    ('  while (worker_running_) {' + NL,
+     '  while (worker_running_) {' + NL + '#if REX_PLATFORM_SWITCH  // hcu-edits: the clients have their own threads' + NL +
+     '    rex::thread::Wait(shutdown_event_.get(), true, std::chrono::milliseconds(500));' + NL +
+     '    continue;' + NL + '#endif' + NL),
+    ('#include <rex/audio/audio_system.h>' + NL + '#include <rex/audio/flags.h>' + NL,
+     '#include <rex/audio/audio_system.h>' + NL + '#include <chrono>' + NL + '#include <memory>' + NL +
+     '#include <string>' + NL + '#include <rex/audio/flags.h>' + NL),
+])
+print('changed (hcu wait wake, audio client threads):', *changed, sep=NL + '  ')

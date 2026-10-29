@@ -47,7 +47,19 @@ class NxAudoutDriver : public AudioDriver {
 
   void SubmitFrame(uint32_t frame_ptr) override {
     const float* in = memory_->TranslateVirtual<const float*>(frame_ptr);
+    const uint64_t now = armGetSystemTick();
     std::lock_guard<std::mutex> lock(mutex_);
+    if (last_release_) {  // release -> next submit: how long the guest took to answer
+      const uint64_t us = (now - last_release_) * 1000000 / armGetSystemTickFreq();
+      lat_sum_us_ += us;
+      ++lat_n_;
+      lat_max_us_ = std::max(lat_max_us_, us);
+      if (us > 10000) ++lat_slow_;
+      int b = 0;
+      while (b < 7 && us >= kBounds[b] * 1000) ++b;
+      ++hist_[b];
+      last_release_ = 0;
+    }
     if (count_ == kNxRing) {  // never happens with the semaphore in place; keep the newest if it does
       head_ = (head_ + 1) % kNxRing;
       --count_;
@@ -62,10 +74,19 @@ class NxAudoutDriver : public AudioDriver {
   bool Pop(float* out) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (count_ == 0) return false;
+      if (count_ == 0) {
+        if (submitted_ > 16) ++empty_pops_;  // this client had no frame while the device wanted one
+        min_depth_ = 0;
+        return false;
+      }
       std::memcpy(out, ring_[head_], sizeof(float) * kNxFrameFloats);
       head_ = (head_ + 1) % kNxRing;
       --count_;
+      min_depth_ = std::min(min_depth_, count_);
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!last_release_) last_release_ = armGetSystemTick();
     }
     semaphore_->Release(1, nullptr);  // the frame is "played": the audio worker asks the guest for the next
     return true;
@@ -76,6 +97,25 @@ class NxAudoutDriver : public AudioDriver {
     dropped = dropped_;
     depth = count_;
   }
+  // One log line for this client since the last call: empty pops, lowest queue depth, answer-time histogram (ms).
+  void TakeReport(int id, char* buf, size_t n) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::snprintf(buf, n,
+                  "[nx] audio client %d: submitted %llu, empty pops %llu, queue min %u, answer ms <2:%u <5:%u <10:%u <20:%u <40:%u <80:%u <160:%u more:%u, max %llu us\n",
+                  id, (unsigned long long)submitted_, (unsigned long long)empty_pops_, min_depth_, hist_[0], hist_[1],
+                  hist_[2], hist_[3], hist_[4], hist_[5], hist_[6], hist_[7], (unsigned long long)lat_max_us_);
+    empty_pops_ = 0;
+    min_depth_ = count_;
+    std::memset(hist_, 0, sizeof(hist_));
+  }
+  // Guest answer time (semaphore release -> next frame) since the last call: mean, max (us), answers over 10 ms.
+  void TakeLatency(uint64_t& mean_us, uint64_t& max_us, uint64_t& slow) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    mean_us = lat_n_ ? lat_sum_us_ / lat_n_ : 0;
+    max_us = lat_max_us_;
+    slow = lat_slow_;
+    lat_sum_us_ = lat_n_ = lat_max_us_ = lat_slow_ = 0;
+  }
 
  private:
   rex::thread::Semaphore* semaphore_;
@@ -83,6 +123,10 @@ class NxAudoutDriver : public AudioDriver {
   float ring_[kNxRing][kNxFrameFloats];
   uint32_t head_ = 0, count_ = 0;
   uint64_t submitted_ = 0, dropped_ = 0;
+  static constexpr uint64_t kBounds[7] = {2, 5, 10, 20, 40, 80, 160};
+  uint32_t hist_[8] = {}, min_depth_ = kNxRing;
+  uint64_t empty_pops_ = 0;
+  uint64_t last_release_ = 0, lat_sum_us_ = 0, lat_n_ = 0, lat_max_us_ = 0, lat_slow_ = 0;
 };
 
 class NxAudout {
@@ -145,8 +189,9 @@ class NxAudout {
   }
 
   void Log() {
-    uint64_t submitted = 0, dropped = 0, s, d;
+    uint64_t submitted = 0, dropped = 0, s, d, lat_mean = 0, lat_max = 0, lat_slow = 0, m, x, sl;
     uint32_t depth = 0, dp;
+    int client_no = 0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       for (NxAudoutDriver* drv : drivers_) {
@@ -154,13 +199,28 @@ class NxAudout {
         submitted += s;
         dropped += d;
         depth += dp;
+        char line[400];
+        drv->TakeReport(++client_no, line, sizeof(line));
+        std::fputs(line, stdout);
+        drv->TakeLatency(m, x, sl);
+        lat_mean = std::max(lat_mean, m);
+        lat_max = std::max(lat_max, x);
+        lat_slow += sl;
       }
     }
-    std::printf("[nx] audio: submitted %llu consumed %llu frames, underruns %llu, dropped %llu, queue %u, peak %.3f%s\n",
+    std::printf("[nx] audio: submitted %llu consumed %llu frames, underruns %llu, dropped %llu, queue %u, peak %.3f, guest answer mean %llu max %llu us, %llu over 10 ms%s\n",
                 (unsigned long long)submitted, (unsigned long long)consumed_, (unsigned long long)underruns_,
-                (unsigned long long)dropped, depth, peak_, muted_ ? " (muted)" : "");
+                (unsigned long long)dropped, depth, peak_, (unsigned long long)lat_mean, (unsigned long long)lat_max,
+                (unsigned long long)lat_slow, muted_ ? " (muted)" : "");
     std::fflush(stdout);
     peak_ = 0.f;
+    std::printf("[nx] audio device: buffer returns %u, ms between them <10:%u <16:%u <20:%u <24:%u <32:%u <48:%u more:%u, max %.1f; released together %u, wait timeouts %u; fill max %llu us\n",
+                returns_, ret_hist_[0], ret_hist_[1], ret_hist_[2], ret_hist_[3], ret_hist_[4], ret_hist_[5],
+                ret_hist_[6], ret_max_us_ / 1000.0, together_, timeouts_, (unsigned long long)fill_max_us_);
+    std::fflush(stdout);
+    returns_ = together_ = timeouts_ = 0;
+    ret_max_us_ = fill_max_us_ = 0;
+    std::memset(ret_hist_, 0, sizeof(ret_hist_));
   }
 
   void Run() {
@@ -196,9 +256,24 @@ class NxAudout {
       AudioOutBuffer* released = nullptr;
       u32 count = 0;
       Result rc = audoutWaitPlayFinish(&released, &count, 100'000'000ULL);
+      const uint64_t t0 = armGetSystemTick();
       if (R_SUCCEEDED(rc) && released && count) {  // the first released buffer; more come back on the next wait
+        if (last_return_) {  // device view: time between two returned buffers (nominal 21.3 ms)
+          const uint64_t us = (t0 - last_return_) * 1000000 / armGetSystemTickFreq();
+          static const uint64_t bounds[6] = {10000, 16000, 20000, 24000, 32000, 48000};
+          int b = 0;
+          while (b < 6 && us >= bounds[b]) ++b;
+          ++ret_hist_[b];
+          ret_max_us_ = std::max<uint64_t>(ret_max_us_, us);
+        }
+        last_return_ = t0;
+        ++returns_;
+        if (count > 1) ++together_;
         Fill(*released);
         audoutAppendAudioOutBuffer(released);
+        fill_max_us_ = std::max<uint64_t>(fill_max_us_, (armGetSystemTick() - t0) * 1000000 / armGetSystemTickFreq());
+      } else {
+        ++timeouts_;
       }
       const uint64_t now = armGetSystemTick();
       if (now - last_log > 5 * armGetSystemTickFreq()) {
@@ -211,7 +286,8 @@ class NxAudout {
   std::mutex mutex_;
   std::vector<NxAudoutDriver*> drivers_;
   bool started_ = false, started_playing_ = false, muted_ = false;
-  uint64_t consumed_ = 0, underruns_ = 0;
+  uint64_t consumed_ = 0, underruns_ = 0, last_return_ = 0, ret_max_us_ = 0, fill_max_us_ = 0;
+  uint32_t returns_ = 0, together_ = 0, timeouts_ = 0, ret_hist_[7] = {};
   float peak_ = 0.f;
 };
 

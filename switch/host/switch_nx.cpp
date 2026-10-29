@@ -227,9 +227,9 @@ struct SampledThread {
     u32 samples, outside, failed;
     Result last_rc;
 };
-// The main thread, the command processor, the audio worker and the game's first six other threads
+// The main thread, the command processor, the first audio client thread and the game's first six other threads
 // (named "XThread..." by the SDK): a loader thread that goes silent shows where it sits.
-SampledThread sampled[9] = {{"Main XThread", 0}, {"GPU Commands", 0}, {"Audio Worker", 0}, {"XThread", 0},
+SampledThread sampled[9] = {{"Main XThread", 0}, {"GPU Commands", 0}, {"Audio Client", 0}, {"XThread", 0},
                             {"XThread", 1},      {"XThread", 2},      {"XThread", 3},      {"XThread", 4},
                             {"XThread", 5}};
 Thread sampler_thread;
@@ -536,6 +536,7 @@ const Placement placements[] = {
     {"GPU Commands", 0x28, 1, 0x2},
     {"GPU VSync", 0x27, 2, 0x4},
     {"Audio Worker", 0x2A, 2, 0x4},
+    {"Audio Client", 0x2A, 1, 0x6},  // one per guest audio client (the SDK edit in sdk-edits-hcu.py)
     {"XMA", 0x2B, 2, 0x4},
     {"XThread", 0x3B, 1, 0x6},  // the game's other threads, time-sliced on cores 1-2
 };
