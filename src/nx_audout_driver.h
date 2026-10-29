@@ -1,10 +1,13 @@
 // Nintendo Switch audio driver for the ReXGlue audio system: libnx audout (48 kHz, stereo, s16).
 // From gh-recomp (Guardian Heroes, ours). Copied into the SDK tree (src/audio/nop/) by switch/sdk-edits-hcu.py and included by nop_audio_system.cpp
 // on __SWITCH__ builds. The guest's 5.1 float frames (256 samples, big endian) are folded to stereo with the
-// SDK's own mix, converted to s16 and played in 2 audout buffers of 1024 samples (21 ms each). The device's own
-// clock paces everything: a frame counts as consumed when it goes into an audout buffer, and only then the
-// client's semaphore is released, so the guest's audio clock runs at the real device rate. An empty queue plays
-// silence (underrun counter). Latency = audio_maxqframes (6 -> 32 ms) + one audout buffer in flight (21 ms).
+// SDK's own mix, converted to s16 and played in 6 audout buffers of one guest frame each (5.33 ms). The device's
+// own clock paces everything: a frame counts as consumed when it goes into an audout buffer, and only then the
+// client's semaphore is released, so the guest's audio clock runs at the real device rate, one frame at a time
+// like the Xbox 360 (with 1024-sample buffers the guest got 4 releases at once every 21 ms, and its callbacks
+// handed over buffers its mixer had not refilled yet: 16 % of the frames were the audio of 4 frames earlier,
+// hcu 0.203 capture). An empty queue plays silence (underrun counter). Latency = audio_maxqframes (6 -> 32 ms)
+// + the buffers in flight (32 ms).
 // One output thread serves all drivers (the guest registers and re-registers clients; audout opens once).
 #pragma once
 
@@ -35,9 +38,9 @@ class NxAudoutDriver;
 
 constexpr uint32_t kNxChannelSamples = 256;                 // per guest frame and channel
 constexpr uint32_t kNxFrameFloats = 6 * kNxChannelSamples;  // 5.1, sequential, big endian
-constexpr uint32_t kNxBufferSamples = 1024;                 // per audout buffer (4096 bytes)
+constexpr uint32_t kNxBufferSamples = 256;                  // per audout buffer: one guest frame (1024 bytes)
 constexpr uint32_t kNxFramesPerBuffer = kNxBufferSamples / kNxChannelSamples;
-constexpr uint32_t kNxBuffers = 2;
+constexpr uint32_t kNxBuffers = 6;
 constexpr uint32_t kNxRing = 16;
 
 class NxAudoutDriver : public AudioDriver {
@@ -254,7 +257,7 @@ class NxAudout {
                 (unsigned long long)lat_slow, muted_ ? " (muted)" : "");
     std::fflush(stdout);
     peak_ = 0.f;
-    std::printf("[nx] audio device: buffer returns %u, ms between them <10:%u <16:%u <20:%u <24:%u <32:%u <48:%u more:%u, max %.1f; released together %u, wait timeouts %u; fill max %llu us\n",
+    std::printf("[nx] audio device: buffer returns %u, ms between them <2:%u <4:%u <5:%u <6:%u <8:%u <12:%u more:%u, max %.1f; released together %u, wait timeouts %u; fill max %llu us\n",
                 returns_, ret_hist_[0], ret_hist_[1], ret_hist_[2], ret_hist_[3], ret_hist_[4], ret_hist_[5],
                 ret_hist_[6], ret_max_us_ / 1000.0, together_, timeouts_, (unsigned long long)fill_max_us_);
     std::fflush(stdout);
@@ -298,9 +301,9 @@ class NxAudout {
       Result rc = audoutWaitPlayFinish(&released, &count, 100'000'000ULL);
       const uint64_t t0 = armGetSystemTick();
       if (R_SUCCEEDED(rc) && released && count) {  // the first released buffer; more come back on the next wait
-        if (last_return_) {  // device view: time between two returned buffers (nominal 21.3 ms)
+        if (last_return_) {  // device view: time between two returned buffers (nominal 5.33 ms)
           const uint64_t us = (t0 - last_return_) * 1000000 / armGetSystemTickFreq();
-          static const uint64_t bounds[6] = {10000, 16000, 20000, 24000, 32000, 48000};
+          static const uint64_t bounds[6] = {2000, 4000, 5000, 6000, 8000, 12000};
           int b = 0;
           while (b < 6 && us >= bounds[b]) ++b;
           ++ret_hist_[b];
@@ -311,6 +314,15 @@ class NxAudout {
         if (count > 1) ++together_;
         Fill(*released);
         audoutAppendAudioOutBuffer(released);
+        // The wait hands back one buffer; the others the device finished meanwhile come back here, at once.
+        for (;;) {
+          AudioOutBuffer* more = nullptr;
+          u32 n = 0;
+          if (R_FAILED(audoutGetReleasedAudioOutBuffer(&more, &n)) || !n || !more) break;
+          ++together_;
+          Fill(*more);
+          audoutAppendAudioOutBuffer(more);
+        }
         fill_max_us_ = std::max<uint64_t>(fill_max_us_, (armGetSystemTick() - t0) * 1000000 / armGetSystemTickFreq());
       } else {
         ++timeouts_;
