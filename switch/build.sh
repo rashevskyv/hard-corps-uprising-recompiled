@@ -43,10 +43,10 @@ python3 "$SRC/switch/sdk-edits.py" "$SDK" > /dev/null
 python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
 echo "$EDITS_STAMP" > "$SDK/.hcu-edits-stamp"
 # The CLI embeds the codegen templates: a template edit needs `cmake --build ... --target rexglue`.
-# Generated code depends on the manifest and its config includes: regenerate when they change.
+# Generated code depends on the manifest, its config includes and the SDK edits (codegen rules): regenerate when they change.
 # The CLI embeds the codegen templates (the pch): rebuild it after the SDK edits, and regenerate when the template changed.
 cmake --build "$SDK/out/build/linux-amd64" --config Release --target rexglue > "$ROOT/cli-build.log" 2>&1 || { tail -20 "$ROOT/cli-build.log"; exit 1; }
-CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$SDK/resources/templates/codegen/pch_h.inja" | sha1sum | cut -c1-40)
+CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$SDK/resources/templates/codegen/pch_h.inja" "$SRC/switch/sdk-edits.py" "$SRC/switch/sdk-edits-hcu.py" | sha1sum | cut -c1-40)
 if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.hcu-codegen-stamp" 2>/dev/null)" != "$CG_STAMP" ]; then
     (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1)         || { tail -20 "$ROOT/codegen.log"; exit 1; }
     echo "$CG_STAMP" > "$SRC/generated/.hcu-codegen-stamp"

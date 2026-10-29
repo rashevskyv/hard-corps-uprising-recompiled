@@ -166,3 +166,19 @@ edit('include/rex/hook.h', [
      '    rex::ppc::HostToGuestFunction<function>(ctx, base); \\' + NL + '  }' + NL),
 ])
 print('changed (hcu hook counters):', *changed, sep=NL + '  ')
+
+# non_volatile_as_local keeps the vector registers in ctx: the XMV movie decoder swaps all 128 of them
+# (sub_82B8AEA0 / sub_82B8B1E8: store to one buffer, load v64-v127 from a constant table) and its
+# routines read those constants as live-ins. As locals they were zero: the intro movie broke into
+# colour stripes (0.191). With v14-v31 and v64-v127 in ctx, the __savevmx/__restvmx calls must stay.
+edit('src/codegen/builders/context.cpp', [
+    ('  if ((cfg.nonArgumentRegistersAsLocalVariables && (index >= 32 && index <= 63)) ||' + NL +
+     '      (localizeNonVolatiles() && ((index >= 14 && index <= 31) || (index >= 64 && index <= 127)))) {' + NL,
+     '  if (cfg.nonArgumentRegistersAsLocalVariables && (index >= 32 && index <= 63)) {' + NL),
+    ('      if (cfg.nonVolatileRegistersAsLocalVariables &&' + NL +
+     '          (name.find("__rest") == 0 || name.find("__save") == 0)) {' + NL,
+     '      if (cfg.nonVolatileRegistersAsLocalVariables &&' + NL +
+     '          (name.find("__rest") == 0 || name.find("__save") == 0) &&' + NL +
+     '          name.find("vmx") == std::string::npos) {' + NL),
+])
+print('changed (hcu vector registers in ctx):', *changed, sep=NL + '  ')

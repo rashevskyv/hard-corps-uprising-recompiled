@@ -6,7 +6,7 @@ game_root = "game/extracted"
 [entrypoint]
 file_path = "game/extracted/default.xex"
 out_directory_path = "generated/default"
-# Codegen flags: registers as locals (only [entrypoint] is read). non_argument + non_volatile together hung the game after the first shaders (0.174); 0.191 tries non_volatile alone.
+# Codegen flags: registers as locals (only [entrypoint] is read). non_argument + non_volatile together hung the game after the first shaders (0.174). non_volatile alone (0.191) broke the intro movie: switch/sdk-edits-hcu.py keeps the vector registers in ctx, only r14-r31 and f14-f31 are locals.
 cr_as_local = true
 ctr_as_local = true
 xer_as_local = true
