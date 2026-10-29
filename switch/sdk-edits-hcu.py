@@ -268,8 +268,8 @@ print('changed (hcu frame-time spread):', *changed, sep=NL + '  ')
 # The CPU-work meter (src/frame_meter.cpp): the command processor's waits as one monotonic tick count
 # (its idle wait for the write pointer and its WAIT_REG_MEM polls), on the Switch and the Linux test host.
 edit('src/graphics/command_processor.cpp', [
-    ('CpStats cp_stats;' + NL,
-     'CpStats cp_stats;' + NL + 'extern "C" volatile uint64_t rex_nx_cp_wait_ticks;  // hcu src/frame_meter.cpp' + NL),
+    ('#include <rex/graphics/guest_wake.h>' + NL,
+     '#include <rex/graphics/guest_wake.h>' + NL + 'extern "C" volatile uint64_t rex_nx_cp_wait_ticks;  // hcu src/frame_meter.cpp' + NL),
     ('    if (freq) cp_stats.wait_poll_ns += (rex::chrono::Clock::QueryHostTickCount() - nx_wait_start) * 1000000000ull / freq;' + NL,
      '    if (freq) cp_stats.wait_poll_ns += (rex::chrono::Clock::QueryHostTickCount() - nx_wait_start) * 1000000000ull / freq;' + NL +
      '    rex_nx_cp_wait_ticks += rex::chrono::Clock::QueryHostTickCount() - nx_wait_start;' + NL),
