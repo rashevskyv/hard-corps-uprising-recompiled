@@ -56,7 +56,7 @@ edit('src/graphics/guest_wake.cpp', [
 ])
 
 # WAIT_REG_MEM statistics (the `[nx] gpu waits` line of switch_nx.cpp) on HCU's 0003/0025 wait: the
-# 16 yield re-polls, then a 1 ms wait on the vblank event. Edit 21 above anchors on the stock sleep
+# 16 yield re-polls, then (Switch) 100 us sleeps instead of a 1 ms wait on the vblank event. Edit 21 above anchors on the stock sleep
 # (its extern declarations still apply).
 edit('src/graphics/command_processor.cpp', [
     ('          rex::thread::Wait(guest_progress_event_.get(), false, std::chrono::milliseconds(1));' + NL,
@@ -64,9 +64,13 @@ edit('src/graphics/command_processor.cpp', [
      '          rex_nx_wait_polls++;' + NL + '          rex_nx_wait_sleep_ms += wait / 0x100;' + NL +
      '          const uint64_t nx_t0 = rex::chrono::Clock::QueryHostTickCount();' + NL +
      '#endif' + NL +
-     '          rex::thread::Wait(guest_progress_event_.get(), false, std::chrono::milliseconds(1));' + NL +
-     '#if REX_PLATFORM_SWITCH' + NL +
+     '          // 100 us, not 1 ms on the event: only vblank sets it, not the guest store the packet waits for,' + NL +
+     '          // so the command processor slept ~470 ms a second in 1 ms slices (hcu 0.201 console: about' + NL +
+     '          // 1000 sleeping polls per 2 s) while the main thread waited for it in the ring.' + NL +
+     '          rex::thread::Sleep(std::chrono::microseconds(100));' + NL +
      '          rex_nx_wait_slept_ticks += rex::chrono::Clock::QueryHostTickCount() - nx_t0;' + NL +
+     '#else' + NL +
+     '          rex::thread::Wait(guest_progress_event_.get(), false, std::chrono::milliseconds(1));' + NL +
      '#endif' + NL),
     ('          rex::thread::MaybeYield();' + NL + '          ++unmatched_poll_count;' + NL,
      '#if REX_PLATFORM_SWITCH' + NL + '          rex_nx_wait_yields++;' + NL + '#endif' + NL +
