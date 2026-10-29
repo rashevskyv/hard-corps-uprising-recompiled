@@ -392,11 +392,11 @@ DkImageSwizzle SwizzleOf(uint32_t s) {
 // Every build shows its version on screen (and the fps). There is no ImGui under deko3d: a 5x7 bitmap font
 // rendered on the CPU into a small RGBA image per frame in flight, drawn with the present shaders into a
 // viewport at the bottom-left corner. The file overlay_off next to the shader dir hides it.
-#ifdef __SWITCH__
-extern "C" const char* rex_nx_version(void);
-// The CPU-work meter (hcu src/frame_meter.cpp): this thread's blocked time per swap, and the strip text.
+// The CPU-work meter (hcu src/frame_meter.cpp, Switch and Linux): this thread's blocked time per swap, and the strip text.
 extern "C" void rex_nx_meter_cp_swap(uint64_t block_us_total);
 extern "C" char rex_nx_meter_text[48];
+#ifdef __SWITCH__
+extern "C" const char* rex_nx_version(void);
 #else
 // The Linux test host has no libnx: nanosecond ticks and no version string.
 #include <chrono>
