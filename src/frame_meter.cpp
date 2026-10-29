@@ -58,11 +58,13 @@ void Report(uint64_t now) {
   const uint64_t audio_us = __atomic_load_n(&rex_nx_audio_cb_us, __ATOMIC_RELAXED);
   const double audio_ms = g_frames ? double(audio_us - g_audio_last_us) / 1000.0 / g_frames : 0.0;
   g_audio_last_us = audio_us;
-  std::printf(
-      "[nx] cpu per frame (30 s, %u frames): main work p50 %.1f p95 %.1f p99 %.1f ms (waits p50 %.1f); gpu commands "
-      "work p50 %.1f p95 %.1f p99 %.1f ms; audio %.2f ms\n",
-      g_main_work.n, g_main_work.Pct(0.5), g_main_work.Pct(0.95), g_main_work.Pct(0.99), g_main_wait.Pct(0.5),
-      g_cp_work.Pct(0.5), g_cp_work.Pct(0.95), g_cp_work.Pct(0.99), audio_ms);
+  char cp[96] = "gpu commands work - (no swaps from this backend)";
+  if (g_cp_work.n)
+    std::snprintf(cp, sizeof(cp), "gpu commands work p50 %.1f p95 %.1f p99 %.1f ms", g_cp_work.Pct(0.5), g_cp_work.Pct(0.95),
+                  g_cp_work.Pct(0.99));
+  std::printf("[nx] cpu per frame (30 s, %u frames): main work p50 %.1f p95 %.1f p99 %.1f ms (waits p50 %.1f); %s; audio %.2f ms\n",
+              g_main_work.n, g_main_work.Pct(0.5), g_main_work.Pct(0.95), g_main_work.Pct(0.99), g_main_wait.Pct(0.5), cp,
+              audio_ms);
   std::fflush(stdout);
   std::snprintf(rex_nx_meter_text, sizeof(rex_nx_meter_text), "main %.1f:%.1f gpu %.1f:%.1f", g_main_work.Pct(0.5),
                 g_main_work.Pct(0.95), g_cp_work.Pct(0.5), g_cp_work.Pct(0.95));
