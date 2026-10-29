@@ -209,3 +209,31 @@ edit('src/audio/audio_system.cpp', [
      '#include <string>' + NL + '#include <rex/audio/flags.h>' + NL),
 ])
 print('changed (hcu audio client threads):', *changed, sep=NL + '  ')
+
+# Frame-time spread every 30 s next to the 1 s fps line (the target is a steady 60 fps, and a mean hides
+# the long frames): swap-to-swap time in 0.25 ms bins up to 100 ms, p50/p95/p99 and frames over 17/20/25/33 ms.
+edit('src/graphics/command_processor.cpp', [
+    ('      nx_frames++;' + NL,
+     '      nx_frames++;' + NL +
+     '      {' + NL +
+     '        static uint32_t nx_bins[401] = {};' + NL +
+     '        static uint64_t nx_spread_tick = 0;' + NL +
+     '        if (!nx_spread_tick) nx_spread_tick = now;' + NL +
+     '        nx_bins[std::min<uint64_t>(uint64_t(dt_us) / 250, 400)]++;' + NL +
+     '        if (now - nx_spread_tick >= 30 * freq) {' + NL +
+     '          uint64_t n = 0;' + NL +
+     '          for (uint32_t b : nx_bins) n += b;' + NL +
+     '          auto pct = [&](double p) {' + NL +
+     '            uint64_t want = uint64_t(p * double(n)), acc = 0;' + NL +
+     '            for (int i = 0; i <= 400; i++) { acc += nx_bins[i]; if (acc > want) return (i + 1) * 0.25; }' + NL +
+     '            return 100.0;' + NL +
+     '          };' + NL +
+     '          auto over = [&](int ms) { uint64_t c = 0; for (int i = ms * 4; i <= 400; i++) c += nx_bins[i]; return (unsigned long long)c; };' + NL +
+     '          std::printf("[nx] frame times (30 s, %llu frames): p50 %.2f p95 %.2f p99 %.2f ms; over 17 ms %llu, 20 ms %llu, 25 ms %llu, 33 ms %llu" "' + chr(92) + 'n",' + NL +
+     '                      (unsigned long long)n, pct(0.50), pct(0.95), pct(0.99), over(17), over(20), over(25), over(33));' + NL +
+     '          std::memset(nx_bins, 0, sizeof(nx_bins));' + NL +
+     '          nx_spread_tick = now;' + NL +
+     '        }' + NL +
+     '      }' + NL),
+])
+print('changed (hcu frame-time spread):', *changed, sep=NL + '  ')

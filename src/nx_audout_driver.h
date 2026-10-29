@@ -149,7 +149,46 @@ class NxAudout {
   }
 
  private:
-  NxAudout() { muted_ = access("sdmc:/switch/hcu/mute", F_OK) == 0; }
+  NxAudout() {
+    muted_ = access("sdmc:/switch/hcu/mute", F_OK) == 0;
+    // Debug: the file sdmc:/switch/hcu/audio_dump ("<start s> <seconds>", default "0 60") records the mixed
+    // stream at unit gain (also when muted) from that second of output on, written once to audio_dump.raw
+    // (s16 stereo, 48 kHz): gaps, jumps and repeated frames in what the guest delivered show there.
+    if (FILE* f = std::fopen("sdmc:/switch/hcu/audio_dump", "r")) {
+      double start = 0, secs = 60;
+      if (std::fscanf(f, "%lf %lf", &start, &secs) < 1) start = 0;
+      std::fclose(f);
+      cap_from_ = uint64_t(start * 48000);
+      cap_len_ = uint64_t(std::max(1.0, secs) * 48000);
+      cap_ = static_cast<int16_t*>(std::malloc(cap_len_ * 2 * sizeof(int16_t)));
+      if (!cap_) cap_len_ = 0;
+      std::printf("[nx] audio: capture armed: %llu samples from sample %llu%s\n", (unsigned long long)cap_len_,
+                  (unsigned long long)cap_from_, cap_ ? "" : " (no memory: off)");
+      std::fflush(stdout);
+    }
+  }
+
+  // The capture (see the constructor): samples of the stream from cap_from_, cap_len_ of them, then one write.
+  void Capture(const float* mix) {
+    const uint64_t at = out_samples_;
+    out_samples_ += kNxChannelSamples;
+    if (!cap_ || cap_done_ || at + kNxChannelSamples <= cap_from_) return;
+    for (uint32_t i = 0; i < kNxChannelSamples; ++i) {
+      const uint64_t s = at + i;
+      if (s < cap_from_ || s - cap_from_ >= cap_len_) continue;
+      for (uint32_t c = 0; c < 2; ++c)
+        cap_[(s - cap_from_) * 2 + c] = static_cast<int16_t>(std::clamp(mix[i * 2 + c], -1.0f, 1.0f) * 32767.0f);
+    }
+    if (at + kNxChannelSamples - cap_from_ >= cap_len_) {
+      cap_done_ = true;
+      FILE* f = std::fopen("sdmc:/switch/hcu/audio_dump.raw", "wb");
+      size_t n = f ? std::fwrite(cap_, sizeof(int16_t) * 2, cap_len_, f) : 0;
+      if (f) std::fclose(f);
+      std::printf("[nx] audio: capture of %llu samples from sample %llu written (%zu), sdmc:/switch/hcu/audio_dump.raw\n",
+                  (unsigned long long)cap_len_, (unsigned long long)cap_from_, n);
+      std::fflush(stdout);
+    }
+  }
 
   // One audout buffer: kNxFramesPerBuffer guest frames, mixed over all drivers (silence when none has a frame).
   void Fill(AudioOutBuffer& buf) {
@@ -166,9 +205,10 @@ class NxAudout {
       for (NxAudoutDriver* d : drivers_) {
         if (!d->Pop(frame)) continue;
         any = true;
-        conversion::sequential_6_BE_to_interleaved_2_LE(stereo, frame, kNxChannelSamples, fold, gain);
+        conversion::sequential_6_BE_to_interleaved_2_LE(stereo, frame, kNxChannelSamples, fold, 1.0f);
         for (uint32_t i = 0; i < kNxChannelSamples * 2; ++i) mix[i] += stereo[i];
       }
+      Capture(mix);
       int16_t* out = pcm + f * kNxChannelSamples * 2;
       if (!any) {
         std::memset(out, 0, sizeof(int16_t) * kNxChannelSamples * 2);
@@ -177,7 +217,7 @@ class NxAudout {
       }
       float peak = 0.f;
       for (uint32_t i = 0; i < kNxChannelSamples * 2; ++i) {
-        const float v = std::clamp(mix[i], -1.0f, 1.0f);
+        const float v = std::clamp(mix[i] * gain, -1.0f, 1.0f);
         peak = std::max(peak, std::fabs(v));
         out[i] = static_cast<int16_t>(v * 32767.0f);
       }
@@ -285,7 +325,9 @@ class NxAudout {
 
   std::mutex mutex_;
   std::vector<NxAudoutDriver*> drivers_;
-  bool started_ = false, started_playing_ = false, muted_ = false;
+  bool started_ = false, started_playing_ = false, muted_ = false, cap_done_ = false;
+  int16_t* cap_ = nullptr;
+  uint64_t cap_from_ = 0, cap_len_ = 0, out_samples_ = 0;
   uint64_t consumed_ = 0, underruns_ = 0, last_return_ = 0, ret_max_us_ = 0, fill_max_us_ = 0;
   uint32_t returns_ = 0, together_ = 0, timeouts_ = 0, ret_hist_[7] = {};
   float peak_ = 0.f;
