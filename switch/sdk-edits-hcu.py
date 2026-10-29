@@ -146,8 +146,9 @@ print('changed (hcu fold):', *changed, sep=NL + '  ')
 write('include/rex/nx_hook_counter.h',
       '#pragma once' + NL + '#include <cstdint>' + NL + '#include <cstring>' + NL +
       '// The CPU-work meter (hcu src/frame_meter.cpp): time in waiting exports, and VdSwap as the frame mark.' + NL +
-      'extern "C" uint64_t rex_nx_meter_enter();' + NL +
-      'extern "C" void rex_nx_meter_leave(uint64_t t0, int kind);' + NL +
+      '// Weak defaults for binaries without the meter (the SDK tool rexglue); frame_meter.cpp defines the real ones.' + NL +
+      'extern "C" __attribute__((weak)) uint64_t rex_nx_meter_enter() { return 0; }' + NL +
+      'extern "C" __attribute__((weak)) void rex_nx_meter_leave(uint64_t, int) {}' + NL +
       'namespace rex_nx {' + NL +
       'inline int HookKind(const char* s) {' + NL +
       '  static const char* const waits[] = {"__imp__KeWaitForSingleObject", "__imp__KeWaitForMultipleObjects",' + NL +
