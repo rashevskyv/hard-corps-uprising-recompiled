@@ -264,18 +264,19 @@ struct MainProfile {
     u64 key[8192];  // (pc - _start) >> 6, 0 = free
     u32 count[8192];
     u32 total;
-} main_prof;
+} main_prof, cp_prof;  // cp_prof: the GPU command thread the same way (its per-draw cost)
 
-void main_prof_add(u64 pc) {
+void prof_add(MainProfile& prof, u64 pc) {
     const u64 base = reinterpret_cast<u64>(&_start);
     if (pc < base || pc - base >= 0x10000000ull) return;
     const u64 key = ((pc - base) >> 6) + 1;
-    main_prof.total++;
+    prof.total++;
     for (u32 i = (u32)(key * 2654435761u) % 8192, n = 0; n < 64; i = (i + 1) % 8192, n++) {
-        if (main_prof.key[i] == key) { main_prof.count[i]++; return; }
-        if (main_prof.key[i] == 0) { main_prof.key[i] = key; main_prof.count[i] = 1; return; }
+        if (prof.key[i] == key) { prof.count[i]++; return; }
+        if (prof.key[i] == 0) { prof.key[i] = key; prof.count[i] = 1; return; }
     }
 }
+void main_prof_add(u64 pc) { prof_add(main_prof, pc); }
 
 // Main-thread samples that sit in svcArbitrateLock (a contended mutex, a quarter of the 0.201 profile):
 // the first return addresses of the frame chain (libnx mutexLock builds a frame record on its slow path),
@@ -322,12 +323,11 @@ void print_lock_chains() {
     }
 }
 
-void print_main_prof() {
-    print_lock_chains();
+void print_prof(MainProfile& prof, const char* who) {
     static MainProfile snap;
-    std::memcpy(&snap, &main_prof, sizeof(snap));
-    std::memset(&main_prof, 0, sizeof(main_prof));
-    std::printf("[prof] main thread, %u samples, top 300 buckets of 64 bytes (offset count):\n", snap.total);
+    std::memcpy(&snap, &prof, sizeof(snap));
+    std::memset(&prof, 0, sizeof(prof));
+    std::printf("[prof] %s, %u samples, top 300 buckets of 64 bytes (offset count):\n", who, snap.total);
     for (int top = 0; top < 300; top++) {
         u32 best = 0, best_count = 0;
         for (u32 i = 0; i < 8192; i++) {
@@ -337,6 +337,12 @@ void print_main_prof() {
         std::printf("[prof] +0x%llX %u\n", (unsigned long long)((snap.key[best] - 1) << 6), best_count);
         snap.key[best] = 0;
     }
+}
+
+void print_main_prof() {
+    print_lock_chains();
+    print_prof(main_prof, "main thread");
+    print_prof(cp_prof, "gpu commands thread");
 }
 
 // Calls per 30 s of the hooked guest functions and kernel exports (REX_HOOK counters, all threads).
@@ -364,7 +370,7 @@ void sampler_loop(void*) {
     for (unsigned iter = 0; sampler_running; iter++) {
         svcSleepThread(4'000'000LL);
         for (SampledThread& st : sampled) {
-            if (&st != &sampled[0] && iter % 3 != 0) continue;
+            if (&st != &sampled[0] && &st != &sampled[1] && iter % 3 != 0) continue;
             Handle handle = INVALID_HANDLE;
             mutexLock(&nx_threads_lock);
             int seen = 0;
@@ -391,6 +397,7 @@ void sampler_loop(void*) {
                 continue;
             }
             sample_pc(st, ctx.pc.x);
+            if (&st == &sampled[1]) prof_add(cp_prof, ctx.pc.x);
             if (&st == &sampled[0]) {
                 main_prof_add(ctx.pc.x);
                 const u64 lock_svc = reinterpret_cast<u64>(&svcArbitrateLock);
