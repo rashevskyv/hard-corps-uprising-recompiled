@@ -288,8 +288,8 @@ struct LockChains {
 
 void lock_chain_add(const ThreadContext& ctx) {
     const u64 base = reinterpret_cast<u64>(&_start);
-    const u64 sp = ctx.sp.x;
-    u64 fp = ctx.fp.x, ret[4] = {};
+    const u64 sp = ctx.sp;
+    u64 fp = ctx.fp, ret[4] = {};
     for (int i = 0; i < 4; i++) {
         // Only inside the paused thread's own stack, upward, 16-aligned: never chase a register value.
         if (fp < sp || fp >= sp + 0x40000 || (fp & 15) != 0) break;
