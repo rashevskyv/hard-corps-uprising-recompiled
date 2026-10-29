@@ -199,6 +199,7 @@ struct Frame {
   bool fenced = false;
   uint32_t next_descriptor = 0;
   std::unordered_map<uint64_t, uint32_t> descriptors;  // image (and swizzle) -> descriptor slot this frame
+  uint32_t ts_off = UINT32_MAX;  // two GPU timestamps (16 bytes each) in `data`: frame start, after the last barrier
 };
 
 struct SysConstants {
@@ -394,6 +395,7 @@ DkImageSwizzle SwizzleOf(uint32_t s) {
 // viewport at the bottom-left corner. The file overlay_off next to the shader dir hides it.
 // The CPU-work meter (hcu src/frame_meter.cpp, Switch and Linux): this thread's blocked time per swap, and the strip text.
 extern "C" void rex_nx_meter_cp_swap(uint64_t block_us_total);
+extern "C" void rex_nx_meter_gpu_frame(double ms);
 extern "C" char rex_nx_meter_text[48];
 #ifdef __SWITCH__
 extern "C" const char* rex_nx_version(void);
@@ -1168,6 +1170,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
       }
     }
     dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
+#ifdef __SWITCH__
+    if (f.ts_off != UINT32_MAX) dkCmdBufReportCounter(cmd, DkCounter_Timestamp, f.data.gpu + f.ts_off + 16);
+#endif
     DkCmdList list = dkCmdBufFinishList(cmd);
     {
       ScopedUs timer(us_submit_);
@@ -1280,7 +1285,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (r != DkResult_Success) Log("frame %u: fence wait result %d (GPU hang?)", frame_, int(r));
       if (swaps_ < 6) Log("frame %u: fence done", frame_);
       f.fenced = false;
+#ifdef __SWITCH__
+      // The GPU's own time for that frame (timestamps in GPU ticks, 625/384 ns each): the CPU-work meter's gpu line.
+      if (f.ts_off != UINT32_MAX) {
+        const uint64_t* t = reinterpret_cast<const uint64_t*>(f.data.cpu + f.ts_off);
+        if (t[1] && t[3] > t[1]) rex_nx_meter_gpu_frame(double(t[3] - t[1]) * 625.0 / 384.0 / 1e6);
+      }
+#endif
     }
+    f.ts_off = UINT32_MAX;
     f.data.Reset();
     f.staging.Reset();
     f.next_descriptor = 0;
@@ -1289,6 +1302,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufAddMemory(f.cmdbuf, cmdmem_.block, f.cmd_offset, kFrameCmdBytes);
     dkCmdBufBindImageDescriptorSet(f.cmdbuf, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
     dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
+#ifdef __SWITCH__
+    f.ts_off = f.data.Alloc(32, 16);
+    if (f.ts_off != UINT32_MAX) {
+      std::memset(f.data.cpu + f.ts_off, 0, 32);
+      dkCmdBufReportCounter(f.cmdbuf, DkCounter_Timestamp, f.data.gpu + f.ts_off);
+    }
+#endif
     bound_color_ = nullptr;
     bound_depth_ = nullptr;
   }

@@ -48,7 +48,7 @@ double ToMs(uint64_t ticks) { return double(ticks) * 1000.0 / double(rex::chrono
 thread_local int t_depth = 0;
 thread_local uint64_t t_wait_ticks = 0;
 
-Hist g_main_work, g_main_wait, g_cp_work;
+Hist g_main_work, g_main_wait, g_cp_work, g_gpu_frame;
 uint64_t g_main_last = 0, g_main_last_wait = 0, g_report_tick = 0;
 uint64_t g_cp_last = 0, g_cp_last_wait = 0, g_cp_last_block_us = 0;
 uint64_t g_audio_last_us = 0;
@@ -62,15 +62,22 @@ void Report(uint64_t now) {
   if (g_cp_work.n)
     std::snprintf(cp, sizeof(cp), "gpu commands work p50 %.1f p95 %.1f p99 %.1f ms", g_cp_work.Pct(0.5), g_cp_work.Pct(0.95),
                   g_cp_work.Pct(0.99));
-  std::printf("[nx] cpu per frame (30 s, %u frames): main work p50 %.1f p95 %.1f p99 %.1f ms (waits p50 %.1f); %s; audio %.2f ms\n",
+  char gpu[80] = "";
+  if (g_gpu_frame.n)
+    std::snprintf(gpu, sizeof(gpu), "; gpu frame p50 %.1f p95 %.1f p99 %.1f ms", g_gpu_frame.Pct(0.5), g_gpu_frame.Pct(0.95),
+                  g_gpu_frame.Pct(0.99));
+  std::printf("[nx] cpu per frame (30 s, %u frames): main work p50 %.1f p95 %.1f p99 %.1f ms (waits p50 %.1f); %s; audio %.2f ms%s\n",
               g_main_work.n, g_main_work.Pct(0.5), g_main_work.Pct(0.95), g_main_work.Pct(0.99), g_main_wait.Pct(0.5), cp,
-              audio_ms);
+              audio_ms, gpu);
   std::fflush(stdout);
-  std::snprintf(rex_nx_meter_text, sizeof(rex_nx_meter_text), "main %.1f:%.1f gpu %.1f:%.1f", g_main_work.Pct(0.5),
-                g_main_work.Pct(0.95), g_cp_work.Pct(0.5), g_cp_work.Pct(0.95));
+  // The strip: m = main thread work, c = GPU command thread work, g = GPU frame (p50:p95, ms).
+  std::snprintf(rex_nx_meter_text, sizeof(rex_nx_meter_text), "m %.1f:%.1f c %.1f:%.1f g %.1f:%.1f", g_main_work.Pct(0.5),
+                g_main_work.Pct(0.95), g_cp_work.Pct(0.5), g_cp_work.Pct(0.95), g_gpu_frame.n ? g_gpu_frame.Pct(0.5) : 0.0,
+                g_gpu_frame.n ? g_gpu_frame.Pct(0.95) : 0.0);
   g_main_work = Hist{};
   g_main_wait = Hist{};
   g_cp_work = Hist{};
+  g_gpu_frame = Hist{};
   g_frames = 0;
   g_report_tick = now;
 }
@@ -103,6 +110,9 @@ void rex_nx_meter_leave(uint64_t t0, int kind) {
   if (!g_report_tick) g_report_tick = now;
   if (ToMs(now - g_report_tick) >= 30000.0) Report(now);
 }
+
+// The GPU's own time for one frame (deko3d backend, two GPU timestamps; Switch and Eden).
+void rex_nx_meter_gpu_frame(double ms) { g_gpu_frame.Add(ms); }
 
 // On the command processor thread at each swap; block_us_total: the backend's fence wait + acquire so far.
 void rex_nx_meter_cp_swap(uint64_t block_us_total) {
