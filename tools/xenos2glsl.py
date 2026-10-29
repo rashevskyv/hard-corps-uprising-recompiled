@@ -6,7 +6,8 @@ its translator_disasm.cpp. Only what the game's shaders use is implemented; anyt
 with a clear message so the gap is visible (docs/native-renderer-plan.md, M2).
 
 Interface of the generated GLSL (the deko3d backend relies on it):
-  vertex:   layout(location = a) in vec4 in_a      one per vfetch, in instruction order; the
+  vertex:   layout(location = a) in vec4 in_a      one per vfetch that writes a fetched component (the
+            SDK's vertex bindings), in instruction order; the
             sidecar JSON lists (slot, offset, format, stride, signed, integer) per attribute;
             binding 0 = uniform Consts { vec4 c[256]; } (the ALU constants c0..c255);
             binding 1 = uniform Sys (ndc_scale, ndc_offset, alpha test, bool constants);
@@ -181,6 +182,13 @@ class Translator:
         if op == 'vfetch_full':
             self.cur_slot = slot
             self.stride_words = int(kv.get('Stride', '0'))
+        if not any(ch in ('x', 'y', 'z', 'w') for ch in comps):
+            # A fetch that writes only constants (`vfetch_full r0._000`, it sets up the slot for the minis)
+            # gets no vertex binding in the SDK (Shader::GatherVertexFetchInformation), so no attribute
+            # here either: the backend numbers the locations by those bindings. With it, the slabs' colour
+            # pass (VS 16BB87D45481B007) read the vertex colour as its position and drew nothing.
+            self.body.extend(self.write_masked(target, comps, 'vec4(0.0)', False))
+            return
         attr = {
             'index': len(self.attrs),
             'slot': self.cur_slot,
