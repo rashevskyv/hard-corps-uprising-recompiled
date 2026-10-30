@@ -520,7 +520,7 @@ void ApplyFixedState() {
     glCullFace(E.rast.cullMode == DkFace_Front ? GL_FRONT : E.rast.cullMode == DkFace_Back ? GL_BACK : GL_FRONT_AND_BACK);
   }
   glFrontFace(E.rast.frontFace == DkFrontFace_CCW ? GL_CCW : GL_CW);
-  if (E.rast.depthBiasEnableMask) glEnable(GL_POLYGON_OFFSET_FILL);
+  if (E.rast.depthBiasEnableMask & DkPolygonFlag_Fill) glEnable(GL_POLYGON_OFFSET_FILL);
   else glDisable(GL_POLYGON_OFFSET_FILL);
 }
 

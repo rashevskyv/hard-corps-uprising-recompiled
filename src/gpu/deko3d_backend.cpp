@@ -820,7 +820,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkRasterizerStateDefaults(&rs);
     rs.cullMode = DkFace_None;  // TODO(cull): cull_front/cull_back once the winding is verified on a picture
     rs.fillRectangleEnable = rects && !use_gs;
-    (void)su;
+    if (su.poly_offset_front_enable || su.poly_offset_back_enable || su.poly_offset_para_enable) {
+      // Not applied yet: logged to see whether HCU uses it (the shadow pass would).
+      char key[48];
+      std::snprintf(key, sizeof(key), "polyoff %u%u%u", uint32_t(su.poly_offset_front_enable), uint32_t(su.poly_offset_back_enable),
+                    uint32_t(su.poly_offset_para_enable));
+      LogOnce(key, "guest polygon offset: front %u back %u para %u, scale %f offset %f (VS %016llX)", uint32_t(su.poly_offset_front_enable),
+              uint32_t(su.poly_offset_back_enable), uint32_t(su.poly_offset_para_enable), regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE),
+              regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET), (unsigned long long)vs->ucode_data_hash());
+    }
     {
       // With the clipper disabled the guest keeps geometry that lies in front of the near plane or behind the far one.
       auto clip = regs.Get<reg::PA_CL_CLIP_CNTL>();
@@ -828,7 +836,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // The colour pass of a mesh repeats its depth pre-pass with another vertex shader (depth func LESS or LEQUAL): the two
       // positions differ in the last bits on a real GPU, and the whole mesh fails the test. The colour pass is pulled closer.
       z_biased = z_bias_ != 0.f && writes_color && dc.z_enable && (uint32_t(dc.zfunc) == 1 || uint32_t(dc.zfunc) == 3);
-      rs.depthBiasEnableMask = z_biased ? 1 : 0;
+      rs.depthBiasEnableMask = z_biased ? DkPolygonFlag_Fill : 0;  // 0.188-0.232 set 1 = DkPolygonFlag_Point: triangles got no bias
       char key[48];
       std::snprintf(key, sizeof(key), "clip %u %u", uint32_t(clip.clip_disable), uint32_t(clip.dx_clip_space_def));
       LogOnce(key, "clip control: clip_disable %u dx_clip_space_def %u (first draw VS %016llX)", uint32_t(clip.clip_disable),
