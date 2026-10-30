@@ -1022,11 +1022,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (!skip_odd_frames_) std::printf("[nx] gpu: swap #%u (skipped)\n", swaps_);
         ReadSwapInterval();
       }
-      if (swaps_ % 1800 == 0 && skip_odd_frames_) {
-        std::printf("[nx] gpu: 30skip: %u of the last 1800 frames drawn, %u more skipped because the GPU was still busy\n", drawn_frames_,
-                    busy_skips_);
-        drawn_frames_ = busy_skips_ = 0;
-      }
+      LogSkips();
       NextFrame(false);
       return;
     }
@@ -1225,6 +1221,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     rex_nx_meter_cp_swap(meter_block_us_);
     swaps_++;
     if (swaps_ % 60 == 0) ReadSwapInterval();
+    LogSkips();
     if (swaps_ <= 3 || swaps_ % 60 == 0) {
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
       Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB (vertices %u KB) staging %u KB; images %u (%u MB), %u image flips so far",
@@ -1251,18 +1248,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
     NextFrame(true);
   }
 
+  // Every 1800 swaps in the skip modes: frames drawn, and frames skipped for a busy GPU.
+  void LogSkips() {
+    if (swaps_ % 1800 || !(skip_odd_frames_ || skip_busy_)) return;
+    std::printf("[nx] gpu: %s: %u of the last 1800 frames drawn, %u skipped because the GPU was still busy\n",
+                skip_odd_frames_ ? "30skip" : "60skip", drawn_frames_, busy_skips_);
+    drawn_frames_ = busy_skips_ = 0;
+  }
+
   // Whether the next frame is drawn. 60 and 30: every frame. 30skip: not the frame after a drawn one, and not one the GPU
   // has no free frame slot for yet (its fence is still pending): that frame is skipped too instead of waiting, so the
-  // guest never waits for the GPU (the game keeps its speed, fewer frames are shown).
+  // guest never waits for the GPU (the game keeps its speed, fewer frames are shown). 60skip: only the busy skip.
   void NextFrame(bool drawn) {
     skip_frame_ = false;
-    if (skip_odd_frames_) {
-      if (drawn) {
-        skip_frame_ = true;
-      } else if (frames_[frame_].fenced && dkFenceWait(&frames_[frame_].fence, 0) != DkResult_Success) {
-        skip_frame_ = true;
-        busy_skips_++;
-      }
+    if (skip_odd_frames_ && drawn) {
+      skip_frame_ = true;
+    } else if ((skip_odd_frames_ || skip_busy_) && frames_[frame_].fenced &&
+               dkFenceWait(&frames_[frame_].fence, 0) != DkResult_Success) {
+      skip_frame_ = true;
+      busy_skips_++;
     }
     if (!skip_frame_ && !begun_) {
       BeginFrame();
@@ -1273,27 +1277,30 @@ class Deko3dCommandProcessor : public CommandProcessor {
  private:
   // The frame-rate mode: file fps in the debug dir (sdmc:/switch/hcu/fps). No file or "30skip" (the default) = the guest
   // keeps 60 frames a second but only every second one is drawn (the command processor still runs every packet: fences,
-  // write-backs, the guest's waits; see NextFrame); "60" = every frame drawn; "30" = every frame drawn, presented every
-  // second vblank (the game is frame-locked: it runs at half speed). Read at start and every 60 swaps.
+  // write-backs, the guest's waits; see NextFrame); "60" = every frame drawn; "60skip" = every frame the GPU has a free
+  // slot for; "30" = every frame drawn, presented every second vblank (the game is frame-locked: it runs at half speed).
+  // Read at start and every 60 swaps.
   void ReadSwapInterval() {
     uint32_t interval = 1;
-    bool skip = true;
+    bool skip = true, busy = false;
     if (FILE* fp = std::fopen((debug_dir_ + "fps").c_str(), "r")) {
       char text[16] = {};
       if (std::fgets(text, sizeof(text), fp) && std::strncmp(text, "30skip", 6) != 0) {
         skip = false;
+        busy = std::strncmp(text, "60skip", 6) == 0;
         if (std::atoi(text) == 30) interval = 2;
       }
       std::fclose(fp);
     }
-    if (interval == swap_interval_ && skip == skip_odd_frames_ && swaps_) return;
+    if (interval == swap_interval_ && skip == skip_odd_frames_ && busy == skip_busy_ && swaps_) return;
     swap_interval_ = interval;
     skip_odd_frames_ = skip;
+    skip_busy_ = busy;
 #ifdef __SWITCH__
     dkSwapchainSetSwapInterval(swapchain_, interval);
 #endif
     std::printf("[nx] gpu: swap interval %u, %s (%s) from swap #%u\n", interval, skip ? "every second frame drawn" : "every frame drawn",
-                skip ? "30skip" : interval == 2 ? "30 fps cap" : "60", swaps_);
+                skip ? "30skip" : interval == 2 ? "30 fps cap" : busy ? "60skip" : "60", swaps_);
   }
 
   // Linux test host: HCU_DK_START_SWAP=N turns the backend into a null backend until swap N (the guest runs
@@ -2226,6 +2233,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   std::string debug_dir_;
   uint32_t swap_interval_ = 1;
   bool skip_odd_frames_ = false;
+  bool skip_busy_ = false;  // 60skip: a frame the GPU has no free slot for is not drawn (NextFrame)
   bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
   bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
   uint32_t drawn_frames_ = 0, busy_skips_ = 0;
