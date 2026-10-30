@@ -1009,7 +1009,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width, uint32_t frontbuffer_height) override {
     if (Skipping()) {
       swaps_++;  // nothing was recorded: the frame is just counted
-      if (swaps_ % 60 == 0) std::printf("[nx] gpu: swap #%u (skipped)\n", swaps_);
+      if (swaps_ % 60 == 0) {
+        if (!skip_odd_frames_) std::printf("[nx] gpu: swap #%u (skipped)\n", swaps_);
+        ReadSwapInterval();
+      }
       return;
     }
     Frame& f = frames_[frame_];
@@ -1231,21 +1234,29 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
  private:
-  // The frame-rate cap: file fps in the debug dir (sdmc:/switch/hcu/fps) with "30" = present every second vblank, anything
-  // else or no file = every vblank. Read at start and every 60 swaps, so it switches during a run.
+  // The frame-rate mode: file fps in the debug dir (sdmc:/switch/hcu/fps). "30" = present every second vblank (the game is
+  // frame-locked: it runs at half speed); "30skip" = the guest keeps 60 frames a second but only every second one is drawn
+  // (the command processor still runs every packet: fences, write-backs, the guest's waits); anything else or no file =
+  // every frame, every vblank. Read at start and every 60 swaps, so it switches during a run.
   void ReadSwapInterval() {
     uint32_t interval = 1;
+    bool skip = false;
     if (FILE* fp = std::fopen((debug_dir_ + "fps").c_str(), "r")) {
-      char text[8] = {};
-      if (std::fgets(text, sizeof(text), fp) && std::atoi(text) == 30) interval = 2;
+      char text[16] = {};
+      if (std::fgets(text, sizeof(text), fp)) {
+        skip = std::strncmp(text, "30skip", 6) == 0;
+        if (!skip && std::atoi(text) == 30) interval = 2;
+      }
       std::fclose(fp);
     }
-    if (interval == swap_interval_ && swaps_) return;
+    if (interval == swap_interval_ && skip == skip_odd_frames_ && swaps_) return;
     swap_interval_ = interval;
+    skip_odd_frames_ = skip;
 #ifdef __SWITCH__
     dkSwapchainSetSwapInterval(swapchain_, interval);
 #endif
-    std::printf("[nx] gpu: swap interval %u (%s fps cap) from swap #%u\n", interval, interval == 2 ? "30" : "60", swaps_);
+    std::printf("[nx] gpu: swap interval %u, %s (%s) from swap #%u\n", interval, skip ? "every second frame drawn" : "every frame drawn",
+                skip ? "30skip" : interval == 2 ? "30 fps cap" : "60", swaps_);
   }
 
   // Linux test host: HCU_DK_START_SWAP=N turns the backend into a null backend until swap N (the guest runs
@@ -1253,6 +1264,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // The file <HCU_DK_DUMP_DIR>/skip_on does the same while it exists (checked every 8 swaps): fast forward
   // through loading screens, then delete it.
   bool Skipping() const {
+    if (skip_odd_frames_ && (swaps_ & 1)) return true;  // the 30skip mode (ReadSwapInterval)
 #ifdef HCU_DK_GL
     static const uint32_t start = std::getenv("HCU_DK_START_SWAP") ? uint32_t(std::atoi(std::getenv("HCU_DK_START_SWAP"))) : 0;
     static const char* dir = std::getenv("HCU_DK_DUMP_DIR");
@@ -2176,6 +2188,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   std::string shader_dir_;
   std::string debug_dir_;
   uint32_t swap_interval_ = 1;
+  bool skip_odd_frames_ = false;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
   uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
