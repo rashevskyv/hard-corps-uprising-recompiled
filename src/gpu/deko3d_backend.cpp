@@ -928,6 +928,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (off == UINT32_MAX) { LogOnce("ring", "frame data ring full"); skipped_++; return true; }
       const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2) + src_off;
       texture_conversion::CopySwapBlock(fetch.endian, f.data.cpu + off, src, bytes);
+      frame_vtx_bytes_ += bytes;
 #ifdef HCU_DK_GL
       if (TraceFrame() && vertex_count <= 6) {
         // The vertices of small draws (sprites) as floats, after the byte swap.
@@ -1207,10 +1208,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (swaps_ % 60 == 0) ReadSwapInterval();
     if (swaps_ <= 3 || swaps_ % 60 == 0) {
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
-      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB staging %u KB; images %u (%u MB), %u image flips so far",
+      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB (vertices %u KB) staging %u KB; images %u (%u MB), %u image flips so far",
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
           frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
-          f.data.used >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
+          f.data.used >> 10, frame_vtx_bytes_ >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
       // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
       // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
       uint32_t n = swaps_ <= 3 ? 1 : 60;
@@ -1224,7 +1225,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       }
     }
     dirty_pages_at_swap_ = dirty_pages_;
-    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = 0;
+    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = 0;
     frame_ = (frame_ + 1) % kFrames;
     BeginFrame();
   }
@@ -2190,7 +2191,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint32_t image_count_ = 0, uploads_ = 0, reuploads_ = 0;
   uint32_t image_flips_ = 0;  // recreated + resized images, all frames (the first 40 are logged)
   uint64_t upload_bytes_ = 0;
-  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0;
+  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0;
 };
 
 class Deko3dGraphicsSystem : public GraphicsSystem {
