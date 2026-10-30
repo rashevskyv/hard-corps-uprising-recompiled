@@ -545,6 +545,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (shader_dir_.empty() || shader_dir_.back() != '/') shader_dir_ += '/';
     size_t cut = shader_dir_.size() >= 2 ? shader_dir_.rfind('/', shader_dir_.size() - 2) : std::string::npos;
     std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
+    debug_dir_ = debug_dir;
+    ReadSwapInterval();
     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
     always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: textures upload at every bind (missed dirty pages = stale sprites)
@@ -1202,6 +1204,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     rex_nx_meter_cp_swap(meter_block_us_);
     swaps_++;
+    if (swaps_ % 60 == 0) ReadSwapInterval();
     if (swaps_ <= 3 || swaps_ % 60 == 0) {
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
       Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB staging %u KB; images %u (%u MB), %u image flips so far",
@@ -1227,6 +1230,24 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
  private:
+  // The frame-rate cap: file fps in the debug dir (sdmc:/switch/hcu/fps) with "30" = present every second vblank, anything
+  // else or no file = every vblank. Read at start and every 60 swaps, so it switches during a run.
+  void ReadSwapInterval() {
+    uint32_t interval = 1;
+    if (FILE* fp = std::fopen((debug_dir_ + "fps").c_str(), "r")) {
+      char text[8] = {};
+      if (std::fgets(text, sizeof(text), fp) && std::atoi(text) == 30) interval = 2;
+      std::fclose(fp);
+    }
+    if (interval == swap_interval_ && swaps_) return;
+    swap_interval_ = interval;
+#ifdef __SWITCH__
+    dkSwapchainSetSwapInterval(swapchain_, interval);
+#endif
+    std::printf("[nx] gpu: swap interval %u (%s fps cap) from swap #%u
+", interval, interval == 2 ? "30" : "60", swaps_);
+  }
+
   // Linux test host: HCU_DK_START_SWAP=N turns the backend into a null backend until swap N (the guest runs
   // at full speed to a late scene; textures and targets are created lazily when drawing starts).
   // The file <HCU_DK_DUMP_DIR>/skip_on does the same while it exists (checked every 8 swaps): fast forward
@@ -2153,6 +2174,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint64_t us_draw_ = 0, us_copy_ = 0, us_fence_ = 0, us_acquire_ = 0, us_submit_ = 0;  // ScopedUs counters of the 60-swap log
   uint32_t depth_resolves_ = 0;  // depth resolves so far (MergeDepthPieces looks again when it changed)
   std::string shader_dir_;
+  std::string debug_dir_;
+  uint32_t swap_interval_ = 1;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
   uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;

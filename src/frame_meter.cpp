@@ -47,9 +47,10 @@ double ToMs(uint64_t ticks) { return double(ticks) * 1000.0 / double(rex::chrono
 
 thread_local int t_depth = 0;
 thread_local uint64_t t_wait_ticks = 0;
+thread_local uint64_t t_ring_ticks = 0;  // the part of t_wait_ticks in the guest ring wait
 
-Hist g_main_work, g_main_wait, g_cp_work, g_gpu_frame;
-uint64_t g_main_last = 0, g_main_last_wait = 0, g_report_tick = 0;
+Hist g_main_work, g_main_wait, g_main_ring, g_cp_work, g_gpu_frame;
+uint64_t g_main_last = 0, g_main_last_wait = 0, g_main_last_ring = 0, g_report_tick = 0;
 uint64_t g_cp_last = 0, g_cp_last_wait = 0, g_cp_last_block_us = 0;
 uint64_t g_audio_last_us = 0;
 uint32_t g_frames = 0;
@@ -66,8 +67,8 @@ void Report(uint64_t now) {
   if (g_gpu_frame.n)
     std::snprintf(gpu, sizeof(gpu), "; gpu frame p50 %.1f p95 %.1f p99 %.1f ms", g_gpu_frame.Pct(0.5), g_gpu_frame.Pct(0.95),
                   g_gpu_frame.Pct(0.99));
-  std::printf("[nx] cpu per frame (30 s, %u frames): main work p50 %.1f p95 %.1f p99 %.1f ms (waits p50 %.1f); %s; audio %.2f ms%s\n",
-              g_main_work.n, g_main_work.Pct(0.5), g_main_work.Pct(0.95), g_main_work.Pct(0.99), g_main_wait.Pct(0.5), cp,
+  std::printf("[nx] cpu per frame (30 s, %u frames): main work p50 %.1f p95 %.1f p99 %.1f ms (waits p50 %.1f, of it ring wait p50 %.1f); %s; audio %.2f ms%s\n",
+              g_main_work.n, g_main_work.Pct(0.5), g_main_work.Pct(0.95), g_main_work.Pct(0.99), g_main_wait.Pct(0.5), g_main_ring.Pct(0.5), cp,
               audio_ms, gpu);
   std::fflush(stdout);
   // The strip: m = main thread work, c = GPU command thread work, g = GPU frame (p50:p95, ms).
@@ -76,6 +77,7 @@ void Report(uint64_t now) {
                 g_gpu_frame.n ? g_gpu_frame.Pct(0.95) : 0.0);
   g_main_work = Hist{};
   g_main_wait = Hist{};
+  g_main_ring = Hist{};
   g_cp_work = Hist{};
   g_gpu_frame = Hist{};
   g_frames = 0;
@@ -94,19 +96,24 @@ uint64_t rex_nx_meter_enter() {
   return Now();
 }
 
-// kind: 1 = a waiting export, 2 = VdSwap (the main thread's frame mark).
+// kind: 1 = a waiting export, 2 = VdSwap (the main thread's frame mark), 3 = the guest ring wait.
 void rex_nx_meter_leave(uint64_t t0, int kind) {
   const uint64_t now = Now();
-  if (--t_depth == 0 && kind == 1) t_wait_ticks += now - t0;
+  if (--t_depth == 0 && (kind == 1 || kind == 3)) {
+    t_wait_ticks += now - t0;
+    if (kind == 3) t_ring_ticks += now - t0;
+  }
   if (kind != 2) return;
   if (g_main_last) {
     const uint64_t wall = now - g_main_last, wait = t_wait_ticks - g_main_last_wait;
     g_main_work.Add(ToMs(wall > wait ? wall - wait : 0));
     g_main_wait.Add(ToMs(wait));
+    g_main_ring.Add(ToMs(t_ring_ticks - g_main_last_ring));
     g_frames++;
   }
   g_main_last = now;
   g_main_last_wait = t_wait_ticks;
+  g_main_last_ring = t_ring_ticks;
   if (!g_report_tick) g_report_tick = now;
   if (ToMs(now - g_report_tick) >= 30000.0) Report(now);
 }
@@ -134,5 +141,5 @@ REX_EXTERN(__imp__sub_82556728);
 REX_HOOK_RAW(sub_82556728) {
   const uint64_t t0 = rex_nx_meter_enter();
   __imp__sub_82556728(ctx, base);
-  rex_nx_meter_leave(t0, 1);
+  rex_nx_meter_leave(t0, 3);
 }
