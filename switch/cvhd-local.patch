@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..f223885 100644
+index 2205439..2b46571 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,6 +21,7 @@
@@ -514,7 +514,7 @@ index 2205439..f223885 100644
      if (Skipping()) return true;
      SyncDirtyPages();
      return Resolve();
-@@ -721,7 +1018,16 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -721,7 +1018,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
    void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width, uint32_t frontbuffer_height) override {
      if (Skipping()) {
        swaps_++;  // nothing was recorded: the frame is just counted
@@ -523,16 +523,12 @@ index 2205439..f223885 100644
 +        if (!skip_odd_frames_) std::printf("[nx] gpu: swap #%u (skipped)\n", swaps_);
 +        ReadSwapInterval();
 +      }
-+      if (swaps_ % 1800 == 0 && skip_odd_frames_) {
-+        std::printf("[nx] gpu: 30skip: %u of the last 1800 frames drawn, %u more skipped because the GPU was still busy\n", drawn_frames_,
-+                    busy_skips_);
-+        drawn_frames_ = busy_skips_ = 0;
-+      }
++      LogSkips();
 +      NextFrame(false);
        return;
      }
      Frame& f = frames_[frame_];
-@@ -729,7 +1035,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -729,7 +1031,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
      HostImage* front = nullptr;
      if (guest_images_.count(frontbuffer_ptr) && frontbuffer_width && frontbuffer_height) {
        // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
@@ -541,7 +537,7 @@ index 2205439..f223885 100644
      }
      if (present_target_) {
        // Debug (the file sdmc:/switch/hcu/dk_present_rt): show the widest colour render target itself,
-@@ -761,8 +1067,59 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -761,8 +1063,59 @@ class Deko3dCommandProcessor : public CommandProcessor {
        for (auto& it : guest_images_) if (it.second->width >= 600 && it.second != front) { char n[48]; std::snprintf(n, sizeof(n), "guest %08X%s", it.first, it.second->from_resolve ? " (resolve)" : " (upload)"); queue_dump(n, it.second); }
        dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
      }
@@ -602,7 +598,7 @@ index 2205439..f223885 100644
      if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
      HostImage* target = swap_images_[slot];
      dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
-@@ -800,17 +1157,55 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -800,17 +1153,55 @@ class Deko3dCommandProcessor : public CommandProcessor {
        if (dslot != UINT32_MAX) {
          DkResHandle handle = dkMakeTextureHandle(dslot, 4);  // linear, clamp
          dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &handle, 1);
@@ -659,13 +655,14 @@ index 2205439..f223885 100644
  #endif
      if (!dumps.empty()) {
        dkQueueWaitIdle(queue_);
-@@ -827,26 +1222,86 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -827,26 +1218,97 @@ class Deko3dCommandProcessor : public CommandProcessor {
              w && h ? px[(h / 2) * w + w / 2] : 0, w && h ? px[(3 * h / 4) * w + 3 * w / 4] : 0, w && h ? px[(h - 1) * w + w - 1] : 0);
        }
      }
 +    rex_nx_meter_cp_swap(meter_block_us_);
      swaps_++;
 +    if (swaps_ % 60 == 0) ReadSwapInterval();
++    LogSkips();
      if (swaps_ <= 3 || swaps_ % 60 == 0) {
        std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
 -      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB staging %u KB; images %u (%u MB)",
@@ -696,18 +693,25 @@ index 2205439..f223885 100644
 +    NextFrame(true);
 +  }
 +
++  // Every 1800 swaps in the skip modes: frames drawn, and frames skipped for a busy GPU.
++  void LogSkips() {
++    if (swaps_ % 1800 || !(skip_odd_frames_ || skip_busy_)) return;
++    std::printf("[nx] gpu: %s: %u of the last 1800 frames drawn, %u skipped because the GPU was still busy\n",
++                skip_odd_frames_ ? "30skip" : "60skip", drawn_frames_, busy_skips_);
++    drawn_frames_ = busy_skips_ = 0;
++  }
++
 +  // Whether the next frame is drawn. 60 and 30: every frame. 30skip: not the frame after a drawn one, and not one the GPU
 +  // has no free frame slot for yet (its fence is still pending): that frame is skipped too instead of waiting, so the
-+  // guest never waits for the GPU (the game keeps its speed, fewer frames are shown).
++  // guest never waits for the GPU (the game keeps its speed, fewer frames are shown). 60skip: only the busy skip.
 +  void NextFrame(bool drawn) {
 +    skip_frame_ = false;
-+    if (skip_odd_frames_) {
-+      if (drawn) {
-+        skip_frame_ = true;
-+      } else if (frames_[frame_].fenced && dkFenceWait(&frames_[frame_].fence, 0) != DkResult_Success) {
-+        skip_frame_ = true;
-+        busy_skips_++;
-+      }
++    if (skip_odd_frames_ && drawn) {
++      skip_frame_ = true;
++    } else if ((skip_odd_frames_ || skip_busy_) && frames_[frame_].fenced &&
++               dkFenceWait(&frames_[frame_].fence, 0) != DkResult_Success) {
++      skip_frame_ = true;
++      busy_skips_++;
 +    }
 +    if (!skip_frame_ && !begun_) {
 +      BeginFrame();
@@ -718,27 +722,30 @@ index 2205439..f223885 100644
   private:
 +  // The frame-rate mode: file fps in the debug dir (sdmc:/switch/hcu/fps). No file or "30skip" (the default) = the guest
 +  // keeps 60 frames a second but only every second one is drawn (the command processor still runs every packet: fences,
-+  // write-backs, the guest's waits; see NextFrame); "60" = every frame drawn; "30" = every frame drawn, presented every
-+  // second vblank (the game is frame-locked: it runs at half speed). Read at start and every 60 swaps.
++  // write-backs, the guest's waits; see NextFrame); "60" = every frame drawn; "60skip" = every frame the GPU has a free
++  // slot for; "30" = every frame drawn, presented every second vblank (the game is frame-locked: it runs at half speed).
++  // Read at start and every 60 swaps.
 +  void ReadSwapInterval() {
 +    uint32_t interval = 1;
-+    bool skip = true;
++    bool skip = true, busy = false;
 +    if (FILE* fp = std::fopen((debug_dir_ + "fps").c_str(), "r")) {
 +      char text[16] = {};
 +      if (std::fgets(text, sizeof(text), fp) && std::strncmp(text, "30skip", 6) != 0) {
 +        skip = false;
++        busy = std::strncmp(text, "60skip", 6) == 0;
 +        if (std::atoi(text) == 30) interval = 2;
 +      }
 +      std::fclose(fp);
 +    }
-+    if (interval == swap_interval_ && skip == skip_odd_frames_ && swaps_) return;
++    if (interval == swap_interval_ && skip == skip_odd_frames_ && busy == skip_busy_ && swaps_) return;
 +    swap_interval_ = interval;
 +    skip_odd_frames_ = skip;
++    skip_busy_ = busy;
 +#ifdef __SWITCH__
 +    dkSwapchainSetSwapInterval(swapchain_, interval);
 +#endif
 +    std::printf("[nx] gpu: swap interval %u, %s (%s) from swap #%u\n", interval, skip ? "every second frame drawn" : "every frame drawn",
-+                skip ? "30skip" : interval == 2 ? "30 fps cap" : "60", swaps_);
++                skip ? "30skip" : interval == 2 ? "30 fps cap" : busy ? "60skip" : "60", swaps_);
 +  }
 +
    // Linux test host: HCU_DK_START_SWAP=N turns the backend into a null backend until swap N (the guest runs
@@ -750,7 +757,7 @@ index 2205439..f223885 100644
  #ifdef HCU_DK_GL
      static const uint32_t start = std::getenv("HCU_DK_START_SWAP") ? uint32_t(std::atoi(std::getenv("HCU_DK_START_SWAP"))) : 0;
      static const char* dir = std::getenv("HCU_DK_DUMP_DIR");
-@@ -863,17 +1318,52 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -863,17 +1325,52 @@ class Deko3dCommandProcessor : public CommandProcessor {
  #endif
    }
    mutable bool skip_checked_[1] = {false};
@@ -804,7 +811,7 @@ index 2205439..f223885 100644
      f.data.Reset();
      f.staging.Reset();
      f.next_descriptor = 0;
-@@ -882,6 +1372,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -882,6 +1379,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
      dkCmdBufAddMemory(f.cmdbuf, cmdmem_.block, f.cmd_offset, kFrameCmdBytes);
      dkCmdBufBindImageDescriptorSet(f.cmdbuf, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
      dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
@@ -818,7 +825,7 @@ index 2205439..f223885 100644
      bound_color_ = nullptr;
      bound_depth_ = nullptr;
    }
-@@ -923,6 +1420,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -923,6 +1427,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // serials. Linux: a hash of the range against the hash taken when the contents were set.
    uint64_t HashMemory(uint32_t physical, uint32_t bytes) const {
  #ifdef HCU_DK_GL
@@ -827,7 +834,7 @@ index 2205439..f223885 100644
      const uint8_t* p = memory_->TranslatePhysical(physical);
      uint64_t h = 1469598103934665603ull;
      uint32_t words = bytes / 8;
-@@ -1060,20 +1559,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1060,20 +1566,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // The image at a guest address (resolve destinations, textures). A fetch or a swap asks for the
    // exact size (a resolve created it with the aligned height: resized once, contents copied); a
    // resolve asks for a minimum size (`at_least`) and creates with the aligned size (`create_w/h`).
@@ -860,7 +867,7 @@ index 2205439..f223885 100644
              img->height, fresh->width, fresh->height);
          it->second = fresh;
          RecycleImage(img);
-@@ -1081,11 +1588,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1081,11 +1595,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
        }
        if (img->width == width && img->height == height) return img;
        if (at_least && width <= img->width && height <= img->height) return img;
@@ -874,7 +881,7 @@ index 2205439..f223885 100644
        if (!resized) return img;
        ClearNewImage(resized);
        uint32_t cw = std::min(width, img->width), ch = std::min(height, img->height);
-@@ -1097,16 +1605,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1097,16 +1612,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
        dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
        dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
        resized->from_resolve = img->from_resolve;
@@ -894,7 +901,7 @@ index 2205439..f223885 100644
      if (!img) return nullptr;
      img->guest_base = base;
      guest_images_.emplace(base, img);
-@@ -1114,6 +1623,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1114,6 +1630,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
      return img;
    }
  
@@ -933,7 +940,7 @@ index 2205439..f223885 100644
    HostImage* TextureImage(Frame& f, const TextureInfo& info, const xenos::xe_gpu_texture_fetch_t& fetch) {
      DkImageFormat format;
      bool reversed;
-@@ -1123,13 +1664,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1123,13 +1671,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
      }
      uint32_t base = info.memory.base_address;
      // TextureInfo keeps the fetch constant's fields: the size minus one.
@@ -977,7 +984,7 @@ index 2205439..f223885 100644
      // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
      if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
      if (img->content_serial) {
-@@ -1197,6 +1766,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1197,6 +1773,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
    uint32_t dump_count_ = 0;
  #endif
  
@@ -1003,7 +1010,7 @@ index 2205439..f223885 100644
    bool UploadTexture(Frame& f, HostImage& img, const TextureInfo& info, xenos::Endian endian) {
      const FormatInfo* fi = info.format_info();
      const uint32_t width = info.width + 1, height = info.height + 1;  // TextureInfo keeps size minus one
-@@ -1293,8 +1881,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1293,8 +1888,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
      uint32_t sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
      if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
@@ -1033,7 +1040,7 @@ index 2205439..f223885 100644
      SysConstants sys{};
      for (int i = 0; i < 3; i++) {
        sys.ndc_scale[i] = vi.ndc_scale[i];
-@@ -1311,8 +1918,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1311,8 +1925,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
      dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
      dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
@@ -1042,7 +1049,7 @@ index 2205439..f223885 100644
      return true;
    }
  
-@@ -1387,6 +1992,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1387,6 +1999,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
                  depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
                  color[1], color[2], color[3], z, scale);
        }
@@ -1053,7 +1060,7 @@ index 2205439..f223885 100644
        clears_++;
        frame_clears_++;
      }
-@@ -1399,8 +2008,61 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1399,8 +2015,61 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -1116,7 +1123,7 @@ index 2205439..f223885 100644
        return true;
      }
      uint32_t src_pitch = info.color_edram_info.pitch_tiles * 80;
-@@ -1412,10 +2074,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1412,10 +2081,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
      (void)dest_pitch; (void)dest_height;
      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
@@ -1133,7 +1140,7 @@ index 2205439..f223885 100644
      dst->mem_bytes = dest_pitch * dest_height * 4;
      dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
      if (x + w > src->width) w = x < src->width ? src->width - x : 0;
-@@ -1447,6 +2114,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1447,6 +2121,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
        LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
                x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
      }
@@ -1144,7 +1151,7 @@ index 2205439..f223885 100644
      resolves_++;
      frame_resolves_++;
      return true;
-@@ -1521,7 +2192,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1521,7 +2199,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      std::vprintf(fmt, ap);
      std::printf("\n");
      va_end(ap);
@@ -1154,7 +1161,7 @@ index 2205439..f223885 100644
    }
  
    DkDevice device_ = nullptr;
-@@ -1537,7 +2210,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1537,7 +2217,26 @@ class Deko3dCommandProcessor : public CommandProcessor {
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
    bool dump_images_ = false;
@@ -1174,13 +1181,14 @@ index 2205439..f223885 100644
 +  std::string debug_dir_;
 +  uint32_t swap_interval_ = 1;
 +  bool skip_odd_frames_ = false;
++  bool skip_busy_ = false;  // 60skip: a frame the GPU has no free slot for is not drawn (NextFrame)
 +  bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
 +  bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
 +  uint32_t drawn_frames_ = 0, busy_skips_ = 0;
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
    uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
-@@ -1547,10 +2238,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1547,10 +2246,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
    HostImage* bound_color_ = nullptr;
    HostImage* bound_depth_ = nullptr;
    std::unordered_set<std::string> logged_;
