@@ -395,6 +395,7 @@ DkImageSwizzle SwizzleOf(uint32_t s) {
 // viewport at the bottom-left corner. The file overlay_off next to the shader dir hides it.
 // The CPU-work meter (hcu src/frame_meter.cpp, Switch and Linux): this thread's blocked time per swap, and the strip text.
 extern "C" void rex_nx_meter_cp_swap(uint64_t block_us_total);
+extern "C" void rex_nx_meter_present();
 extern "C" void rex_nx_meter_gpu_frame(double ms);
 extern "C" char rex_nx_meter_text[48];
 #ifdef __SWITCH__
@@ -1013,6 +1014,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (!skip_odd_frames_) std::printf("[nx] gpu: swap #%u (skipped)\n", swaps_);
         ReadSwapInterval();
       }
+      if (swaps_ % 1800 == 0 && skip_odd_frames_) {
+        std::printf("[nx] gpu: 30skip: %u of the last 1800 frames drawn, %u more skipped because the GPU was still busy\n", drawn_frames_,
+                    busy_skips_);
+        drawn_frames_ = busy_skips_ = 0;
+      }
+      NextFrame(false);
       return;
     }
     Frame& f = frames_[frame_];
@@ -1187,6 +1194,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkQueueSignalFence(queue_, &f.fence, false);
     f.fenced = true;
     dkQueuePresentImage(queue_, swapchain_, slot);
+    rex_nx_meter_present();
 #ifdef HCU_DK_GL
     FlushTextureDumps();
     trace_draws_ = 0;
@@ -1230,22 +1238,43 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dirty_pages_at_swap_ = dirty_pages_;
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = 0;
     frame_ = (frame_ + 1) % kFrames;
-    BeginFrame();
+    begun_ = false;
+    drawn_frames_++;
+    NextFrame(true);
+  }
+
+  // Whether the next frame is drawn. 60 and 30: every frame. 30skip: not the frame after a drawn one, and not one the GPU
+  // has no free frame slot for yet (its fence is still pending): that frame is skipped too instead of waiting, so the
+  // guest never waits for the GPU (the game keeps its speed, fewer frames are shown).
+  void NextFrame(bool drawn) {
+    skip_frame_ = false;
+    if (skip_odd_frames_) {
+      if (drawn) {
+        skip_frame_ = true;
+      } else if (frames_[frame_].fenced && dkFenceWait(&frames_[frame_].fence, 0) != DkResult_Success) {
+        skip_frame_ = true;
+        busy_skips_++;
+      }
+    }
+    if (!skip_frame_ && !begun_) {
+      BeginFrame();
+      begun_ = true;
+    }
   }
 
  private:
-  // The frame-rate mode: file fps in the debug dir (sdmc:/switch/hcu/fps). "30" = present every second vblank (the game is
-  // frame-locked: it runs at half speed); "30skip" = the guest keeps 60 frames a second but only every second one is drawn
-  // (the command processor still runs every packet: fences, write-backs, the guest's waits); anything else or no file =
-  // every frame, every vblank. Read at start and every 60 swaps, so it switches during a run.
+  // The frame-rate mode: file fps in the debug dir (sdmc:/switch/hcu/fps). No file or "30skip" (the default) = the guest
+  // keeps 60 frames a second but only every second one is drawn (the command processor still runs every packet: fences,
+  // write-backs, the guest's waits; see NextFrame); "60" = every frame drawn; "30" = every frame drawn, presented every
+  // second vblank (the game is frame-locked: it runs at half speed). Read at start and every 60 swaps.
   void ReadSwapInterval() {
     uint32_t interval = 1;
-    bool skip = false;
+    bool skip = true;
     if (FILE* fp = std::fopen((debug_dir_ + "fps").c_str(), "r")) {
       char text[16] = {};
-      if (std::fgets(text, sizeof(text), fp)) {
-        skip = std::strncmp(text, "30skip", 6) == 0;
-        if (!skip && std::atoi(text) == 30) interval = 2;
+      if (std::fgets(text, sizeof(text), fp) && std::strncmp(text, "30skip", 6) != 0) {
+        skip = false;
+        if (std::atoi(text) == 30) interval = 2;
       }
       std::fclose(fp);
     }
@@ -1264,7 +1293,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // The file <HCU_DK_DUMP_DIR>/skip_on does the same while it exists (checked every 8 swaps): fast forward
   // through loading screens, then delete it.
   bool Skipping() const {
-    if (skip_odd_frames_ && (swaps_ & 1)) return true;  // the 30skip mode (ReadSwapInterval)
+    if (skip_frame_) return true;  // the 30skip mode (NextFrame)
 #ifdef HCU_DK_GL
     static const uint32_t start = std::getenv("HCU_DK_START_SWAP") ? uint32_t(std::atoi(std::getenv("HCU_DK_START_SWAP"))) : 0;
     static const char* dir = std::getenv("HCU_DK_DUMP_DIR");
@@ -2189,6 +2218,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
   std::string debug_dir_;
   uint32_t swap_interval_ = 1;
   bool skip_odd_frames_ = false;
+  bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
+  bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
+  uint32_t drawn_frames_ = 0, busy_skips_ = 0;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
   uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;

@@ -49,9 +49,9 @@ thread_local int t_depth = 0;
 thread_local uint64_t t_wait_ticks = 0;
 thread_local uint64_t t_ring_ticks = 0;  // the part of t_wait_ticks in the guest ring wait
 
-Hist g_main_work, g_main_wait, g_main_ring, g_cp_work, g_gpu_frame;
+Hist g_main_work, g_main_wait, g_main_ring, g_cp_work, g_gpu_frame, g_shown;
 uint64_t g_main_last = 0, g_main_last_wait = 0, g_main_last_ring = 0, g_report_tick = 0;
-uint64_t g_cp_last = 0, g_cp_last_wait = 0, g_cp_last_block_us = 0;
+uint64_t g_cp_last = 0, g_cp_last_wait = 0, g_cp_last_block_us = 0, g_shown_last = 0;
 uint64_t g_audio_last_us = 0;
 uint32_t g_frames = 0;
 
@@ -70,6 +70,14 @@ void Report(uint64_t now) {
   std::printf("[nx] cpu per frame (30 s, %u frames): main work p50 %.1f p95 %.1f p99 %.1f ms (waits p50 %.1f, of it ring wait p50 %.1f); %s; audio %.2f ms%s\n",
               g_main_work.n, g_main_work.Pct(0.5), g_main_work.Pct(0.95), g_main_work.Pct(0.99), g_main_wait.Pct(0.5), g_main_ring.Pct(0.5), cp,
               audio_ms, gpu);
+  // Game speed: the guest's frames (VdSwap) per second against 60 (the game is frame-locked); shown frames: the interval
+  // between presents (30skip draws every second frame: 33.3 ms when even).
+  const double secs = ToMs(now - g_report_tick) / 1000.0;
+  uint32_t le34 = 0;
+  for (int i = 0; i <= 340; i++) le34 += g_shown.bin[i];
+  std::printf("[nx] game speed %.1f %% (%.1f guest frames/s); shown %.1f/s, interval p50 %.1f p95 %.1f p99 %.1f ms, %.1f %% <= 34 ms\n",
+              secs > 0 ? g_main_work.n / secs / 60.0 * 100.0 : 0.0, secs > 0 ? g_main_work.n / secs : 0.0, secs > 0 ? g_shown.n / secs : 0.0,
+              g_shown.Pct(0.5), g_shown.Pct(0.95), g_shown.Pct(0.99), g_shown.n ? le34 * 100.0 / g_shown.n : 0.0);
   std::fflush(stdout);
   // The strip: m = main thread work, c = GPU command thread work, g = GPU frame (p50:p95, ms).
   std::snprintf(rex_nx_meter_text, sizeof(rex_nx_meter_text), "m %.1f:%.1f c %.1f:%.1f g %.1f:%.1f", g_main_work.Pct(0.5),
@@ -80,6 +88,7 @@ void Report(uint64_t now) {
   g_main_ring = Hist{};
   g_cp_work = Hist{};
   g_gpu_frame = Hist{};
+  g_shown = Hist{};
   g_frames = 0;
   g_report_tick = now;
 }
@@ -116,6 +125,13 @@ void rex_nx_meter_leave(uint64_t t0, int kind) {
   g_main_last_ring = t_ring_ticks;
   if (!g_report_tick) g_report_tick = now;
   if (ToMs(now - g_report_tick) >= 30000.0) Report(now);
+}
+
+// A present (deko3d backend, the command processor thread): the shown-frame interval.
+void rex_nx_meter_present() {
+  const uint64_t now = Now();
+  if (g_shown_last) g_shown.Add(ToMs(now - g_shown_last));
+  g_shown_last = now;
 }
 
 // The GPU's own time for one frame (deko3d backend, two GPU timestamps; Switch and Eden).
