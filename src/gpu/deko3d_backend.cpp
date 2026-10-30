@@ -1244,8 +1244,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #ifdef __SWITCH__
     dkSwapchainSetSwapInterval(swapchain_, interval);
 #endif
-    std::printf("[nx] gpu: swap interval %u (%s fps cap) from swap #%u
-", interval, interval == 2 ? "30" : "60", swaps_);
+    std::printf("[nx] gpu: swap interval %u (%s fps cap) from swap #%u\n", interval, interval == 2 ? "30" : "60", swaps_);
   }
 
   // Linux test host: HCU_DK_START_SWAP=N turns the backend into a null backend until swap N (the guest runs
