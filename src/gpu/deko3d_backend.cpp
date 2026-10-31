@@ -515,12 +515,34 @@ class Deko3dCommandProcessor : public CommandProcessor {
     sampler_desc_offset_ = kFrames * kMaxImageDescriptors * sizeof(DkImageDescriptor);
     // Samplers, indexed by SamplerIndex: the min and mag filters (the fetch instruction may override the
     // fetch constant's), the border colour (black / white) and every Xenos clamp mode per axis.
+    // Console A/B of the samplers, file sfix (words in any order): "linear" / "nearest" = every sampler that filter,
+    // "lodbias=<x>", "aniso=<n>". The fine horizontal hatching over the whole picture (console only) has the period of the
+    // game's 480x272 post-effect buffers stretched to 1280x720.
+    int force_filter = 0;  // 1 linear, 2 nearest
+    float lod_bias = 0.f, aniso = 1.f;
+    const std::string sdir = REXCVAR_GET(deko3d_shader_dir);  // shader_dir_ is set below; the debug dir is its parent
+    const size_t scut = sdir.size() >= 2 ? sdir.rfind('/', sdir.size() - 2) : std::string::npos;
+    const std::string sfix_dir = scut == std::string::npos ? "" : sdir.substr(0, scut + 1);
+    if (FILE* sf = std::fopen((sfix_dir + "sfix").c_str(), "r")) {
+      char w[32];
+      while (std::fscanf(sf, "%31s", w) == 1) {
+        if (!std::strcmp(w, "linear")) force_filter = 1;
+        else if (!std::strcmp(w, "nearest")) force_filter = 2;
+        else if (!std::strncmp(w, "lodbias=", 8)) lod_bias = float(std::atof(w + 8));
+        else if (!std::strncmp(w, "aniso=", 6)) aniso = std::max(1.f, float(std::atof(w + 6)));
+      }
+      std::fclose(sf);
+    }
+    Log("sfix: filters %s, lod bias %g, anisotropy %g", force_filter == 1 ? "all linear" : force_filter == 2 ? "all nearest" : "as the game sets them",
+        lod_bias, aniso);
     for (uint32_t i = 0; i < kSamplerCount; i++) {
       DkSampler s;
       dkSamplerDefaults(&s);
-      s.minFilter = (i & 1) ? DkFilter_Linear : DkFilter_Nearest;
-      s.magFilter = (i & 2) ? DkFilter_Linear : DkFilter_Nearest;
+      s.minFilter = (force_filter ? force_filter == 1 : (i & 1)) ? DkFilter_Linear : DkFilter_Nearest;
+      s.magFilter = (force_filter ? force_filter == 1 : (i & 2) != 0) ? DkFilter_Linear : DkFilter_Nearest;
       s.mipFilter = DkMipFilter_None;
+      s.lodBias = lod_bias;
+      s.maxAnisotropy = aniso;
       s.wrapMode[0] = WrapModeOf(xenos::ClampMode((i >> 3) & 7));
       s.wrapMode[1] = WrapModeOf(xenos::ClampMode((i >> 6) & 7));
       s.wrapMode[2] = DkWrapMode_ClampToEdge;
