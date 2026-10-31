@@ -92,14 +92,20 @@ for s in vert frag; do
 done
 SHADER_DUMPS=${HCU_SHADER_DUMPS:-$ROOT/shaders_trace}
 if [ -d "$SHADER_DUMPS" ]; then
-    rm -rf "$BUILD/glsl"
-    python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl" --check | tail -1
+    rm -rf "$BUILD/glsl" "$BUILD/glsl_np"
+    python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl" --check --precise | tail -1
+    # The vertex shaders without precise outputs, staged as shader_<hash>.vert.np.dksh (the zfix file's "noprecise").
+    python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl_np" --check | tail -1
     # The Linux test host reads the GLSL from here (--deko3d_shader_dir=$BUILD/glsl/), the present pair too.
     for s in vert frag; do cp "$SRC/src/gpu/shaders/present.$s" "$BUILD/glsl/present.$s.glsl"; done
     for f in "$BUILD"/glsl/*.glsl.dksh; do
         [ -f "$f" ] || continue
         b=$(basename "$f" .glsl.dksh)
         cp "$f" "$STAGE/shaders/$b.dksh"
+    done
+    for f in "$BUILD"/glsl_np/*.vert.glsl.dksh; do
+        [ -f "$f" ] || continue
+        cp "$f" "$STAGE/shaders/$(basename "$f" .glsl.dksh).np.dksh"
     done
 fi
 cp "$BUILD/hcu.nro" "$STAGE/hcu.nro"

@@ -552,11 +552,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
     always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: textures upload at every bind (missed dirty pages = stale sprites)
     overlay_on_ = access((debug_dir + "overlay_off").c_str(), F_OK) != 0;  // the version + fps strip
-    if (FILE* zb = std::fopen((debug_dir + "dk_zbias").c_str(), "r")) {  // debug A/B: the colour-pass depth bias in depth units (0 = off)
-      char text[32] = {};
-      if (std::fgets(text, sizeof(text), zb)) z_bias_ = float(std::atof(text));
-      std::fclose(zb);
+    // Console A/B of the depth fixes, file zfix (words in any order): "noprecise" = the vertex shaders without precise outputs
+    // (shader_*.vert.np.dksh), "sb=<units>,<slope>" = the shadow-pass depth bias ("sb=0,0" = off), "cb=<units>" = the
+    // colour-pass depth bias ("cb=0" = off).
+    if (FILE* zf = std::fopen((debug_dir + "zfix").c_str(), "r")) {
+      char w[32];
+      while (std::fscanf(zf, "%31s", w) == 1) {
+        if (!std::strcmp(w, "noprecise")) no_precise_ = true;
+        else if (!std::strncmp(w, "sb=", 3)) std::sscanf(w + 3, "%f,%f", &shadow_bias_, &shadow_slope_);
+        else if (!std::strncmp(w, "cb=", 3)) z_bias_ = float(std::atof(w + 3));
+      }
+      std::fclose(zf);
     }
+    Log("zfix: vertex shaders %s; shadow-pass depth bias %g units, slope %g; colour-pass depth bias %g units",
+        no_precise_ ? "without precise (.np)" : "precise", shadow_bias_, shadow_slope_, z_bias_);
     no_depth_copy_ = access((debug_dir + "dk_nodepthcopy").c_str(), F_OK) == 0;  // debug A/B: depth resolves are ignored (shadow maps stay empty)
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
@@ -585,7 +594,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     char name[512];
     std::snprintf(name, sizeof(name), "%sshader_%016llX.%s.dksh", shader_dir_.c_str(), (unsigned long long)hash,
                   shader_type == xenos::ShaderType::kVertex ? "vert" : "frag");
-    shader->loaded = LoadDksh(name, shader->shader);
+    if (no_precise_ && shader_type == xenos::ShaderType::kVertex) {
+      char np[512];
+      std::snprintf(np, sizeof(np), "%sshader_%016llX.vert.np.dksh", shader_dir_.c_str(), (unsigned long long)hash);
+      shader->loaded = LoadDksh(np, shader->shader);
+    }
+    if (!shader->loaded) shader->loaded = LoadDksh(name, shader->shader);
     if (shader->loaded && shader_type == xenos::ShaderType::kVertex) {
       std::snprintf(name, sizeof(name), "%sshader_%016llX.geom.dksh", shader_dir_.c_str(), (unsigned long long)hash);
       shader->geom_loaded = LoadDksh(name, shader->geom);
@@ -816,7 +830,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // Rectangle lists: the geometry shader makes the 4th vertex, or the hardware mode (cvar).
     const bool use_gs = rects && vs->geom_loaded && !REXCVAR_GET(deko3d_fill_rectangle);
     DkRasterizerState rs;
-    bool z_biased = false;
+    bool z_biased = false, shadow_biased = false;
     dkRasterizerStateDefaults(&rs);
     rs.cullMode = DkFace_None;  // TODO(cull): cull_front/cull_back once the winding is verified on a picture
     rs.fillRectangleEnable = rects && !use_gs;
@@ -836,7 +850,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // The colour pass of a mesh repeats its depth pre-pass with another vertex shader (depth func LESS or LEQUAL): the two
       // positions differ in the last bits on a real GPU, and the whole mesh fails the test. The colour pass is pulled closer.
       z_biased = z_bias_ != 0.f && writes_color && dc.z_enable && (uint32_t(dc.zfunc) == 1 || uint32_t(dc.zfunc) == 3);
-      rs.depthBiasEnableMask = z_biased ? DkPolygonFlag_Fill : 0;  // 0.188-0.232 set 1 = DkPolygonFlag_Point: triangles got no bias
+      // The shadow pass (no colour target, depth written; HCU's stage shadow map): its depth is pushed away from the light.
+      // The receivers (PS EFC5D978279C500E) compare it with their own light-space depth; on the console the two differ in the
+      // last bits and the ground, rocks and sky show rings and stripes of self-shadowing (Eden and the Linux GL host do not).
+      shadow_biased = !color && depth && dc.z_write_enable && (shadow_bias_ != 0.f || shadow_slope_ != 0.f);
+      rs.depthBiasEnableMask = (z_biased || shadow_biased) ? DkPolygonFlag_Fill : 0;  // 0.188-0.232 set 1 = DkPolygonFlag_Point: triangles got no bias
       char key[48];
       std::snprintf(key, sizeof(key), "clip %u %u", uint32_t(clip.clip_disable), uint32_t(clip.dx_clip_space_def));
       LogOnce(key, "clip control: clip_disable %u dx_clip_space_def %u (first draw VS %016llX)", uint32_t(clip.clip_disable),
@@ -844,6 +862,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     dkCmdBufBindRasterizerState(cmd, &rs);
     if (z_biased) dkCmdBufSetDepthBias(cmd, z_bias_, 0.f, 0.f);
+    if (shadow_biased) {
+      dkCmdBufSetDepthBias(cmd, shadow_bias_, 0.f, shadow_slope_);
+      frame_shadow_biased_++;
+      char key[32];
+      std::snprintf(key, sizeof(key), "shadowbias %u", depth_info.depth_base);
+      LogOnce(key, "shadow-pass depth bias %g units, slope %g on depth base %u (VS %016llX)", shadow_bias_, shadow_slope_, depth_info.depth_base,
+              (unsigned long long)vs->ucode_data_hash());
+    }
     auto blend = regs.Get<reg::RB_BLENDCONTROL>();
     bool blend_enabled = !(blend.color_srcblend == xenos::BlendFactor::kOne && blend.color_destblend == xenos::BlendFactor::kZero &&
                            blend.color_comb_fcn == xenos::BlendOp::kAdd && blend.alpha_srcblend == xenos::BlendFactor::kOne &&
@@ -1224,9 +1250,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     LogSkips();
     if (swaps_ <= 3 || swaps_ % 60 == 0) {
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
-      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB (vertices %u KB) staging %u KB; images %u (%u MB), %u image flips so far",
+      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %u shadow-biased, %llu dirty pages; data %u KB (vertices %u KB) staging %u KB; images %u (%u MB), %u image flips so far",
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
-          frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
+          frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, frame_shadow_biased_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
           f.data.used >> 10, frame_vtx_bytes_ >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
       // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
       // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
@@ -1241,7 +1267,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       }
     }
     dirty_pages_at_swap_ = dirty_pages_;
-    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = 0;
+    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
     frame_ = (frame_ + 1) % kFrames;
     begun_ = false;
     drawn_frames_++;
@@ -2219,6 +2245,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
   float z_bias_ = -16.f;
+  float shadow_bias_ = 32.f, shadow_slope_ = 1.5f;  // shadow-pass depth bias (file zfix)
+  bool no_precise_ = false;  // zfix "noprecise"
   bool overlay_on_ = true;
   HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
   char overlay_text_[96] = {};
@@ -2252,7 +2280,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint32_t image_count_ = 0, uploads_ = 0, reuploads_ = 0;
   uint32_t image_flips_ = 0;  // recreated + resized images, all frames (the first 40 are logged)
   uint64_t upload_bytes_ = 0;
-  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0;
+  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0, frame_shadow_biased_ = 0;
 };
 
 class Deko3dGraphicsSystem : public GraphicsSystem {

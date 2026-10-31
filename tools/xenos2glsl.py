@@ -40,6 +40,9 @@ REPLICATED = {'dp4', 'dp3', 'dp2add', 'max4', 'setp_eq_push', 'setp_ne_push', 's
               'kill_eq', 'kill_gt', 'kill_ge', 'kill_ne'}
 
 
+PRECISE = False  # --precise
+
+
 class Translator:
     def __init__(self, text, stage, name):
         self.stage = stage  # 'vert' or 'frag'
@@ -516,6 +519,10 @@ class Translator:
             # The same position in a depth pre-pass and in the colour pass (two shaders) must match bit for bit,
             # or the colour pass fails its LEQUAL test (missing meshes, z-fighting).
             out.append('invariant gl_Position;')
+            if PRECISE:
+                # The console's compiler (uam) fuses multiply-adds per shader: a shadow caster's position and a receiver's
+                # light-space interpolator, the same math in two shaders, can differ in the last bits (self-shadowing rings).
+                out.append('precise gl_Position;')
             for a in self.attrs:
                 out.append('layout(location = %d) in vec4 in_%d;  // vf%d offset %d %s' % (
                     a['index'], a['index'], a['slot'], a['offset_words'], a['format']))
@@ -530,7 +537,7 @@ class Translator:
         colors = sorted(int(e[2:]) for e in self.exports if e.startswith('oC'))
         if self.stage == 'vert':
             for k in interps:
-                out.append('layout(location = %d) out vec4 o_%d;' % (k, k))
+                out.append('layout(location = %d) %sout vec4 o_%d;' % (k, 'precise ' if PRECISE else '', k))
         else:
             for k in colors:
                 out.append('layout(location = %d) out vec4 oC_%d;' % (k, k))
@@ -688,7 +695,10 @@ def main():
     ap.add_argument('--all', help='translate every *.ucode.vert/frag in this directory')
     ap.add_argument('--out-dir', help='output directory for --all')
     ap.add_argument('--check', action='store_true', help='compile the output with uam')
+    ap.add_argument('--precise', action='store_true', help='vertex shaders: precise position and interpolators (no fused multiply-adds)')
     args = ap.parse_args()
+    global PRECISE
+    PRECISE = args.precise
     if args.all:
         files = sorted(f for f in os.listdir(args.all) if f.endswith('.ucode.vert') or f.endswith('.ucode.frag'))
         os.makedirs(args.out_dir or args.all, exist_ok=True)
