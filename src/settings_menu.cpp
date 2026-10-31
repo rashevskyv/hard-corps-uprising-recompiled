@@ -50,7 +50,7 @@ const Item kItems[] = {
     {"COLOUR BIAS", {"-16", "OFF"}, 2, false, [] { return NearestF(hcu_settings.colour_bias, kColour, 2); },
      [](int i) { hcu_settings.colour_bias = kColour[i]; }},
     {"SHADOW MAP", {"OFF", "ON"}, 2, false, [] { return hcu_settings.shadow_map; }, [](int i) { hcu_settings.shadow_map = i; }},
-    {"VIEW", {"GAME", "SCENE BEFORE POST", "BLOOM 480X272"}, 3, false, [] { return hcu_settings.view; },
+    {"VIEW", {"GAME", "SCENE BEFORE POST", "SHADOW MAP DEPTH"}, 3, false, [] { return hcu_settings.view; },
      [](int i) { hcu_settings.view = i; }},
     {"PRECISE SHADERS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.precise; }, [](int i) { hcu_settings.precise = i; }},
 };

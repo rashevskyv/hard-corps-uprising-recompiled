@@ -2192,6 +2192,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
       dd->content_serial = serial_;
       dd->resolve_swap = swaps_ + 1;
       depth_resolves_++;
+      // Settings menu VIEW SHADOW MAP DEPTH: the depth texture itself is shown (red = depth as the receivers' 9 point taps
+      // read it). Smooth = the map is right and the receivers' compare is the suspect; blocks or noise = the depth
+      // copy or the Z24S8 texture fetch on the console.
+      if (!view_image_ && hcu_settings.view == 2) view_image_ = dd;
       if (x + w > dsrc->width) w = x < dsrc->width ? dsrc->width - x : 0;
       if (y + h > dsrc->height) h = y < dsrc->height ? dsrc->height - y : 0;
       if (dx + w > dd->width) w = dx < dd->width ? dd->width - dx : 0;
@@ -2227,11 +2231,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, dst_format, true);  // gh: exact size (the aligned one made it ping-pong with the texture bind)
     if (!dst) return true;
     dst->from_resolve = true;
-    // Settings menu VIEW: the frame's first resolve of the scene (1280x720, before the post effects) or of a 480x272
-    // post-effect buffer is shown at the swap. Which one carries the hatching names the pass that draws it.
-    if (!view_image_ && ((hcu_settings.view == 1 && w == kPresentWidth && h == kPresentHeight) ||
-                         (hcu_settings.view == 2 && w == 480 && h == 272)))
-      view_image_ = dst;
+    // Settings menu VIEW: the frame's first resolve of the scene (1280x720, before the post effects) is shown at the swap.
+    if (!view_image_ && hcu_settings.view == 1 && w == kPresentWidth && h == kPresentHeight) view_image_ = dst;
     dst->content_serial = serial_;
     dst->resolve_swap = swaps_ + 1;
     dst->mem_bytes = dest_pitch * dest_height * 4;

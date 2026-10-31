@@ -22,7 +22,7 @@ struct HcuSettings {
   float aniso;        // at start
   int shadow_map;     // 0 = the shadow pass is not drawn (A/B of the console rings: the map keeps its clear, all lit)
   int view;           // what is shown (not saved): 0 = the game, 1 = the scene copy before the post effects, 2 = the
-                      // first 480x272 post-effect buffer (bloom), stretched
+                      // shadow map (the depth texture the receivers sample), stretched
 };
 
 extern HcuSettings hcu_settings;
