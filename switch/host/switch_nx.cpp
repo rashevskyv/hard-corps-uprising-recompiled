@@ -627,6 +627,9 @@ extern "C" void rex_nx_thread_name(void* pthread, const char* name) {
 }
 
 extern "C" void userAppExit(void) {
+    static bool done = false;  // rex_nx_quick_exit runs it before libnx's exit does
+    if (done) return;
+    done = true;
     sampler_running = false;
     threadWaitForExit(&sampler_thread);
     threadClose(&sampler_thread);
@@ -638,13 +641,23 @@ extern "C" void userAppExit(void) {
     fsync(fileno(stdout));
 }
 
-// The way out (HOME -> Close, the game's own quit, a GPU queue error): the log is written, the clocks go back and the
-// process ends at once. The runtime's teardown is not run: it stopped the guest threads and freed the GPU objects while
-// the GPU command thread still drew and swapped (console 0.240/0.243: exit = error).
+// The way out (HOME -> Close, the game's own quit, a GPU queue error). The runtime's teardown is not run: it stopped
+// the guest threads and freed the GPU objects while the GPU command thread still drew and swapped (console 0.240/0.243).
+// A bare svcExitProcess skipped libnx's exit, so the applet session was never closed and the system showed "the
+// software was closed because an error occurred" (console 0.250); libnx's exit with the threads still running closed
+// nvdrv/audout/hid under them (cvhd 0.254, the same error). So: the log and the clocks first, then every other thread
+// is paused (svcSetThreadActivity), then libnx's own exit closes the services and ends the process (end_process).
 extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why) {
-    std::printf("[nx] exit: %s: the process ends now\n", why);
+    std::printf("[nx] exit: %s: the other threads are paused, then libnx's exit\n", why);
     userAppExit();
-    svcExitProcess();
+    const Handle self = threadGetCurHandle();
+    unsigned paused = 0;
+    mutexLock(&nx_threads_lock);
+    for (NxThread& t : nx_threads)
+        if (t.thread && t.handle != self && R_SUCCEEDED(svcSetThreadActivity(t.handle, ThreadActivity_Paused))) paused++;
+    mutexUnlock(&nx_threads_lock);
+    (void)paused;
+    __libnx_exit(0);
 }
 
 // libnx gives a thread made without a stack size only 128 KB (every std::thread). The linker

@@ -531,7 +531,7 @@ void RenderOverlayText(uint32_t* px, const char* text) {
 }
 
 // The settings menu (src/settings_menu.cpp): kMenuW x kMenuH, one line per 18 rows.
-constexpr uint32_t kMenuLines = 12, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
+constexpr uint32_t kMenuLines = 14, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
 
 class Deko3dCommandProcessor : public CommandProcessor {
  public:
@@ -1128,6 +1128,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
       front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, guest_images_[frontbuffer_ptr]->format, false);
     }
+    if (hcu_settings.view == 3 && largest_texture_) view_image_ = largest_texture_;
     if (view_image_) front = view_image_;  // settings menu VIEW (A/B of the console hatching)
     view_image_ = nullptr;
     if (present_target_) {
@@ -1960,7 +1961,26 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // A re-upload (the game reuses sprite memory between draws): earlier draws of this frame may still be
     // sampling the image.
     if (img.content_serial) dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, 0);
-    dkCmdBufCopyBufferToImage(f.cmdbuf, &cb, &view, &rect, 0);
+    if (hcu_settings.upload_strips && bh > 64) {
+      // Settings menu UPLOAD IN STRIPS (A/B): the console's hatching has the size of one block-linear GOB of the stage
+      // backdrop (16x8 texels at its 3.4x minification); one copy of a 41 MB image is suspect.
+      const uint32_t row = bw * bpb;
+      for (uint32_t by = 0; by < bh; by += 64) {
+        const uint32_t nb = std::min(64u, bh - by);
+        const uint32_t ty = by * fi->block_height, th = std::min(nb * fi->block_height, height - ty);
+        DkCopyBuf sb{f.staging.gpu + off + uint64_t(by) * row, 0, 0};
+        DkImageRect sr{0, ty, 0, width, th, 1};
+        dkCmdBufCopyBufferToImage(f.cmdbuf, &sb, &view, &sr, 0);
+      }
+      LogOnce("strips", "textures are uploaded in strips of 64 block rows (UPLOAD IN STRIPS)");
+    } else {
+      dkCmdBufCopyBufferToImage(f.cmdbuf, &cb, &view, &rect, 0);
+    }
+    if (!largest_texture_ || uint64_t(width) * height > uint64_t(largest_texture_->width) * largest_texture_->height) {
+      largest_texture_ = &img;
+      Log("largest texture so far: %s %ux%u %s at %08X (VIEW LARGEST TEXTURE)", fi->name, width, height, info.is_tiled ? "tiled" : "linear",
+          info.memory.base_address);
+    }
     dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
     uploads_++;
     upload_bytes_ += bytes;
@@ -2362,6 +2382,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_vs_ = false, present_fs_ = false;
   bool present_target_ = false;
   HostImage* view_image_ = nullptr;  // settings menu VIEW
+  HostImage* largest_texture_ = nullptr;  // VIEW LARGEST TEXTURE
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
   float z_bias_ = -16.f;

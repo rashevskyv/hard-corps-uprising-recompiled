@@ -22,7 +22,9 @@ struct HcuSettings {
   float aniso;        // at start
   int shadow_map;     // 0 = the shadow pass is not drawn (A/B of the console rings: the map keeps its clear, all lit)
   int view;           // what is shown (not saved): 0 = the game, 1 = the scene copy before the post effects, 2 = the
-                      // shadow map (the depth texture the receivers sample), stretched
+                      // shadow map (the depth texture the receivers sample), 3 = the largest texture uploaded (the
+                      // stage backdrop), all stretched
+  int upload_strips;  // 1 = textures go up in strips of 64 block rows (A/B of the console hatching; at start)
 };
 
 extern HcuSettings hcu_settings;
