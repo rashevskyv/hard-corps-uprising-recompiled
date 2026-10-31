@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..665e291 100644
+index 2205439..15bbd59 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,6 +21,7 @@
@@ -247,7 +247,7 @@ index 2205439..665e291 100644
 +}
 +
 +// The settings menu (src/settings_menu.cpp): kMenuW x kMenuH, one line per 18 rows.
-+constexpr uint32_t kMenuLines = 12, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
++constexpr uint32_t kMenuLines = 14, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
 +
  class Deko3dCommandProcessor : public CommandProcessor {
   public:
@@ -667,19 +667,20 @@ index 2205439..665e291 100644
        return;
      }
      Frame& f = frames_[frame_];
-@@ -729,8 +1126,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -729,8 +1126,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
      HostImage* front = nullptr;
      if (guest_images_.count(frontbuffer_ptr) && frontbuffer_width && frontbuffer_height) {
        // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
 -      front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, DkImageFormat_RGBA8_Unorm, false);
 +      front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, guest_images_[frontbuffer_ptr]->format, false);
      }
++    if (hcu_settings.view == 3 && largest_texture_) view_image_ = largest_texture_;
 +    if (view_image_) front = view_image_;  // settings menu VIEW (A/B of the console hatching)
 +    view_image_ = nullptr;
      if (present_target_) {
        // Debug (the file sdmc:/switch/hcu/dk_present_rt): show the widest colour render target itself,
        // bypassing the resolve copies and the front buffer image.
-@@ -761,8 +1160,91 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -761,8 +1161,91 @@ class Deko3dCommandProcessor : public CommandProcessor {
        for (auto& it : guest_images_) if (it.second->width >= 600 && it.second != front) { char n[48]; std::snprintf(n, sizeof(n), "guest %08X%s", it.first, it.second->from_resolve ? " (resolve)" : " (upload)"); queue_dump(n, it.second); }
        dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
      }
@@ -772,7 +773,7 @@ index 2205439..665e291 100644
      if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
      HostImage* target = swap_images_[slot];
      dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
-@@ -800,17 +1282,68 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -800,17 +1283,68 @@ class Deko3dCommandProcessor : public CommandProcessor {
        if (dslot != UINT32_MAX) {
          DkResHandle handle = dkMakeTextureHandle(dslot, 4);  // linear, clamp
          dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &handle, 1);
@@ -842,7 +843,7 @@ index 2205439..665e291 100644
  #endif
      if (!dumps.empty()) {
        dkQueueWaitIdle(queue_);
-@@ -827,26 +1360,94 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -827,26 +1361,94 @@ class Deko3dCommandProcessor : public CommandProcessor {
              w && h ? px[(h / 2) * w + w / 2] : 0, w && h ? px[(3 * h / 4) * w + 3 * w / 4] : 0, w && h ? px[(h - 1) * w + w - 1] : 0);
        }
      }
@@ -942,7 +943,7 @@ index 2205439..665e291 100644
  #ifdef HCU_DK_GL
      static const uint32_t start = std::getenv("HCU_DK_START_SWAP") ? uint32_t(std::atoi(std::getenv("HCU_DK_START_SWAP"))) : 0;
      static const char* dir = std::getenv("HCU_DK_DUMP_DIR");
-@@ -863,17 +1464,52 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -863,17 +1465,52 @@ class Deko3dCommandProcessor : public CommandProcessor {
  #endif
    }
    mutable bool skip_checked_[1] = {false};
@@ -996,7 +997,7 @@ index 2205439..665e291 100644
      f.data.Reset();
      f.staging.Reset();
      f.next_descriptor = 0;
-@@ -882,6 +1518,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -882,6 +1519,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
      dkCmdBufAddMemory(f.cmdbuf, cmdmem_.block, f.cmd_offset, kFrameCmdBytes);
      dkCmdBufBindImageDescriptorSet(f.cmdbuf, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
      dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
@@ -1010,7 +1011,7 @@ index 2205439..665e291 100644
      bound_color_ = nullptr;
      bound_depth_ = nullptr;
    }
-@@ -923,6 +1566,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -923,6 +1567,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // serials. Linux: a hash of the range against the hash taken when the contents were set.
    uint64_t HashMemory(uint32_t physical, uint32_t bytes) const {
  #ifdef HCU_DK_GL
@@ -1019,7 +1020,7 @@ index 2205439..665e291 100644
      const uint8_t* p = memory_->TranslatePhysical(physical);
      uint64_t h = 1469598103934665603ull;
      uint32_t words = bytes / 8;
-@@ -1060,20 +1705,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1060,20 +1706,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // The image at a guest address (resolve destinations, textures). A fetch or a swap asks for the
    // exact size (a resolve created it with the aligned height: resized once, contents copied); a
    // resolve asks for a minimum size (`at_least`) and creates with the aligned size (`create_w/h`).
@@ -1052,7 +1053,7 @@ index 2205439..665e291 100644
              img->height, fresh->width, fresh->height);
          it->second = fresh;
          RecycleImage(img);
-@@ -1081,11 +1734,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1081,11 +1735,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
        }
        if (img->width == width && img->height == height) return img;
        if (at_least && width <= img->width && height <= img->height) return img;
@@ -1066,7 +1067,7 @@ index 2205439..665e291 100644
        if (!resized) return img;
        ClearNewImage(resized);
        uint32_t cw = std::min(width, img->width), ch = std::min(height, img->height);
-@@ -1097,16 +1751,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1097,16 +1752,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
        dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
        dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
        resized->from_resolve = img->from_resolve;
@@ -1086,7 +1087,7 @@ index 2205439..665e291 100644
      if (!img) return nullptr;
      img->guest_base = base;
      guest_images_.emplace(base, img);
-@@ -1114,6 +1769,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1114,6 +1770,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
      return img;
    }
  
@@ -1125,7 +1126,7 @@ index 2205439..665e291 100644
    HostImage* TextureImage(Frame& f, const TextureInfo& info, const xenos::xe_gpu_texture_fetch_t& fetch) {
      DkImageFormat format;
      bool reversed;
-@@ -1123,13 +1810,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1123,13 +1811,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
      }
      uint32_t base = info.memory.base_address;
      // TextureInfo keeps the fetch constant's fields: the size minus one.
@@ -1169,7 +1170,7 @@ index 2205439..665e291 100644
      // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
      if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
      if (img->content_serial) {
-@@ -1197,6 +1912,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1197,6 +1913,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
    uint32_t dump_count_ = 0;
  #endif
  
@@ -1195,7 +1196,35 @@ index 2205439..665e291 100644
    bool UploadTexture(Frame& f, HostImage& img, const TextureInfo& info, xenos::Endian endian) {
      const FormatInfo* fi = info.format_info();
      const uint32_t width = info.width + 1, height = info.height + 1;  // TextureInfo keeps size minus one
-@@ -1293,8 +2027,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1226,7 +1961,26 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     // A re-upload (the game reuses sprite memory between draws): earlier draws of this frame may still be
+     // sampling the image.
+     if (img.content_serial) dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, 0);
+-    dkCmdBufCopyBufferToImage(f.cmdbuf, &cb, &view, &rect, 0);
++    if (hcu_settings.upload_strips && bh > 64) {
++      // Settings menu UPLOAD IN STRIPS (A/B): the console's hatching has the size of one block-linear GOB of the stage
++      // backdrop (16x8 texels at its 3.4x minification); one copy of a 41 MB image is suspect.
++      const uint32_t row = bw * bpb;
++      for (uint32_t by = 0; by < bh; by += 64) {
++        const uint32_t nb = std::min(64u, bh - by);
++        const uint32_t ty = by * fi->block_height, th = std::min(nb * fi->block_height, height - ty);
++        DkCopyBuf sb{f.staging.gpu + off + uint64_t(by) * row, 0, 0};
++        DkImageRect sr{0, ty, 0, width, th, 1};
++        dkCmdBufCopyBufferToImage(f.cmdbuf, &sb, &view, &sr, 0);
++      }
++      LogOnce("strips", "textures are uploaded in strips of 64 block rows (UPLOAD IN STRIPS)");
++    } else {
++      dkCmdBufCopyBufferToImage(f.cmdbuf, &cb, &view, &rect, 0);
++    }
++    if (!largest_texture_ || uint64_t(width) * height > uint64_t(largest_texture_->width) * largest_texture_->height) {
++      largest_texture_ = &img;
++      Log("largest texture so far: %s %ux%u %s at %08X (VIEW LARGEST TEXTURE)", fi->name, width, height, info.is_tiled ? "tiled" : "linear",
++          info.memory.base_address);
++    }
+     dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
+     uploads_++;
+     upload_bytes_ += bytes;
+@@ -1293,8 +2047,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
      uint32_t sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
      if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
@@ -1225,7 +1254,7 @@ index 2205439..665e291 100644
      SysConstants sys{};
      for (int i = 0; i < 3; i++) {
        sys.ndc_scale[i] = vi.ndc_scale[i];
-@@ -1311,8 +2064,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1311,8 +2084,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
      dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
      dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
@@ -1234,7 +1263,7 @@ index 2205439..665e291 100644
      return true;
    }
  
-@@ -1387,6 +2138,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1387,6 +2158,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
                  depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
                  color[1], color[2], color[3], z, scale);
        }
@@ -1245,7 +1274,7 @@ index 2205439..665e291 100644
        clears_++;
        frame_clears_++;
      }
-@@ -1399,8 +2154,65 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1399,8 +2174,65 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -1312,7 +1341,7 @@ index 2205439..665e291 100644
        return true;
      }
      uint32_t src_pitch = info.color_edram_info.pitch_tiles * 80;
-@@ -1412,10 +2224,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1412,10 +2244,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
      (void)dest_pitch; (void)dest_height;
      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
@@ -1331,7 +1360,7 @@ index 2205439..665e291 100644
      dst->mem_bytes = dest_pitch * dest_height * 4;
      dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
      if (x + w > src->width) w = x < src->width ? src->width - x : 0;
-@@ -1447,6 +2266,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1447,6 +2286,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
        LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
                x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
      }
@@ -1342,7 +1371,7 @@ index 2205439..665e291 100644
      resolves_++;
      frame_resolves_++;
      return true;
-@@ -1521,7 +2344,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1521,7 +2364,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      std::vprintf(fmt, ap);
      std::printf("\n");
      va_end(ap);
@@ -1352,11 +1381,12 @@ index 2205439..665e291 100644
    }
  
    DkDevice device_ = nullptr;
-@@ -1536,8 +2361,32 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1536,8 +2381,33 @@ class Deko3dCommandProcessor : public CommandProcessor {
    DkShader present_vs_shader_{}, present_fs_shader_{};
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
 +  HostImage* view_image_ = nullptr;  // settings menu VIEW
++  HostImage* largest_texture_ = nullptr;  // VIEW LARGEST TEXTURE
    bool dump_images_ = false;
 +  bool no_depth_copy_ = false;
 +  float z_bias_ = -16.f;
@@ -1385,7 +1415,7 @@ index 2205439..665e291 100644
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
    uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
-@@ -1547,10 +2396,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1547,10 +2417,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
    HostImage* bound_color_ = nullptr;
    HostImage* bound_depth_ = nullptr;
    std::unordered_set<std::string> logged_;
@@ -1714,7 +1744,7 @@ index 378de87..bcc5b4a 100644
  
  X_RESULT NXInputDriver::GetDeviceKeystroke(DeviceId id, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke) {
 diff --git b/switch/host/switch_nx.cpp a/switch/host/switch_nx.cpp
-index eba1f4d..ca1c88a 100644
+index eba1f4d..63fcec2 100644
 --- b/switch/host/switch_nx.cpp
 +++ a/switch/host/switch_nx.cpp
 @@ -11,8 +11,16 @@
@@ -1909,17 +1939,37 @@ index eba1f4d..ca1c88a 100644
      {"XMA", 0x2B, 2, 0x4},
      {"XThread", 0x3B, 1, 0x6},  // the game's other threads, time-sliced on cores 1-2
  };
-@@ -510,6 +638,15 @@ extern "C" void userAppExit(void) {
+@@ -499,6 +627,9 @@ extern "C" void rex_nx_thread_name(void* pthread, const char* name) {
+ }
+ 
+ extern "C" void userAppExit(void) {
++    static bool done = false;  // rex_nx_quick_exit runs it before libnx's exit does
++    if (done) return;
++    done = true;
+     sampler_running = false;
+     threadWaitForExit(&sampler_thread);
+     threadClose(&sampler_thread);
+@@ -510,6 +641,25 @@ extern "C" void userAppExit(void) {
      fsync(fileno(stdout));
  }
  
-+// The way out (HOME -> Close, the game's own quit, a GPU queue error): the log is written, the clocks go back and the
-+// process ends at once. The runtime's teardown is not run: it stopped the guest threads and freed the GPU objects while
-+// the GPU command thread still drew and swapped (console 0.240/0.243: exit = error).
++// The way out (HOME -> Close, the game's own quit, a GPU queue error). The runtime's teardown is not run: it stopped
++// the guest threads and freed the GPU objects while the GPU command thread still drew and swapped (console 0.240/0.243).
++// A bare svcExitProcess skipped libnx's exit, so the applet session was never closed and the system showed "the
++// software was closed because an error occurred" (console 0.250); libnx's exit with the threads still running closed
++// nvdrv/audout/hid under them (cvhd 0.254, the same error). So: the log and the clocks first, then every other thread
++// is paused (svcSetThreadActivity), then libnx's own exit closes the services and ends the process (end_process).
 +extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why) {
-+    std::printf("[nx] exit: %s: the process ends now\n", why);
++    std::printf("[nx] exit: %s: the other threads are paused, then libnx's exit\n", why);
 +    userAppExit();
-+    svcExitProcess();
++    const Handle self = threadGetCurHandle();
++    unsigned paused = 0;
++    mutexLock(&nx_threads_lock);
++    for (NxThread& t : nx_threads)
++        if (t.thread && t.handle != self && R_SUCCEEDED(svcSetThreadActivity(t.handle, ThreadActivity_Paused))) paused++;
++    mutexUnlock(&nx_threads_lock);
++    (void)paused;
++    __libnx_exit(0);
 +}
 +
  // libnx gives a thread made without a stack size only 128 KB (every std::thread). The linker
