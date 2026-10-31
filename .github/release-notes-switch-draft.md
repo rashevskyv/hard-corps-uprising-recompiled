@@ -33,5 +33,5 @@ Press **both sticks** (L3 + R3) together to open or close it. Up/down picks a li
 - "60" can slow the game down in busy scenes; "60 SKIP WHEN BUSY" keeps the game speed and drops frames instead.
 
 ### Files
-- `hcu.nro`: SHA-1 `<fill in at release>`
-- `shaders/`: `<count>` DKSH files
+- `hcu.nro`: SHA-1 `<fill in at release>` (test build 0.243.554f6ab: `4d441b3f2fe3e6a196456b4cd6f95a70392e43e5`)
+- `shaders/`: 121 DKSH files (88 + 33 `.np` vertex variants for PRECISE SHADERS OFF)
