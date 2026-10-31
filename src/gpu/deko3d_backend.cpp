@@ -1099,6 +1099,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #endif
     draws_++;
     frame_draws_++;
+    step_draws_++;
     return true;
   }
 
@@ -1113,6 +1114,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (Skipping()) {
       swaps_++;  // nothing was recorded: the frame is just counted
       view_image_ = nullptr;
+      step_n_ = step_draws_ = 0;
       if (swaps_ % 60 == 0) {
         if (!skip_odd_frames_) std::printf("[nx] gpu: swap #%u (skipped)\n", swaps_);
         ReadSwapInterval();
@@ -1128,9 +1130,19 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
       front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, guest_images_[frontbuffer_ptr]->format, false);
     }
-    if (hcu_settings.view == 3 && largest_texture_) view_image_ = largest_texture_;
     if (view_image_) front = view_image_;  // settings menu VIEW (A/B of the console hatching)
     view_image_ = nullptr;
+    if (step_log_) {
+      Log("frame passes end: %u resolves, %u draws after the last one (VIEW STEP shows resolve %d)", step_n_, step_draws_,
+          hcu_settings.view_step + 1);
+      step_log_ = false;
+    }
+    if (hcu_settings.view == 3 && (hcu_settings.view_step != step_logged_ || !step_logged_once_)) {
+      step_log_ = true;  // the next drawn frame lists its passes
+      step_logged_ = hcu_settings.view_step;
+      step_logged_once_ = true;
+    }
+    step_n_ = step_draws_ = 0;
     if (present_target_) {
       // Debug (the file sdmc:/switch/hcu/dk_present_rt): show the widest colour render target itself,
       // bypassing the resolve copies and the front buffer image.
@@ -1976,11 +1988,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
     } else {
       dkCmdBufCopyBufferToImage(f.cmdbuf, &cb, &view, &rect, 0);
     }
-    if (!largest_texture_ || uint64_t(width) * height > uint64_t(largest_texture_->width) * largest_texture_->height) {
-      largest_texture_ = &img;
-      Log("largest texture so far: %s %ux%u %s at %08X (VIEW LARGEST TEXTURE)", fi->name, width, height, info.is_tiled ? "tiled" : "linear",
-          info.memory.base_address);
-    }
     dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
     uploads_++;
     upload_bytes_ += bytes;
@@ -2216,6 +2223,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // read it). Smooth = the map is right and the receivers' compare is the suspect; blocks or noise = the depth
       // copy or the Z24S8 texture fetch on the console.
       if (!view_image_ && hcu_settings.view == 2) view_image_ = dd;
+      StepPass(dd, "depth", info.depth_original_base, dpitch, x, y, w, h, info.copy_dest_base);
       if (x + w > dsrc->width) w = x < dsrc->width ? dsrc->width - x : 0;
       if (y + h > dsrc->height) h = y < dsrc->height ? dsrc->height - y : 0;
       if (dx + w > dd->width) w = dx < dd->width ? dd->width - dx : 0;
@@ -2290,9 +2298,22 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (TraceFrame()) Log("T resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u) at %u,%u%s%s", info.color_edram_info.base_tiles, src_pitch, x, y, w, h,
                           info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? " clearC" : "", info.IsClearingDepth() ? " clearD" : "");
 #endif
+    StepPass(dst, "colour", info.color_edram_info.base_tiles, src_pitch, x, y, w, h, info.copy_dest_base);
     resolves_++;
     frame_resolves_++;
     return true;
+  }
+
+  // Settings menu VIEW STEP: every resolve of a drawn frame gets a number; resolve view_step + 1 is shown at the swap.
+  // When the step changes, the next drawn frame lists its passes: number, draws before it, source and destination.
+  void StepPass(HostImage* img, const char* kind, uint32_t base, uint32_t pitch, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t dest) {
+    step_n_++;
+    if (hcu_settings.view == 3 && int(step_n_) == hcu_settings.view_step + 1) view_image_ = img;
+    if (step_log_)
+      Log("pass %u: %u draws, then a %s resolve of EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u, host format %d)%s", step_n_, step_draws_,
+          kind, base, pitch, x, y, w, h, dest, img->width, img->height, int(img->format),
+          int(step_n_) == hcu_settings.view_step + 1 ? "  <- VIEW STEP" : "");
+    step_draws_ = 0;
   }
 
   // ----- shaders --------------------------------------------------------------------------------
@@ -2382,7 +2403,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool present_vs_ = false, present_fs_ = false;
   bool present_target_ = false;
   HostImage* view_image_ = nullptr;  // settings menu VIEW
-  HostImage* largest_texture_ = nullptr;  // VIEW LARGEST TEXTURE
+  uint32_t step_n_ = 0, step_draws_ = 0;  // VIEW STEP: resolves and draws so far in this frame
+  int step_logged_ = 0;
+  bool step_log_ = false, step_logged_once_ = false;
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
   float z_bias_ = -16.f;

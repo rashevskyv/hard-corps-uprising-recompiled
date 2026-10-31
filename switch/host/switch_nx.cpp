@@ -647,6 +647,9 @@ extern "C" void userAppExit(void) {
 // software was closed because an error occurred" (console 0.250); libnx's exit with the threads still running closed
 // nvdrv/audout/hid under them (cvhd 0.254, the same error). So: the log and the clocks first, then every other thread
 // is paused (svcSetThreadActivity), then libnx's own exit closes the services and ends the process (end_process).
+// libnx's exit sends the applet's Exit (ISelfController cmd 0) only when it runs as an NSO (_appletCleanup checks
+// envIsNso): as an NRO it leaves that to hbloader. A title-takeover application that ends without it gets the error
+// screen (console 0.252), so it is sent here.
 extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why) {
     std::printf("[nx] exit: %s: the other threads are paused, then libnx's exit\n", why);
     userAppExit();
@@ -657,6 +660,9 @@ extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why) {
         if (t.thread && t.handle != self && R_SUCCEEDED(svcSetThreadActivity(t.handle, ThreadActivity_Paused))) paused++;
     mutexUnlock(&nx_threads_lock);
     (void)paused;
+    const AppletType type = appletGetAppletType();
+    if (type == AppletType_Application || type == AppletType_SystemApplication)
+        serviceDispatch(appletGetServiceSession_SelfController(), 0);  // ISelfController::Exit
     __libnx_exit(0);
 }
 

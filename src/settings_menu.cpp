@@ -8,7 +8,7 @@
 
 #include <unistd.h>
 
-HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0};
+HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0};
 
 namespace {
 
@@ -20,7 +20,7 @@ uint32_t g_last = 0;
 // One menu line: its option names and how an option index maps to the settings.
 struct Item {
   const char* label;
-  const char* names[5];
+  const char* names[16];
   int count;
   bool at_start;  // applies at the next start
   int (*get)();
@@ -50,8 +50,10 @@ const Item kItems[] = {
     {"COLOUR BIAS", {"-16", "OFF"}, 2, false, [] { return NearestF(hcu_settings.colour_bias, kColour, 2); },
      [](int i) { hcu_settings.colour_bias = kColour[i]; }},
     {"SHADOW MAP", {"OFF", "ON"}, 2, false, [] { return hcu_settings.shadow_map; }, [](int i) { hcu_settings.shadow_map = i; }},
-    {"VIEW", {"GAME", "SCENE BEFORE POST", "SHADOW MAP DEPTH", "LARGEST TEXTURE"}, 4, false, [] { return hcu_settings.view; },
+    {"VIEW", {"GAME", "SCENE BEFORE POST", "SHADOW MAP DEPTH", "STEP"}, 4, false, [] { return hcu_settings.view; },
      [](int i) { hcu_settings.view = i; }},
+    {"VIEW STEP", {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}, 16, false,
+     [] { return hcu_settings.view_step; }, [](int i) { hcu_settings.view_step = i; }},
     {"PRECISE SHADERS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.precise; }, [](int i) { hcu_settings.precise = i; }},
     {"UPLOAD IN STRIPS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.upload_strips; },
      [](int i) { hcu_settings.upload_strips = i; }},

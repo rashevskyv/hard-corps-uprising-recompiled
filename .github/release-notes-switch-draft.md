@@ -26,7 +26,7 @@ Press **both sticks** (L3 + R3) together to open or close it. Up/down picks a li
 | COLOUR BIAS | -16 (default), OFF | at once |
 | SHADOW MAP | ON (default), OFF | at once |
 | PRECISE SHADERS | OFF, ON (default) | next start |
-| VIEW | GAME (default), SCENE BEFORE POST, SHADOW MAP DEPTH | at once (not saved) |
+| VIEW | GAME (default), SCENE BEFORE POST, SHADOW MAP DEPTH, STEP (with VIEW STEP 1-16) | at once (not saved) |
 
 ### Known issues
 - Fine stripes and rings over the picture (ground, rocks, sky) and flickering shadows, on the console only. Under investigation: SHADOW BIAS, COLOUR BIAS, PRECISE SHADERS and texture filtering do not change it; SHADOW MAP OFF and VIEW find the pass that draws it.
