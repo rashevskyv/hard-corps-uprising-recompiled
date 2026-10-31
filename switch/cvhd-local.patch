@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..4f3f404 100644
+index 2205439..665e291 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,6 +21,7 @@
@@ -1245,7 +1245,7 @@ index 2205439..4f3f404 100644
        clears_++;
        frame_clears_++;
      }
-@@ -1399,8 +2154,61 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1399,8 +2154,65 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -1288,6 +1288,10 @@ index 2205439..4f3f404 100644
 +      dd->content_serial = serial_;
 +      dd->resolve_swap = swaps_ + 1;
 +      depth_resolves_++;
++      // Settings menu VIEW SHADOW MAP DEPTH: the depth texture itself is shown (red = depth as the receivers' 9 point taps
++      // read it). Smooth = the map is right and the receivers' compare is the suspect; blocks or noise = the depth
++      // copy or the Z24S8 texture fetch on the console.
++      if (!view_image_ && hcu_settings.view == 2) view_image_ = dd;
 +      if (x + w > dsrc->width) w = x < dsrc->width ? dsrc->width - x : 0;
 +      if (y + h > dsrc->height) h = y < dsrc->height ? dsrc->height - y : 0;
 +      if (dx + w > dd->width) w = dx < dd->width ? dd->width - dx : 0;
@@ -1308,7 +1312,7 @@ index 2205439..4f3f404 100644
        return true;
      }
      uint32_t src_pitch = info.color_edram_info.pitch_tiles * 80;
-@@ -1412,10 +2220,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1412,10 +2224,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
      (void)dest_pitch; (void)dest_height;
      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
@@ -1320,17 +1324,14 @@ index 2205439..4f3f404 100644
 +    HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, dst_format, true);  // gh: exact size (the aligned one made it ping-pong with the texture bind)
      if (!dst) return true;
      dst->from_resolve = true;
-+    // Settings menu VIEW: the frame's first resolve of the scene (1280x720, before the post effects) or of a 480x272
-+    // post-effect buffer is shown at the swap. Which one carries the hatching names the pass that draws it.
-+    if (!view_image_ && ((hcu_settings.view == 1 && w == kPresentWidth && h == kPresentHeight) ||
-+                         (hcu_settings.view == 2 && w == 480 && h == 272)))
-+      view_image_ = dst;
++    // Settings menu VIEW: the frame's first resolve of the scene (1280x720, before the post effects) is shown at the swap.
++    if (!view_image_ && hcu_settings.view == 1 && w == kPresentWidth && h == kPresentHeight) view_image_ = dst;
      dst->content_serial = serial_;
 +    dst->resolve_swap = swaps_ + 1;
      dst->mem_bytes = dest_pitch * dest_height * 4;
      dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
      if (x + w > src->width) w = x < src->width ? src->width - x : 0;
-@@ -1447,6 +2265,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1447,6 +2266,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
        LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
                x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
      }
@@ -1341,7 +1342,7 @@ index 2205439..4f3f404 100644
      resolves_++;
      frame_resolves_++;
      return true;
-@@ -1521,7 +2343,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1521,7 +2344,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      std::vprintf(fmt, ap);
      std::printf("\n");
      va_end(ap);
@@ -1351,7 +1352,7 @@ index 2205439..4f3f404 100644
    }
  
    DkDevice device_ = nullptr;
-@@ -1536,8 +2360,32 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1536,8 +2361,32 @@ class Deko3dCommandProcessor : public CommandProcessor {
    DkShader present_vs_shader_{}, present_fs_shader_{};
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
@@ -1384,7 +1385,7 @@ index 2205439..4f3f404 100644
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
    uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
-@@ -1547,10 +2395,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1547,10 +2396,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
    HostImage* bound_color_ = nullptr;
    HostImage* bound_depth_ = nullptr;
    std::unordered_set<std::string> logged_;
