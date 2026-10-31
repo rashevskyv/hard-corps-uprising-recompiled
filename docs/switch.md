@@ -94,8 +94,11 @@ X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screensho
 - **Settings menu.** Both stick clicks (L3 + R3) open and close it (`src/settings_menu.cpp`, drawn by the
   deko3d backend with the strip's 5x7 font). Up/down, left/right or A to change, B to close; closing saves
   `sdmc:/switch/hcu/settings.txt`. The game keeps running behind it. Lines: frame rate (30 / 60 skip when busy
-  / 60 / 30 half speed), performance strip, rumble, shadow bias, colour bias, shadow map (live), precise shaders
-  and texture filter (next start). Each change is a log line `[nx] menu: ...`; each new bias value logs its first
+  / 60 / 30 half speed), performance strip, rumble, shadow bias, colour bias, shadow map, view (live), precise
+  shaders (next start). VIEW shows the frame's scene copy before the post effects, or its first 480x272 bloom
+  buffer, instead of the front buffer: which one has the console hatching names the pass. There is no texture
+  filter line any more: forced linear filtering blends the 8-bit palette indices of the sprites (wrong colours,
+  green specks at their edges in 0.243-0.246); the file `sfix` still forces it for A/B tests. Each change is a log line `[nx] menu: ...`; each new bias value logs its first
   draw. SHADOW MAP OFF leaves out the shadow pass (an A/B of the console rings). The marker files `fps`,
   `overlay_off`, `norumble`, `zfix`, `sfix` still work and win over `settings.txt` (console A/B tests).
 - **Exit.** HOME -> Close and the game's own quit end the process at once (`rex_nx_quick_exit` in

@@ -1112,6 +1112,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width, uint32_t frontbuffer_height) override {
     if (Skipping()) {
       swaps_++;  // nothing was recorded: the frame is just counted
+      view_image_ = nullptr;
       if (swaps_ % 60 == 0) {
         if (!skip_odd_frames_) std::printf("[nx] gpu: swap #%u (skipped)\n", swaps_);
         ReadSwapInterval();
@@ -1127,6 +1128,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
       front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, guest_images_[frontbuffer_ptr]->format, false);
     }
+    if (view_image_) front = view_image_;  // settings menu VIEW (A/B of the console hatching)
+    view_image_ = nullptr;
     if (present_target_) {
       // Debug (the file sdmc:/switch/hcu/dk_present_rt): show the widest colour render target itself,
       // bypassing the resolve copies and the front buffer image.
@@ -2224,6 +2227,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, dst_format, true);  // gh: exact size (the aligned one made it ping-pong with the texture bind)
     if (!dst) return true;
     dst->from_resolve = true;
+    // Settings menu VIEW: the frame's first resolve of the scene (1280x720, before the post effects) or of a 480x272
+    // post-effect buffer is shown at the swap. Which one carries the hatching names the pass that draws it.
+    if (!view_image_ && ((hcu_settings.view == 1 && w == kPresentWidth && h == kPresentHeight) ||
+                         (hcu_settings.view == 2 && w == 480 && h == 272)))
+      view_image_ = dst;
     dst->content_serial = serial_;
     dst->resolve_swap = swaps_ + 1;
     dst->mem_bytes = dest_pitch * dest_height * 4;
@@ -2352,6 +2360,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   DkShader present_vs_shader_{}, present_fs_shader_{};
   bool present_vs_ = false, present_fs_ = false;
   bool present_target_ = false;
+  HostImage* view_image_ = nullptr;  // settings menu VIEW
   bool dump_images_ = false;
   bool no_depth_copy_ = false;
   float z_bias_ = -16.f;

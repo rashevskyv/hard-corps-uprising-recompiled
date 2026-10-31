@@ -16,10 +16,13 @@ struct HcuSettings {
   float shadow_slope;
   float colour_bias;  // colour-pass depth bias, units (0 = off)
   int precise;        // vertex shaders with precise outputs (at start)
-  int filter;         // 0 = as the game sets them, 1 = all linear, 2 = all nearest (at start)
+  int filter;         // 0 = as the game sets them, 1 = all linear, 2 = all nearest (at start; file sfix only: linear
+                      // blends the 8-bit palette indices of the sprites = wrong colours at their edges, 0.243-0.246)
   float lod_bias;     // at start
   float aniso;        // at start
   int shadow_map;     // 0 = the shadow pass is not drawn (A/B of the console rings: the map keeps its clear, all lit)
+  int view;           // what is shown (not saved): 0 = the game, 1 = the scene copy before the post effects, 2 = the
+                      // first 480x272 post-effect buffer (bloom), stretched
 };
 
 extern HcuSettings hcu_settings;
