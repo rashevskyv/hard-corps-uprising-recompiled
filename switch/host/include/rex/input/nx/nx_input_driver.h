@@ -31,6 +31,9 @@ class NXInputDriver final : public InputDriver {
     bool logged;
   };
   void LoadSchedule();
+  // Rumble: the two HD rumble devices of the pad style in use (handheld, Joy-Con pair, Pro Controller).
+  HidVibrationDeviceHandle vib_handles_[2] = {};
+  uint32_t vib_style_ = 0;  // the style the handles were made for (0 = none yet)
 
   PadState pad_{};
   uint32_t packet_number_ = 0;

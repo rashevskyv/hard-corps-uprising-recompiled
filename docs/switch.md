@@ -82,3 +82,18 @@ translates them (`tools/xenos2glsl.py`, uam) into `out/build/switch/stage/shader
 Eden: `powershell -File switch/eden-deko3d.ps1 -Seconds 150 -Every 25 [-Keys "160:M"]` (Eden keys: C = A,
 X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screenshots and logs in
 `E:\conker-data\eden-runs\hcu-<version>-deko3d[-tag]\`.
+
+## Player features (0.243 on)
+
+- **Button prompts with Switch letters.** The pad maps by position (`switch/host/input/nx_input_driver.cpp`:
+  Switch B = Xbox A at the bottom). The game opens its prompt images `Gui/Img/guidebutton_A/B/X/Y.bin` by name
+  relative to the `Gui\Img` directory; `switch/sdk-edits-hcu.py` swaps A<->B and X<->Y in the SDK's
+  `VirtualFileSystem::OpenFile` (Switch only), so the prompt for "OK" shows B, the button in that place.
+- **Rumble.** `SetDeviceVibration` sends the 360's two motors to HD rumble (left = 160 Hz band, right = 320 Hz
+  band) on handheld, a Joy-Con pair or a Pro Controller.
+- **Settings menu.** Both stick clicks (L3 + R3) open and close it (`src/settings_menu.cpp`, drawn by the
+  deko3d backend with the strip's 5x7 font). Up/down, left/right or A to change, B to close; closing saves
+  `sdmc:/switch/hcu/settings.txt`. The game keeps running behind it. Lines: frame rate (30 / 60 skip when busy
+  / 60 / 30 half speed), performance strip, rumble, shadow bias, colour bias (live), precise shaders and
+  texture filter (next start). The marker files `fps`, `overlay_off`, `norumble`, `zfix`, `sfix` still work and
+  win over `settings.txt` (console A/B tests).

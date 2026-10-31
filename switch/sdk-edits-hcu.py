@@ -280,4 +280,32 @@ edit('src/graphics/command_processor.cpp', [
      '      ReturnFromWait();' + NL + '      rex_nx_cp_wait_ticks += rex::chrono::Clock::QueryHostTickCount() - nx_idle0;' + NL +
      '      if (!worker_running_ || !pending_fns_.empty()) {' + NL),
 ])
+# The button prompts on the Switch: the pad maps by position (Xbox A = the bottom button = Switch B,
+# switch/host/input/nx_input_driver.cpp), so a prompt must show the Switch label of the button in that
+# place. The game's prompt images Gui/Img/guidebutton_A/B/X/Y.bin are served swapped (A<->B, X<->Y). The
+# game opens them relative to the Gui\Img directory handle, so the swap is in OpenFile, not ResolvePath.
+edit('src/filesystem/virtual_file_system.cpp', [
+    ('#include <rex/string.h>' + NL, '#include <rex/string.h>' + NL + '#include <cctype>' + NL + '#include <cstdio>' + NL + '#include <cstring>' + NL),
+    ('  std::string_view path = path_in;' + NL,
+     '  std::string_view path = path_in;' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL +
+     '  std::string nx_path;  // hcu: Switch labels on the button prompts (switch/sdk-edits-hcu.py)' + NL +
+     '  {' + NL +
+     '    static const char kSwap[] = "ABYX";  // A<->B, X<->Y' + NL +
+     '    std::string low(path);' + NL +
+     '    for (char& ch : low) ch = char(std::tolower(static_cast<unsigned char>(ch)));' + NL +
+     '    const size_t at = low.find("guidebutton_");' + NL +
+     '    if (at != std::string::npos && at + 13 < low.size() && low[at + 13] == \'.\') {' + NL +
+     '      const char c = char(std::toupper(static_cast<unsigned char>(path[at + 12])));' + NL +
+     '      if (const char* k = std::strchr(kSwap, c)) {' + NL +
+     '        nx_path.assign(path);' + NL +
+     '        nx_path[at + 12] = kSwap[(k - kSwap) ^ 1];' + NL +
+     '        static int logged = 0;' + NL +
+     '        if (logged++ < 8) std::printf("[nx] vfs: prompt image %.*s -> %s\\n", int(path.size()), path.data(), nx_path.c_str());' + NL +
+     '        path = nx_path;' + NL +
+     '      }' + NL +
+     '    }' + NL +
+     '  }' + NL +
+     '#endif' + NL),
+])
 print('changed (hcu cpu meter):', *changed, sep=NL + '  ')

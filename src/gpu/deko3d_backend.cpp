@@ -49,6 +49,7 @@
 #include <rex/string/buffer.h>
 #include <rex/system/gpu_plugin.h>
 
+#include "../settings_menu.h"
 #include "ucode_hash.h"
 #include "untile_fast.h"
 
@@ -455,13 +456,40 @@ constexpr Glyph kGlyphs[] = {
     {'y', {0, 0, 17, 17, 15, 1, 14}},
     {'>', {8, 4, 2, 1, 2, 4, 8}},
     {':', {0, 12, 12, 0, 12, 12, 0}},
+    {'A', {14, 17, 17, 31, 17, 17, 17}},
+    {'B', {30, 17, 17, 30, 17, 17, 30}},
+    {'D', {30, 17, 17, 17, 17, 17, 30}},
+    {'E', {31, 16, 16, 30, 16, 16, 31}},
+    {'F', {31, 16, 16, 30, 16, 16, 16}},
+    {'I', {14, 4, 4, 4, 4, 4, 14}},
+    {'J', {7, 2, 2, 2, 2, 18, 12}},
+    {'K', {17, 18, 20, 24, 20, 18, 17}},
+    {'L', {16, 16, 16, 16, 16, 16, 31}},
+    {'M', {17, 27, 21, 21, 17, 17, 17}},
+    {'N', {17, 17, 25, 21, 19, 17, 17}},
+    {'O', {14, 17, 17, 17, 17, 17, 14}},
+    {'P', {30, 17, 17, 30, 16, 16, 16}},
+    {'Q', {14, 17, 17, 17, 21, 18, 13}},
+    {'R', {30, 17, 17, 30, 20, 18, 17}},
+    {'S', {15, 16, 16, 14, 1, 1, 30}},
+    {'T', {31, 4, 4, 4, 4, 4, 4}},
+    {'V', {17, 17, 17, 17, 17, 10, 4}},
+    {'W', {17, 17, 17, 21, 21, 21, 10}},
+    {'X', {17, 17, 10, 4, 10, 17, 17}},
+    {'Y', {17, 17, 17, 10, 4, 4, 4}},
+    {'Z', {31, 1, 2, 4, 8, 16, 31}},
+    {'-', {0, 0, 0, 31, 0, 0, 0}},
+    {'/', {0, 1, 2, 4, 8, 16, 0}},
+    {'(', {2, 4, 8, 8, 8, 4, 2}},
+    {')', {8, 4, 2, 2, 2, 4, 8}},
+    {'=', {0, 0, 31, 0, 31, 0, 0}},
+    {'%', {24, 25, 2, 4, 8, 19, 3}},
 };
 
-// Fills px (kOverlayW x kOverlayH, RGBA8 little-endian = 0xAABBGGRR) with `text` in white on black.
-void RenderOverlayText(uint32_t* px, const char* text) {
-  for (uint32_t i = 0; i < kOverlayW * kOverlayH; i++) px[i] = 0xFF000000u;
-  uint32_t pen = 4;
-  for (const char* p = text; *p && pen + 6 * kOverlayScale <= kOverlayW; p++) {
+// Draws `text` in white into px (w pixels wide, RGBA8 little-endian = 0xAABBGGRR) from (x, y).
+void DrawText(uint32_t* px, uint32_t w, uint32_t x, uint32_t y, const char* text) {
+  uint32_t pen = x;
+  for (const char* p = text; *p && pen + 6 * kOverlayScale <= w; p++) {
     const Glyph* g = nullptr;
     for (const Glyph& cand : kGlyphs) if (cand.ch == *p) { g = &cand; break; }
     if (g) {
@@ -470,11 +498,20 @@ void RenderOverlayText(uint32_t* px, const char* text) {
           if (g->rows[row] & (16u >> col))
             for (uint32_t sy = 0; sy < kOverlayScale; sy++)
               for (uint32_t sx = 0; sx < kOverlayScale; sx++)
-                px[(3 + row * kOverlayScale + sy) * kOverlayW + pen + col * kOverlayScale + sx] = 0xFFFFFFFFu;
+                px[(y + row * kOverlayScale + sy) * w + pen + col * kOverlayScale + sx] = 0xFFFFFFFFu;
     }
     pen += 6 * kOverlayScale;
   }
 }
+
+// Fills px (kOverlayW x kOverlayH) with `text` in white on black.
+void RenderOverlayText(uint32_t* px, const char* text) {
+  for (uint32_t i = 0; i < kOverlayW * kOverlayH; i++) px[i] = 0xFF000000u;
+  DrawText(px, kOverlayW, 4, 3, text);
+}
+
+// The settings menu (src/settings_menu.cpp): kMenuW x kMenuH, one line per 18 rows.
+constexpr uint32_t kMenuLines = 12, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
 
 class Deko3dCommandProcessor : public CommandProcessor {
  public:
@@ -515,24 +552,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
     sampler_desc_offset_ = kFrames * kMaxImageDescriptors * sizeof(DkImageDescriptor);
     // Samplers, indexed by SamplerIndex: the min and mag filters (the fetch instruction may override the
     // fetch constant's), the border colour (black / white) and every Xenos clamp mode per axis.
-    // Console A/B of the samplers, file sfix (words in any order): "linear" / "nearest" = every sampler that filter,
-    // "lodbias=<x>", "aniso=<n>". The fine horizontal hatching over the whole picture (console only) has the period of the
-    // game's 480x272 post-effect buffers stretched to 1280x720.
-    int force_filter = 0;  // 1 linear, 2 nearest
-    float lod_bias = 0.f, aniso = 1.f;
+    // The settings (settings.txt and the A/B marker files in the debug dir, src/settings_menu.cpp). The sampler ones apply
+    // here, at start: the fine horizontal hatching over the whole picture (console only) has the period of the game's 480x272
+    // post-effect buffers stretched to 1280x720 (TEXTURE FILTER, file sfix).
     const std::string sdir = REXCVAR_GET(deko3d_shader_dir);  // shader_dir_ is set below; the debug dir is its parent
     const size_t scut = sdir.size() >= 2 ? sdir.rfind('/', sdir.size() - 2) : std::string::npos;
-    const std::string sfix_dir = scut == std::string::npos ? "" : sdir.substr(0, scut + 1);
-    if (FILE* sf = std::fopen((sfix_dir + "sfix").c_str(), "r")) {
-      char w[32];
-      while (std::fscanf(sf, "%31s", w) == 1) {
-        if (!std::strcmp(w, "linear")) force_filter = 1;
-        else if (!std::strcmp(w, "nearest")) force_filter = 2;
-        else if (!std::strncmp(w, "lodbias=", 8)) lod_bias = float(std::atof(w + 8));
-        else if (!std::strncmp(w, "aniso=", 6)) aniso = std::max(1.f, float(std::atof(w + 6)));
-      }
-      std::fclose(sf);
-    }
+    hcu_settings_load(scut == std::string::npos ? "" : sdir.substr(0, scut + 1).c_str());
+    const int force_filter = hcu_settings.filter;  // 1 linear, 2 nearest
+    const float lod_bias = hcu_settings.lod_bias, aniso = hcu_settings.aniso;
     Log("sfix: filters %s, lod bias %g, anisotropy %g", force_filter == 1 ? "all linear" : force_filter == 2 ? "all nearest" : "as the game sets them",
         lod_bias, aniso);
     for (uint32_t i = 0; i < kSamplerCount; i++) {
@@ -573,21 +600,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     present_target_ = access((debug_dir + "dk_present_rt").c_str(), F_OK) == 0;
     dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
     always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: textures upload at every bind (missed dirty pages = stale sprites)
-    overlay_on_ = access((debug_dir + "overlay_off").c_str(), F_OK) != 0;  // the version + fps strip
-    // Console A/B of the depth fixes, file zfix (words in any order): "noprecise" = the vertex shaders without precise outputs
-    // (shader_*.vert.np.dksh), "sb=<units>,<slope>" = the shadow-pass depth bias ("sb=0,0" = off), "cb=<units>" = the
-    // colour-pass depth bias ("cb=0" = off).
-    if (FILE* zf = std::fopen((debug_dir + "zfix").c_str(), "r")) {
-      char w[32];
-      while (std::fscanf(zf, "%31s", w) == 1) {
-        if (!std::strcmp(w, "noprecise")) no_precise_ = true;
-        else if (!std::strncmp(w, "sb=", 3)) std::sscanf(w + 3, "%f,%f", &shadow_bias_, &shadow_slope_);
-        else if (!std::strncmp(w, "cb=", 3)) z_bias_ = float(std::atof(w + 3));
-      }
-      std::fclose(zf);
-    }
+    // The depth fixes (PRECISE SHADERS at start; the biases live, ReadSwapInterval). File zfix: "noprecise" = the vertex
+    // shaders without precise outputs (shader_*.vert.np.dksh), "sb=<units>,<slope>" = the shadow-pass depth bias ("sb=0,0" =
+    // off), "cb=<units>" = the colour-pass depth bias ("cb=0" = off).
+    no_precise_ = !hcu_settings.precise;
     Log("zfix: vertex shaders %s; shadow-pass depth bias %g units, slope %g; colour-pass depth bias %g units",
-        no_precise_ ? "without precise (.np)" : "precise", shadow_bias_, shadow_slope_, z_bias_);
+        no_precise_ ? "without precise (.np)" : "precise", hcu_settings.shadow_bias, hcu_settings.shadow_slope, hcu_settings.colour_bias);
     no_depth_copy_ = access((debug_dir + "dk_nodepthcopy").c_str(), F_OK) == 0;  // debug A/B: depth resolves are ignored (shadow maps stay empty)
     present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
     present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
@@ -1157,6 +1175,29 @@ class Deko3dCommandProcessor : public CommandProcessor {
         }
       }
     }
+    // The settings menu, while it is open: drawn over the picture in the middle of the screen.
+    HostImage* menu = nullptr;
+    {
+      char lines[kMenuLines][48];
+      const int n = hcu_menu_lines(lines, kMenuLines);
+      if (n && !menu_[frame_]) menu_[frame_] = CreateImage(kMenuW, kMenuH, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
+      if (n && menu_[frame_]) {
+        for (uint32_t& p : menu_px_) p = 0xFF202020u;
+        for (int i = 0; i < n; i++) DrawText(menu_px_.data(), kMenuW, 12, 8 + uint32_t(i) * 18, lines[i]);
+        const uint32_t bytes = kMenuW * kMenuH * 4;
+        const uint32_t off = f.staging.Alloc(bytes, 0x100);
+        if (off != UINT32_MAX) {
+          std::memcpy(f.staging.cpu + off, menu_px_.data(), bytes);
+          DkCopyBuf cb{f.staging.gpu + off, 0, 0};
+          DkImageView mv;
+          dkImageViewDefaults(&mv, &menu_[frame_]->image);
+          DkImageRect rect{0, 0, 0, kMenuW, kMenuH, 1};
+          dkCmdBufCopyBufferToImage(cmd, &cb, &mv, &rect, 0);
+          dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+          menu = menu_[frame_];
+        }
+      }
+    }
     if (swaps_ < 5) Log("swap #%u: acquiring a swapchain image", swaps_ + 1);
     int slot;
     {
@@ -1230,6 +1271,19 @@ class Deko3dCommandProcessor : public CommandProcessor {
           dkCmdBufSetScissors(cmd, 0, &osc, 1);
           DkResHandle oh = dkMakeTextureHandle(oslot, 0);  // nearest, clamp
           dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &oh, 1);
+          dkCmdBufDraw(cmd, DkPrimitive_Triangles, 3, 1, 0, 0);
+        }
+      }
+      if (menu) {
+        const uint32_t mslot = DescriptorFor(f, menu, 0);
+        if (mslot != UINT32_MAX) {
+          const uint32_t mx = (kPresentWidth - kMenuW) / 2, my = (kPresentHeight - kMenuH) / 2;
+          DkViewport mvp{float(mx), float(my), float(kMenuW), float(kMenuH), 0.0f, 1.0f};
+          dkCmdBufSetViewports(cmd, 0, &mvp, 1);
+          DkScissor msc{mx, my, kMenuW, kMenuH};
+          dkCmdBufSetScissors(cmd, 0, &msc, 1);
+          DkResHandle mh = dkMakeTextureHandle(mslot, 0);
+          dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &mh, 1);
           dkCmdBufDraw(cmd, DkPrimitive_Triangles, 3, 1, 0, 0);
         }
       }
@@ -1329,17 +1383,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // slot for; "30" = every frame drawn, presented every second vblank (the game is frame-locked: it runs at half speed).
   // Read at start and every 60 swaps.
   void ReadSwapInterval() {
-    uint32_t interval = 1;
-    bool skip = true, busy = false;
-    if (FILE* fp = std::fopen((debug_dir_ + "fps").c_str(), "r")) {
-      char text[16] = {};
-      if (std::fgets(text, sizeof(text), fp) && std::strncmp(text, "30skip", 6) != 0) {
-        skip = false;
-        busy = std::strncmp(text, "60skip", 6) == 0;
-        if (std::atoi(text) == 30) interval = 2;
-      }
-      std::fclose(fp);
-    }
+    // The settings menu's live values (src/settings_menu.cpp; the fps file sets the start value).
+    overlay_on_ = hcu_settings.strip != 0;
+    shadow_bias_ = hcu_settings.shadow_bias;
+    shadow_slope_ = hcu_settings.shadow_slope;
+    z_bias_ = hcu_settings.colour_bias;
+    const int mode = hcu_settings.fps_mode;
+    const uint32_t interval = mode == 3 ? 2 : 1;
+    const bool skip = mode == 0, busy = mode == 1;
     if (interval == swap_interval_ && skip == skip_odd_frames_ && busy == skip_busy_ && swaps_) return;
     swap_interval_ = interval;
     skip_odd_frames_ = skip;
@@ -2271,6 +2322,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool no_precise_ = false;  // zfix "noprecise"
   bool overlay_on_ = true;
   HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
+  HostImage* menu_[kFrames] = {};     // the settings menu, the same way
+  std::vector<uint32_t> menu_px_ = std::vector<uint32_t>(kMenuW * kMenuH);
   char overlay_text_[96] = {};
   uint64_t fps_tick_ = 0;
   uint32_t fps_frames_ = 0, fps_x10_ = 0;

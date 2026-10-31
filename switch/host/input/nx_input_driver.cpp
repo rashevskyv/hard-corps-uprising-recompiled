@@ -7,6 +7,8 @@
 #include <rex/input/flags.h>
 #include <rex/logging.h>
 
+#include "../../../src/settings_menu.h"
+
 namespace rex::input::nx {
 
 namespace {
@@ -162,6 +164,35 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     }
     if (scheduled || scheduled_lt || scheduled_rt) held ^= 0x8000000000000000ull;  // a change: a new packet
   }
+  // The settings menu (src/settings_menu.cpp) takes the pad while it is open: the game sees nothing held.
+  {
+    uint32_t menu = 0;
+    if (held & HidNpadButton_AnyUp) menu |= HCU_MENU_UP;
+    if (held & HidNpadButton_AnyDown) menu |= HCU_MENU_DOWN;
+    if (held & HidNpadButton_AnyLeft) menu |= HCU_MENU_LEFT;
+    if (held & HidNpadButton_AnyRight) menu |= HCU_MENU_RIGHT;
+    if (held & HidNpadButton_A) menu |= HCU_MENU_A;
+    if (held & HidNpadButton_B) menu |= HCU_MENU_B;
+    if (held & HidNpadButton_StickL) menu |= HCU_MENU_LS;
+    if (held & HidNpadButton_StickR) menu |= HCU_MENU_RS;
+    // pad.txt presses (Xbox bits, by position: its A is the bottom button = Switch B).
+    static const struct { uint16_t x360; uint32_t menu; } kScheduled[] = {
+        {X_INPUT_GAMEPAD_DPAD_UP, HCU_MENU_UP},     {X_INPUT_GAMEPAD_DPAD_DOWN, HCU_MENU_DOWN},
+        {X_INPUT_GAMEPAD_DPAD_LEFT, HCU_MENU_LEFT}, {X_INPUT_GAMEPAD_DPAD_RIGHT, HCU_MENU_RIGHT},
+        {X_INPUT_GAMEPAD_B, HCU_MENU_A},            {X_INPUT_GAMEPAD_A, HCU_MENU_B},
+        {X_INPUT_GAMEPAD_LEFT_THUMB, HCU_MENU_LS},  {X_INPUT_GAMEPAD_RIGHT_THUMB, HCU_MENU_RS}};
+    for (const auto& m : kScheduled)
+      if (scheduled & m.x360) menu |= m.menu;
+    if (hcu_menu_input(menu)) {
+      if (out_state) {
+        std::memset(out_state, 0, sizeof(*out_state));
+        if (last_buttons_ != 0) packet_number_++;
+        last_buttons_ = 0;
+        out_state->packet_number = packet_number_;
+      }
+      return X_ERROR_SUCCESS;
+    }
+  }
   const HidAnalogStickState left = padGetStickPos(&pad_, 0);
   const HidAnalogStickState right = padGetStickPos(&pad_, 1);
   if (out_state) {
@@ -186,9 +217,35 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
   return X_ERROR_SUCCESS;
 }
 
+// The 360's two motors on HD rumble: the left (heavy) one as the low band, the right (light) one as the high band, on
+// both sides of the pad. The settings menu's RUMBLE (or the file sdmc:/switch/hcu/norumble) turns it off.
 X_RESULT NXInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) {
-  (void)vibration;
-  return id == kPad ? X_ERROR_SUCCESS : X_ERROR_DEVICE_NOT_CONNECTED;
+  if (id != kPad) return X_ERROR_DEVICE_NOT_CONNECTED;
+  if (!vibration) return X_ERROR_SUCCESS;
+  X_INPUT_VIBRATION zero{};
+  if (!hcu_settings.rumble) vibration = &zero;  // also stops a rumble that was on when it was turned off
+  const uint32_t styles = padGetStyleSet(&pad_);
+  const bool handheld = padIsHandheld(&pad_);
+  const uint32_t style = handheld                              ? HidNpadStyleTag_NpadHandheld
+                         : (styles & HidNpadStyleTag_NpadFullKey) ? HidNpadStyleTag_NpadFullKey
+                         : (styles & HidNpadStyleTag_NpadJoyDual) ? HidNpadStyleTag_NpadJoyDual
+                                                                 : 0;
+  if (!style) return X_ERROR_SUCCESS;
+  if (style != vib_style_) {
+    if (R_FAILED(hidInitializeVibrationDevices(vib_handles_, 2, handheld ? HidNpadIdType_Handheld : HidNpadIdType_No1,
+                                               static_cast<HidNpadStyleTag>(style))))
+      return X_ERROR_SUCCESS;
+    vib_style_ = style;
+  }
+  HidVibrationValue v[2];
+  for (HidVibrationValue& x : v) {
+    x.amp_low = float(uint16_t(vibration->left_motor_speed)) / 65535.0f;
+    x.freq_low = 160.0f;
+    x.amp_high = float(uint16_t(vibration->right_motor_speed)) / 65535.0f;
+    x.freq_high = 320.0f;
+  }
+  hidSendVibrationValues(vib_handles_, v, 2);
+  return X_ERROR_SUCCESS;
 }
 
 X_RESULT NXInputDriver::GetDeviceKeystroke(DeviceId id, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke) {

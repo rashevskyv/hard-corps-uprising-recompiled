@@ -46,6 +46,7 @@ add_executable(hcu
     src/prolog_native.cpp
     src/frame_meter.cpp
     src/gpu_fence_wait.cpp
+    src/settings_menu.cpp
 )
 rexglue_setup_target(hcu GPU_PLUGINS xenos)
 # The SDK's UI headers include imgui.h (headers only: ImGui is compiled into rexruntime).
