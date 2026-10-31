@@ -24,11 +24,12 @@ Press **both sticks** (L3 + R3) together to open or close it. Up/down picks a li
 | RUMBLE | OFF, ON | at once |
 | SHADOW BIAS | OFF, 32 (default), 256, 1024 | at once |
 | COLOUR BIAS | -16 (default), OFF | at once |
+| SHADOW MAP | ON (default), OFF | at once |
 | PRECISE SHADERS | OFF, ON (default) | next start |
 | TEXTURE FILTER | GAME (default), LINEAR, NEAREST | next start |
 
 ### Known issues
-- Fine stripes and rings over the picture (ground, rocks, sky) and flickering shadows, on the console only. Under investigation: the SHADOW BIAS, PRECISE SHADERS and TEXTURE FILTER settings exist to test it.
+- Fine stripes and rings over the picture (ground, rocks, sky) and flickering shadows, on the console only. Under investigation: SHADOW BIAS, PRECISE SHADERS and TEXTURE FILTER do not change it; SHADOW MAP OFF tests whether the shadow test is the source.
 - Enemy cries may sound too loud.
 - "60" can slow the game down in busy scenes; "60 SKIP WHEN BUSY" keeps the game speed and drops frames instead.
 

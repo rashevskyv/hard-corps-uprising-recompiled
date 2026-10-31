@@ -230,11 +230,22 @@ X_RESULT NXInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibra
                          : (styles & HidNpadStyleTag_NpadFullKey) ? HidNpadStyleTag_NpadFullKey
                          : (styles & HidNpadStyleTag_NpadJoyDual) ? HidNpadStyleTag_NpadJoyDual
                                                                  : 0;
+  // The log: the first calls, every 200th, each vibration-device set-up and the first send error.
+  static uint32_t calls = 0, nonzero = 0;
+  static bool send_error_logged = false;
+  calls++;
+  if (vibration->left_motor_speed || vibration->right_motor_speed) nonzero++;
+  if (calls <= 8 || calls % 200 == 0) {
+    std::printf("[nx] rumble: call %u (%u with a motor on): left %u right %u, menu RUMBLE %d, pad styles 0x%X handheld %d\n", calls, nonzero,
+                uint32_t(uint16_t(vibration->left_motor_speed)), uint32_t(uint16_t(vibration->right_motor_speed)), hcu_settings.rumble,
+                styles, int(handheld));
+  }
   if (!style) return X_ERROR_SUCCESS;
   if (style != vib_style_) {
-    if (R_FAILED(hidInitializeVibrationDevices(vib_handles_, 2, handheld ? HidNpadIdType_Handheld : HidNpadIdType_No1,
-                                               static_cast<HidNpadStyleTag>(style))))
-      return X_ERROR_SUCCESS;
+    const Result rc = hidInitializeVibrationDevices(vib_handles_, 2, handheld ? HidNpadIdType_Handheld : HidNpadIdType_No1,
+                                                    static_cast<HidNpadStyleTag>(style));
+    std::printf("[nx] rumble: vibration devices for style 0x%X (%s): rc 0x%X\n", style, handheld ? "handheld" : "No1", rc);
+    if (R_FAILED(rc)) return X_ERROR_SUCCESS;
     vib_style_ = style;
   }
   HidVibrationValue v[2];
@@ -244,7 +255,11 @@ X_RESULT NXInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibra
     x.amp_high = float(uint16_t(vibration->right_motor_speed)) / 65535.0f;
     x.freq_high = 320.0f;
   }
-  hidSendVibrationValues(vib_handles_, v, 2);
+  const Result rc = hidSendVibrationValues(vib_handles_, v, 2);
+  if (R_FAILED(rc) && !send_error_logged) {
+    std::printf("[nx] rumble: hidSendVibrationValues rc 0x%X\n", rc);
+    send_error_logged = true;
+  }
   return X_ERROR_SUCCESS;
 }
 

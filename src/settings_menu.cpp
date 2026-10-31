@@ -8,7 +8,7 @@
 
 #include <unistd.h>
 
-HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f};
+HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1};
 
 namespace {
 
@@ -49,6 +49,7 @@ const Item kItems[] = {
      }},
     {"COLOUR BIAS", {"-16", "OFF"}, 2, false, [] { return NearestF(hcu_settings.colour_bias, kColour, 2); },
      [](int i) { hcu_settings.colour_bias = kColour[i]; }},
+    {"SHADOW MAP", {"OFF", "ON"}, 2, false, [] { return hcu_settings.shadow_map; }, [](int i) { hcu_settings.shadow_map = i; }},
     {"PRECISE SHADERS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.precise; }, [](int i) { hcu_settings.precise = i; }},
     {"TEXTURE FILTER", {"GAME", "LINEAR", "NEAREST"}, 3, true, [] { return hcu_settings.filter; },
      [](int i) { hcu_settings.filter = i; }},
@@ -59,8 +60,8 @@ void Save() {
   if (g_dir.empty()) return;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
-    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nfilter=%d\n",
-                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.filter);
+    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nfilter=%d\nshadow_map=%d\n",
+                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.filter, s.shadow_map);
     std::fclose(f);
   }
 }
@@ -86,6 +87,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "colour_bias")) s.colour_bias = v;
       else if (!std::strcmp(key, "precise")) s.precise = int(v);
       else if (!std::strcmp(key, "filter")) s.filter = int(v);
+      else if (!std::strcmp(key, "shadow_map")) s.shadow_map = int(v);
     }
     std::fclose(f);
   }
@@ -138,8 +140,13 @@ int hcu_menu_input(uint32_t held) {
   if (down & HCU_MENU_UP) g_row = (g_row + kCount - 1) % kCount;
   if (down & HCU_MENU_DOWN) g_row = (g_row + 1) % kCount;
   const Item& it = kItems[g_row];
-  if (down & (HCU_MENU_RIGHT | HCU_MENU_A)) it.set((it.get() + 1) % it.count);
-  if (down & HCU_MENU_LEFT) it.set((it.get() + it.count - 1) % it.count);
+  const int was = it.get();
+  if (down & (HCU_MENU_RIGHT | HCU_MENU_A)) it.set((was + 1) % it.count);
+  if (down & HCU_MENU_LEFT) it.set((was + it.count - 1) % it.count);
+  if (it.get() != was) {
+    std::printf("[nx] menu: %s %s -> %s%s\n", it.label, it.names[was], it.names[it.get()], it.at_start ? " (at the next start)" : "");
+    std::fflush(stdout);
+  }
   return 1;
 }
 

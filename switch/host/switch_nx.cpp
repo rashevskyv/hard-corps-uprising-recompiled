@@ -638,6 +638,15 @@ extern "C" void userAppExit(void) {
     fsync(fileno(stdout));
 }
 
+// The way out (HOME -> Close, the game's own quit, a GPU queue error): the log is written, the clocks go back and the
+// process ends at once. The runtime's teardown is not run: it stopped the guest threads and freed the GPU objects while
+// the GPU command thread still drew and swapped (console 0.240/0.243: exit = error).
+extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why) {
+    std::printf("[nx] exit: %s: the process ends now\n", why);
+    userAppExit();
+    svcExitProcess();
+}
+
 // libnx gives a thread made without a stack size only 128 KB (every std::thread). The linker
 // sends pthread_create's call here (CMakeLists.txt, --wrap) to raise it to 2 MB.
 constexpr size_t min_thread_stack = 2 * 1024 * 1024;

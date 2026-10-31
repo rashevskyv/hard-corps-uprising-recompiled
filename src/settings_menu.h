@@ -19,6 +19,7 @@ struct HcuSettings {
   int filter;         // 0 = as the game sets them, 1 = all linear, 2 = all nearest (at start)
   float lod_bias;     // at start
   float aniso;        // at start
+  int shadow_map;     // 0 = the shadow pass is not drawn (A/B of the console rings: the map keeps its clear, all lit)
 };
 
 extern HcuSettings hcu_settings;

@@ -94,6 +94,12 @@ X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screensho
 - **Settings menu.** Both stick clicks (L3 + R3) open and close it (`src/settings_menu.cpp`, drawn by the
   deko3d backend with the strip's 5x7 font). Up/down, left/right or A to change, B to close; closing saves
   `sdmc:/switch/hcu/settings.txt`. The game keeps running behind it. Lines: frame rate (30 / 60 skip when busy
-  / 60 / 30 half speed), performance strip, rumble, shadow bias, colour bias (live), precise shaders and
-  texture filter (next start). The marker files `fps`, `overlay_off`, `norumble`, `zfix`, `sfix` still work and
-  win over `settings.txt` (console A/B tests).
+  / 60 / 30 half speed), performance strip, rumble, shadow bias, colour bias, shadow map (live), precise shaders
+  and texture filter (next start). Each change is a log line `[nx] menu: ...`; each new bias value logs its first
+  draw. SHADOW MAP OFF leaves out the shadow pass (an A/B of the console rings). The marker files `fps`,
+  `overlay_off`, `norumble`, `zfix`, `sfix` still work and win over `settings.txt` (console A/B tests).
+- **Exit.** HOME -> Close and the game's own quit end the process at once (`rex_nx_quick_exit` in
+  `switch/host/switch_nx.cpp`): the log is written and the clocks go back, the runtime teardown is not run.
+- **GPU queue errors.** When deko3d puts the queue in its error state (a fault in an earlier list), the backend logs
+  the swap, the live settings and each nvdrv channel's error notification (type 31 = MMU fault, 8/24 = timeouts,
+  25 = illegal method), then ends the process the same way, instead of the deko3d abort.

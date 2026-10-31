@@ -118,7 +118,27 @@ void Log(const char* fmt, ...) {
 
 void DebugCallback(void*, const char* context, DkResult result, const char* message) {
   Log("deko3d %s: result %d: %s", context ? context : "?", int(result), message ? message : "");
+  std::fflush(stdout);
 }
+
+#ifdef __SWITCH__
+extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why);  // switch/host/switch_nx.cpp
+
+// The GPU channel's error, when deko3d put the queue in its error state (a fault in a list submitted before; the release
+// libdeko3d drops its message and aborts at the next queue call). The channel's fd is not in deko3d's API: every nvdrv fd
+// is asked, the others refuse the ioctl. Types: 8 idle timeout, 24 semaphore timeout, 25 illegal method, 31 MMU fault,
+// 32 PBDMA error.
+void LogGpuChannelErrors() {
+  for (u32 fd = 0; fd < 128; fd++) {
+    NvNotification n{};
+    if (R_FAILED(nvioctlChannel_GetErrorNotification(fd, &n))) continue;
+    NvError e{};
+    const Result ri = nvioctlChannel_GetErrorInfo(fd, &e);
+    Log("gpu channel fd %u: notification type %u info16 0x%X status 0x%X time %llu; error info rc 0x%X type %u info %08X %08X %08X %08X", fd,
+        n.info32, n.info16, n.status, (unsigned long long)n.timestamp, ri, e.type, e.info[0], e.info[1], e.info[2], e.info[3]);
+  }
+}
+#endif
 
 struct MemBlock {
   DkMemBlock block = nullptr;
@@ -846,6 +866,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
                            : nullptr;
     HostImage* depth = (dc.z_enable || dc.stencil_enable) ? TargetImage(depth_info.depth_base, pitch, DkImageFormat_Z24S8, true) : nullptr;
     if (!color && !depth) { skipped_++; return true; }
+    // Settings menu SHADOW MAP OFF (A/B of the console rings): the shadow pass (no colour target, depth written) is not
+    // drawn, so the map keeps its clear and every receiver is lit. Rings that stay then do not come from the shadow test.
+    if (!color && dc.z_write_enable && !hcu_settings.shadow_map) { skipped_++; return true; }
     BindTargets(cmd, color, depth);
     uint32_t target_w = color ? color->width : depth->width;
     uint32_t target_h = color ? color->height : depth->height;
@@ -901,12 +924,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
               uint32_t(clip.dx_clip_space_def), (unsigned long long)vs->ucode_data_hash());
     }
     dkCmdBufBindRasterizerState(cmd, &rs);
-    if (z_biased) dkCmdBufSetDepthBias(cmd, z_bias_, 0.f, 0.f);
+    if (z_biased) {
+      dkCmdBufSetDepthBias(cmd, z_bias_, 0.f, 0.f);
+      char key[32];
+      std::snprintf(key, sizeof(key), "colourbias %g", z_bias_);
+      LogOnce(key, "colour-pass depth bias %g units: first draw (VS %016llX, swap #%u)", z_bias_, (unsigned long long)vs->ucode_data_hash(), swaps_);
+    }
     if (shadow_biased) {
       dkCmdBufSetDepthBias(cmd, shadow_bias_, 0.f, shadow_slope_);
       frame_shadow_biased_++;
-      char key[32];
-      std::snprintf(key, sizeof(key), "shadowbias %u", depth_info.depth_base);
+      char key[48];
+      std::snprintf(key, sizeof(key), "shadowbias %u %g %g", depth_info.depth_base, shadow_bias_, shadow_slope_);
       LogOnce(key, "shadow-pass depth bias %g units, slope %g on depth base %u (VS %016llX)", shadow_bias_, shadow_slope_, depth_info.depth_base,
               (unsigned long long)vs->ucode_data_hash());
     }
@@ -1199,6 +1227,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
       }
     }
     if (swaps_ < 5) Log("swap #%u: acquiring a swapchain image", swaps_ + 1);
+#ifdef __SWITCH__
+    if (dkQueueIsInErrorState(queue_)) {
+      Log("GPU queue in its error state at swap #%u (a list before it faulted); colour bias %g, shadow bias %g/%g, shadow map %d, "
+          "menu %s, %u draws this frame",
+          swaps_ + 1, z_bias_, shadow_bias_, shadow_slope_, hcu_settings.shadow_map, menu ? "open" : "closed", frame_draws_);
+      LogGpuChannelErrors();
+      rex_nx_quick_exit("the GPU queue is in its error state (see the lines before)");
+    }
+#endif
     int slot;
     {
       ScopedUs timer(us_acquire_);
