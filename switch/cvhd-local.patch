@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..2b46571 100644
+index 2205439..e8f9c95 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,6 +21,7 @@
@@ -182,7 +182,7 @@ index 2205439..2b46571 100644
  class Deko3dCommandProcessor : public CommandProcessor {
   public:
    using CommandProcessor::CommandProcessor;
-@@ -418,8 +546,18 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -418,8 +546,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
      if (shader_dir_.empty() || shader_dir_.back() != '/') shader_dir_ += '/';
      size_t cut = shader_dir_.size() >= 2 ? shader_dir_.rfind('/', shader_dir_.size() - 2) : std::string::npos;
      std::string debug_dir = cut == std::string::npos ? "" : shader_dir_.substr(0, cut + 1);
@@ -192,16 +192,39 @@ index 2205439..2b46571 100644
      dump_images_ = access((debug_dir + "dk_dump").c_str(), F_OK) == 0;  // readback dumps stall the GPU: debug only
 +    always_upload_ = access((debug_dir + "dk_reupload").c_str(), F_OK) == 0;  // debug A/B: textures upload at every bind (missed dirty pages = stale sprites)
 +    overlay_on_ = access((debug_dir + "overlay_off").c_str(), F_OK) != 0;  // the version + fps strip
-+    if (FILE* zb = std::fopen((debug_dir + "dk_zbias").c_str(), "r")) {  // debug A/B: the colour-pass depth bias in depth units (0 = off)
-+      char text[32] = {};
-+      if (std::fgets(text, sizeof(text), zb)) z_bias_ = float(std::atof(text));
-+      std::fclose(zb);
++    // Console A/B of the depth fixes, file zfix (words in any order): "noprecise" = the vertex shaders without precise outputs
++    // (shader_*.vert.np.dksh), "sb=<units>,<slope>" = the shadow-pass depth bias ("sb=0,0" = off), "cb=<units>" = the
++    // colour-pass depth bias ("cb=0" = off).
++    if (FILE* zf = std::fopen((debug_dir + "zfix").c_str(), "r")) {
++      char w[32];
++      while (std::fscanf(zf, "%31s", w) == 1) {
++        if (!std::strcmp(w, "noprecise")) no_precise_ = true;
++        else if (!std::strncmp(w, "sb=", 3)) std::sscanf(w + 3, "%f,%f", &shadow_bias_, &shadow_slope_);
++        else if (!std::strncmp(w, "cb=", 3)) z_bias_ = float(std::atof(w + 3));
++      }
++      std::fclose(zf);
 +    }
++    Log("zfix: vertex shaders %s; shadow-pass depth bias %g units, slope %g; colour-pass depth bias %g units",
++        no_precise_ ? "without precise (.np)" : "precise", shadow_bias_, shadow_slope_, z_bias_);
 +    no_depth_copy_ = access((debug_dir + "dk_nodepthcopy").c_str(), F_OK) == 0;  // debug A/B: depth resolves are ignored (shadow maps stay empty)
      present_vs_ = LoadDksh(shader_dir_ + "present.vert.dksh", present_vs_shader_);
      present_fs_ = LoadDksh(shader_dir_ + "present.frag.dksh", present_fs_shader_);
      Log("deko3d backend up: shaders from %s (%s present shaders), %u MB images, %u MB data per frame",
-@@ -468,6 +606,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -447,7 +594,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     char name[512];
+     std::snprintf(name, sizeof(name), "%sshader_%016llX.%s.dksh", shader_dir_.c_str(), (unsigned long long)hash,
+                   shader_type == xenos::ShaderType::kVertex ? "vert" : "frag");
+-    shader->loaded = LoadDksh(name, shader->shader);
++    if (no_precise_ && shader_type == xenos::ShaderType::kVertex) {
++      char np[512];
++      std::snprintf(np, sizeof(np), "%sshader_%016llX.vert.np.dksh", shader_dir_.c_str(), (unsigned long long)hash);
++      shader->loaded = LoadDksh(np, shader->shader);
++    }
++    if (!shader->loaded) shader->loaded = LoadDksh(name, shader->shader);
+     if (shader->loaded && shader_type == xenos::ShaderType::kVertex) {
+       std::snprintf(name, sizeof(name), "%sshader_%016llX.geom.dksh", shader_dir_.c_str(), (unsigned long long)hash);
+       shader->geom_loaded = LoadDksh(name, shader->geom);
+@@ -468,6 +620,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
  
    bool IssueDraw(xenos::PrimitiveType prim_type, uint32_t index_count, IndexBufferInfo* index_buffer_info,
                   bool major_mode_explicit) override {
@@ -214,7 +237,7 @@ index 2205439..2b46571 100644
      if (Skipping()) return true;
      SyncDirtyPages();
      const RegisterFile& regs = *register_file_;
-@@ -482,7 +626,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -482,7 +640,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
      bool writes_depth = dc.z_enable && dc.z_write_enable;
      if (!writes_color && !writes_depth && !dc.stencil_enable) { skipped_++; return true; }
      if (IsClearDraw(vs, ps, prim_type)) return ClearDraw(index_count, mode);
@@ -229,7 +252,7 @@ index 2205439..2b46571 100644
      DkPrimitive prim;
      bool rects;
      if (!PrimitiveOf(prim_type, prim, rects)) { LogOnce("prim", "unsupported primitive type %u", uint32_t(prim_type)); skipped_++; return true; }
-@@ -490,10 +640,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -490,10 +654,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      {
        // Each shader pair's first draw, once: the state a new kind of draw comes with.
@@ -243,7 +266,7 @@ index 2205439..2b46571 100644
          LogOnce(key, "draw VS %016llX PS %016llX: prim %u n=%u%s, blend %u/%u op %u, mask %x, z %u/%u func %u, %zu vfetch %zu tfetch",
                  (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash(), uint32_t(prim_type), index_count,
                  index_buffer_info ? " indexed" : "", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend),
-@@ -528,9 +678,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -528,9 +692,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
  
      // Textures of the pixel shader (before the render targets: a new image is cleared on creation, which
      // rebinds the targets).
@@ -271,7 +294,7 @@ index 2205439..2b46571 100644
        auto fetch = regs.GetTextureFetch(tb.fetch_constant);
        TextureInfo info;
        // 1D textures are 2D textures of height 1 on the Xenos (the shaders sample them so).
-@@ -554,23 +720,51 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -554,23 +734,51 @@ class Deko3dCommandProcessor : public CommandProcessor {
        uint32_t slot = DescriptorFor(f, tex, swizzle);
        if (slot == UINT32_MAX) { textures_ok = false; continue; }
        uint32_t sampler = SamplerIndex(fetch, tb.fetch_instr);
@@ -330,7 +353,7 @@ index 2205439..2b46571 100644
        // Each shader pair's first draw with each texture set, once (the texture bases name the layer).
        char key[160];
        std::snprintf(key, sizeof(key), "pairtex %016llX %016llX%s", (unsigned long long)vs->ucode_data_hash(),
-@@ -579,7 +773,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -579,7 +787,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
                (unsigned long long)ps->ucode_data_hash(), uint32_t(prim_type), index_count, bound_textures.empty() ? " no textures" : bound_textures.c_str());
      }
      // A draw with a missing texture would sample whatever the slot held before (noise): skip it.
@@ -346,11 +369,11 @@ index 2205439..2b46571 100644
  
      // Render targets.
      auto surf = regs.Get<reg::RB_SURFACE_INFO>();
-@@ -615,11 +816,34 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -615,11 +830,46 @@ class Deko3dCommandProcessor : public CommandProcessor {
      // Rectangle lists: the geometry shader makes the 4th vertex, or the hardware mode (cvar).
      const bool use_gs = rects && vs->geom_loaded && !REXCVAR_GET(deko3d_fill_rectangle);
      DkRasterizerState rs;
-+    bool z_biased = false;
++    bool z_biased = false, shadow_biased = false;
      dkRasterizerStateDefaults(&rs);
      rs.cullMode = DkFace_None;  // TODO(cull): cull_front/cull_back once the winding is verified on a picture
      rs.fillRectangleEnable = rects && !use_gs;
@@ -371,7 +394,11 @@ index 2205439..2b46571 100644
 +      // The colour pass of a mesh repeats its depth pre-pass with another vertex shader (depth func LESS or LEQUAL): the two
 +      // positions differ in the last bits on a real GPU, and the whole mesh fails the test. The colour pass is pulled closer.
 +      z_biased = z_bias_ != 0.f && writes_color && dc.z_enable && (uint32_t(dc.zfunc) == 1 || uint32_t(dc.zfunc) == 3);
-+      rs.depthBiasEnableMask = z_biased ? DkPolygonFlag_Fill : 0;  // 0.188-0.232 set 1 = DkPolygonFlag_Point: triangles got no bias
++      // The shadow pass (no colour target, depth written; HCU's stage shadow map): its depth is pushed away from the light.
++      // The receivers (PS EFC5D978279C500E) compare it with their own light-space depth; on the console the two differ in the
++      // last bits and the ground, rocks and sky show rings and stripes of self-shadowing (Eden and the Linux GL host do not).
++      shadow_biased = !color && depth && dc.z_write_enable && (shadow_bias_ != 0.f || shadow_slope_ != 0.f);
++      rs.depthBiasEnableMask = (z_biased || shadow_biased) ? DkPolygonFlag_Fill : 0;  // 0.188-0.232 set 1 = DkPolygonFlag_Point: triangles got no bias
 +      char key[48];
 +      std::snprintf(key, sizeof(key), "clip %u %u", uint32_t(clip.clip_disable), uint32_t(clip.dx_clip_space_def));
 +      LogOnce(key, "clip control: clip_disable %u dx_clip_space_def %u (first draw VS %016llX)", uint32_t(clip.clip_disable),
@@ -379,10 +406,18 @@ index 2205439..2b46571 100644
 +    }
      dkCmdBufBindRasterizerState(cmd, &rs);
 +    if (z_biased) dkCmdBufSetDepthBias(cmd, z_bias_, 0.f, 0.f);
++    if (shadow_biased) {
++      dkCmdBufSetDepthBias(cmd, shadow_bias_, 0.f, shadow_slope_);
++      frame_shadow_biased_++;
++      char key[32];
++      std::snprintf(key, sizeof(key), "shadowbias %u", depth_info.depth_base);
++      LogOnce(key, "shadow-pass depth bias %g units, slope %g on depth base %u (VS %016llX)", shadow_bias_, shadow_slope_, depth_info.depth_base,
++              (unsigned long long)vs->ucode_data_hash());
++    }
      auto blend = regs.Get<reg::RB_BLENDCONTROL>();
      bool blend_enabled = !(blend.color_srcblend == xenos::BlendFactor::kOne && blend.color_destblend == xenos::BlendFactor::kZero &&
                             blend.color_comb_fcn == xenos::BlendOp::kAdd && blend.alpha_srcblend == xenos::BlendFactor::kOne &&
-@@ -636,12 +860,48 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -636,12 +886,48 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkBlendState bs{BlendOp(blend.color_comb_fcn), BlendFactor(blend.color_srcblend), BlendFactor(blend.color_destblend),
                      BlendOp(blend.alpha_comb_fcn), BlendFactor(blend.alpha_srcblend), BlendFactor(blend.alpha_destblend)};
      dkCmdBufBindBlendStates(cmd, 0, &bs, 1);
@@ -432,7 +467,7 @@ index 2205439..2b46571 100644
      dkCmdBufBindDepthStencilState(cmd, &ds);
  
      // Shaders (the whole graphics mask: a stage without a shader here is unbound).
-@@ -657,21 +917,37 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -657,21 +943,37 @@ class Deko3dCommandProcessor : public CommandProcessor {
      if (index_buffer_info) {
        if (!CopyIndices(f, *index_buffer_info, index_offset, vertex_count)) { skipped_++; return true; }
      }
@@ -473,7 +508,7 @@ index 2205439..2b46571 100644
        dkCmdBufBindVtxBuffer(cmd, buffer_count, f.data.gpu + off, bytes);
        buffers[buffer_count] = DkVtxBufferState{stride, 0};
        for (const auto& a : vb.attributes) {
-@@ -700,6 +976,18 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -700,6 +1002,18 @@ class Deko3dCommandProcessor : public CommandProcessor {
      // Uniforms: the ALU constants and the system constants, per stage.
      if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; return true; }
  
@@ -492,7 +527,7 @@ index 2205439..2b46571 100644
      if (index_buffer_info) {
        dkCmdBufBindIdxBuffer(cmd, index_buffer_info->format == xenos::IndexFormat::kInt32 ? DkIdxFormat_Uint32 : DkIdxFormat_Uint16,
                              f.data.gpu + index_offset);
-@@ -707,12 +995,21 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -707,12 +1021,21 @@ class Deko3dCommandProcessor : public CommandProcessor {
      } else {
        dkCmdBufDraw(cmd, prim, index_count, 1, 0, 0);
      }
@@ -514,7 +549,7 @@ index 2205439..2b46571 100644
      if (Skipping()) return true;
      SyncDirtyPages();
      return Resolve();
-@@ -721,7 +1018,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -721,7 +1044,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
    void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width, uint32_t frontbuffer_height) override {
      if (Skipping()) {
        swaps_++;  // nothing was recorded: the frame is just counted
@@ -528,7 +563,7 @@ index 2205439..2b46571 100644
        return;
      }
      Frame& f = frames_[frame_];
-@@ -729,7 +1031,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -729,7 +1057,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
      HostImage* front = nullptr;
      if (guest_images_.count(frontbuffer_ptr) && frontbuffer_width && frontbuffer_height) {
        // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
@@ -537,7 +572,7 @@ index 2205439..2b46571 100644
      }
      if (present_target_) {
        // Debug (the file sdmc:/switch/hcu/dk_present_rt): show the widest colour render target itself,
-@@ -761,8 +1063,59 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -761,8 +1089,59 @@ class Deko3dCommandProcessor : public CommandProcessor {
        for (auto& it : guest_images_) if (it.second->width >= 600 && it.second != front) { char n[48]; std::snprintf(n, sizeof(n), "guest %08X%s", it.first, it.second->from_resolve ? " (resolve)" : " (upload)"); queue_dump(n, it.second); }
        dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
      }
@@ -598,7 +633,7 @@ index 2205439..2b46571 100644
      if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
      HostImage* target = swap_images_[slot];
      dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
-@@ -800,17 +1153,55 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -800,17 +1179,55 @@ class Deko3dCommandProcessor : public CommandProcessor {
        if (dslot != UINT32_MAX) {
          DkResHandle handle = dkMakeTextureHandle(dslot, 4);  // linear, clamp
          dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &handle, 1);
@@ -655,7 +690,7 @@ index 2205439..2b46571 100644
  #endif
      if (!dumps.empty()) {
        dkQueueWaitIdle(queue_);
-@@ -827,26 +1218,97 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -827,26 +1244,97 @@ class Deko3dCommandProcessor : public CommandProcessor {
              w && h ? px[(h / 2) * w + w / 2] : 0, w && h ? px[(3 * h / 4) * w + 3 * w / 4] : 0, w && h ? px[(h - 1) * w + w - 1] : 0);
        }
      }
@@ -666,10 +701,11 @@ index 2205439..2b46571 100644
      if (swaps_ <= 3 || swaps_ % 60 == 0) {
        std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
 -      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB staging %u KB; images %u (%u MB)",
-+      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %llu dirty pages; data %u KB (vertices %u KB) staging %u KB; images %u (%u MB), %u image flips so far",
++      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %u shadow-biased, %llu dirty pages; data %u KB (vertices %u KB) staging %u KB; images %u (%u MB), %u image flips so far",
            swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
-           frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
+-          frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
 -          f.data.used >> 10, f.staging.used >> 10, image_count_, images_.used >> 20);
++          frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, frame_shadow_biased_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
 +          f.data.used >> 10, frame_vtx_bytes_ >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
 +      // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
 +      // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
@@ -685,7 +721,7 @@ index 2205439..2b46571 100644
      }
      dirty_pages_at_swap_ = dirty_pages_;
 -    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = 0;
-+    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = 0;
++    frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
      frame_ = (frame_ + 1) % kFrames;
 -    BeginFrame();
 +    begun_ = false;
@@ -757,7 +793,7 @@ index 2205439..2b46571 100644
  #ifdef HCU_DK_GL
      static const uint32_t start = std::getenv("HCU_DK_START_SWAP") ? uint32_t(std::atoi(std::getenv("HCU_DK_START_SWAP"))) : 0;
      static const char* dir = std::getenv("HCU_DK_DUMP_DIR");
-@@ -863,17 +1325,52 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -863,17 +1351,52 @@ class Deko3dCommandProcessor : public CommandProcessor {
  #endif
    }
    mutable bool skip_checked_[1] = {false};
@@ -811,7 +847,7 @@ index 2205439..2b46571 100644
      f.data.Reset();
      f.staging.Reset();
      f.next_descriptor = 0;
-@@ -882,6 +1379,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -882,6 +1405,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
      dkCmdBufAddMemory(f.cmdbuf, cmdmem_.block, f.cmd_offset, kFrameCmdBytes);
      dkCmdBufBindImageDescriptorSet(f.cmdbuf, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
      dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
@@ -825,7 +861,7 @@ index 2205439..2b46571 100644
      bound_color_ = nullptr;
      bound_depth_ = nullptr;
    }
-@@ -923,6 +1427,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -923,6 +1453,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // serials. Linux: a hash of the range against the hash taken when the contents were set.
    uint64_t HashMemory(uint32_t physical, uint32_t bytes) const {
  #ifdef HCU_DK_GL
@@ -834,7 +870,7 @@ index 2205439..2b46571 100644
      const uint8_t* p = memory_->TranslatePhysical(physical);
      uint64_t h = 1469598103934665603ull;
      uint32_t words = bytes / 8;
-@@ -1060,20 +1566,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1060,20 +1592,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // The image at a guest address (resolve destinations, textures). A fetch or a swap asks for the
    // exact size (a resolve created it with the aligned height: resized once, contents copied); a
    // resolve asks for a minimum size (`at_least`) and creates with the aligned size (`create_w/h`).
@@ -867,7 +903,7 @@ index 2205439..2b46571 100644
              img->height, fresh->width, fresh->height);
          it->second = fresh;
          RecycleImage(img);
-@@ -1081,11 +1595,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1081,11 +1621,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
        }
        if (img->width == width && img->height == height) return img;
        if (at_least && width <= img->width && height <= img->height) return img;
@@ -881,7 +917,7 @@ index 2205439..2b46571 100644
        if (!resized) return img;
        ClearNewImage(resized);
        uint32_t cw = std::min(width, img->width), ch = std::min(height, img->height);
-@@ -1097,16 +1612,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1097,16 +1638,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
        dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
        dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
        resized->from_resolve = img->from_resolve;
@@ -901,7 +937,7 @@ index 2205439..2b46571 100644
      if (!img) return nullptr;
      img->guest_base = base;
      guest_images_.emplace(base, img);
-@@ -1114,6 +1630,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1114,6 +1656,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
      return img;
    }
  
@@ -940,7 +976,7 @@ index 2205439..2b46571 100644
    HostImage* TextureImage(Frame& f, const TextureInfo& info, const xenos::xe_gpu_texture_fetch_t& fetch) {
      DkImageFormat format;
      bool reversed;
-@@ -1123,13 +1671,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1123,13 +1697,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
      }
      uint32_t base = info.memory.base_address;
      // TextureInfo keeps the fetch constant's fields: the size minus one.
@@ -984,7 +1020,7 @@ index 2205439..2b46571 100644
      // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
      if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
      if (img->content_serial) {
-@@ -1197,6 +1773,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1197,6 +1799,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
    uint32_t dump_count_ = 0;
  #endif
  
@@ -1010,7 +1046,7 @@ index 2205439..2b46571 100644
    bool UploadTexture(Frame& f, HostImage& img, const TextureInfo& info, xenos::Endian endian) {
      const FormatInfo* fi = info.format_info();
      const uint32_t width = info.width + 1, height = info.height + 1;  // TextureInfo keeps size minus one
-@@ -1293,8 +1888,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1293,8 +1914,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
      uint32_t sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
      if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
@@ -1040,7 +1076,7 @@ index 2205439..2b46571 100644
      SysConstants sys{};
      for (int i = 0; i < 3; i++) {
        sys.ndc_scale[i] = vi.ndc_scale[i];
-@@ -1311,8 +1925,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1311,8 +1951,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
      dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
      dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
@@ -1049,7 +1085,7 @@ index 2205439..2b46571 100644
      return true;
    }
  
-@@ -1387,6 +1999,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1387,6 +2025,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
                  depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
                  color[1], color[2], color[3], z, scale);
        }
@@ -1060,7 +1096,7 @@ index 2205439..2b46571 100644
        clears_++;
        frame_clears_++;
      }
-@@ -1399,8 +2015,61 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1399,8 +2041,61 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -1123,7 +1159,7 @@ index 2205439..2b46571 100644
        return true;
      }
      uint32_t src_pitch = info.color_edram_info.pitch_tiles * 80;
-@@ -1412,10 +2081,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1412,10 +2107,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
      (void)dest_pitch; (void)dest_height;
      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
@@ -1140,7 +1176,7 @@ index 2205439..2b46571 100644
      dst->mem_bytes = dest_pitch * dest_height * 4;
      dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
      if (x + w > src->width) w = x < src->width ? src->width - x : 0;
-@@ -1447,6 +2121,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1447,6 +2147,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
        LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
                x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
      }
@@ -1151,7 +1187,7 @@ index 2205439..2b46571 100644
      resolves_++;
      frame_resolves_++;
      return true;
-@@ -1521,7 +2199,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1521,7 +2225,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      std::vprintf(fmt, ap);
      std::printf("\n");
      va_end(ap);
@@ -1161,12 +1197,14 @@ index 2205439..2b46571 100644
    }
  
    DkDevice device_ = nullptr;
-@@ -1537,7 +2217,26 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1537,7 +2243,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
    bool dump_images_ = false;
 +  bool no_depth_copy_ = false;
 +  float z_bias_ = -16.f;
++  float shadow_bias_ = 32.f, shadow_slope_ = 1.5f;  // shadow-pass depth bias (file zfix)
++  bool no_precise_ = false;  // zfix "noprecise"
 +  bool overlay_on_ = true;
 +  HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
 +  char overlay_text_[96] = {};
@@ -1188,7 +1226,7 @@ index 2205439..2b46571 100644
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
    uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
-@@ -1547,10 +2246,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1547,10 +2274,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
    HostImage* bound_color_ = nullptr;
    HostImage* bound_depth_ = nullptr;
    std::unordered_set<std::string> logged_;
@@ -1199,7 +1237,7 @@ index 2205439..2b46571 100644
 +  uint32_t image_flips_ = 0;  // recreated + resized images, all frames (the first 40 are logged)
    uint64_t upload_bytes_ = 0;
 -  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0;
-+  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0;
++  uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0, frame_shadow_biased_ = 0;
  };
  
  class Deko3dGraphicsSystem : public GraphicsSystem {
@@ -1705,7 +1743,7 @@ index 670c4d3..7b07d7a 100644
          raise SystemExit('threading_posix.cpp: anchor not found: ' + old[:60])
      src = src.replace(old, new)
 diff --git b/tools/xenos2glsl.py a/tools/xenos2glsl.py
-index c9e15e7..5358eaa 100644
+index c9e15e7..537caca 100644
 --- b/tools/xenos2glsl.py
 +++ a/tools/xenos2glsl.py
 @@ -6,7 +6,8 @@ its translator_disasm.cpp. Only what the game's shaders use is implemented; anyt
@@ -1718,7 +1756,17 @@ index c9e15e7..5358eaa 100644
              sidecar JSON lists (slot, offset, format, stride, signed, integer) per attribute;
              binding 0 = uniform Consts { vec4 c[256]; } (the ALU constants c0..c255);
              binding 1 = uniform Sys (ndc_scale, ndc_offset, alpha test, bool constants);
-@@ -102,14 +103,15 @@ class Translator:
+@@ -39,6 +40,9 @@ REPLICATED = {'dp4', 'dp3', 'dp2add', 'max4', 'setp_eq_push', 'setp_ne_push', 's
+               'kill_eq', 'kill_gt', 'kill_ge', 'kill_ne'}
+ 
+ 
++PRECISE = False  # --precise
++
++
+ class Translator:
+     def __init__(self, text, stage, name):
+         self.stage = stage  # 'vert' or 'frag'
+@@ -102,14 +106,15 @@ class Translator:
  
      def parse_source(self, tok, count):
          """Source operand -> GLSL expression with exactly `count` components (1, 2 or 4)."""
@@ -1739,7 +1787,7 @@ index c9e15e7..5358eaa 100644
          if swz is None:
              swz = 'xyzw'
          if len(swz) == 1:
-@@ -121,6 +123,8 @@ class Translator:
+@@ -121,6 +126,8 @@ class Translator:
              base = 'r%d' % idx
          elif relative:
              base = 'c[%d + aL]' % idx
@@ -1748,7 +1796,7 @@ index c9e15e7..5358eaa 100644
          else:
              base = 'c[%d]' % idx
          if count == 1:
-@@ -178,6 +182,13 @@ class Translator:
+@@ -178,6 +185,13 @@ class Translator:
          if op == 'vfetch_full':
              self.cur_slot = slot
              self.stride_words = int(kv.get('Stride', '0'))
@@ -1762,7 +1810,7 @@ index c9e15e7..5358eaa 100644
          attr = {
              'index': len(self.attrs),
              'slot': self.cur_slot,
-@@ -313,6 +324,11 @@ class Translator:
+@@ -313,6 +327,11 @@ class Translator:
              self.has_kill = True
              self.extra_kill = 'if (%s %s) discard;' % (a[0], cmp)
              return 'float(%s %s)' % (a[0], cmp)
@@ -1774,17 +1822,30 @@ index c9e15e7..5358eaa 100644
          if op == 'retain_prev': return 'ps'
          self.err('scalar op %s is not implemented' % op)
  
-@@ -497,6 +513,9 @@ class Translator:
+@@ -497,6 +516,13 @@ class Translator:
          out = ['#version 460', '// hcu xenos2glsl: %s (%s)' % (self.name, self.stage)]
          ind = '  '
          if self.stage == 'vert':
 +            # The same position in a depth pre-pass and in the colour pass (two shaders) must match bit for bit,
 +            # or the colour pass fails its LEQUAL test (missing meshes, z-fighting).
 +            out.append('invariant gl_Position;')
++            if PRECISE:
++                # The console's compiler (uam) fuses multiply-adds per shader: a shadow caster's position and a receiver's
++                # light-space interpolator, the same math in two shaders, can differ in the last bits (self-shadowing rings).
++                out.append('precise gl_Position;')
              for a in self.attrs:
                  out.append('layout(location = %d) in vec4 in_%d;  // vf%d offset %d %s' % (
                      a['index'], a['index'], a['slot'], a['offset_words'], a['format']))
-@@ -524,6 +543,7 @@ class Translator:
+@@ -511,7 +537,7 @@ class Translator:
+         colors = sorted(int(e[2:]) for e in self.exports if e.startswith('oC'))
+         if self.stage == 'vert':
+             for k in interps:
+-                out.append('layout(location = %d) out vec4 o_%d;' % (k, k))
++                out.append('layout(location = %d) %sout vec4 o_%d;' % (k, 'precise ' if PRECISE else '', k))
+         else:
+             for k in colors:
+                 out.append('layout(location = %d) out vec4 oC_%d;' % (k, k))
+@@ -524,6 +550,7 @@ class Translator:
          for e in sorted(self.exports):
              out.append(ind + 'vec4 %s = vec4(0.0);' % e)
          out.append(ind + 'bool p0 = false;')
@@ -1792,3 +1853,14 @@ index c9e15e7..5358eaa 100644
          out.append(ind + 'float ps = 0.0;')
  
          def block_cond(b):
+@@ -668,7 +695,10 @@ def main():
+     ap.add_argument('--all', help='translate every *.ucode.vert/frag in this directory')
+     ap.add_argument('--out-dir', help='output directory for --all')
+     ap.add_argument('--check', action='store_true', help='compile the output with uam')
++    ap.add_argument('--precise', action='store_true', help='vertex shaders: precise position and interpolators (no fused multiply-adds)')
+     args = ap.parse_args()
++    global PRECISE
++    PRECISE = args.precise
+     if args.all:
+         files = sorted(f for f in os.listdir(args.all) if f.endswith('.ucode.vert') or f.endswith('.ucode.frag'))
+         os.makedirs(args.out_dir or args.all, exist_ok=True)
