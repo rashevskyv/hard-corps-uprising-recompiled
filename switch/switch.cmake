@@ -68,4 +68,11 @@ target_link_options(hcu PRIVATE
 target_link_libraries(hcu PRIVATE "${NVK_SDK}/lib/libvulkan.a" deko3d zstd expat z nx m stdc++)
 # nx_create_nro ignores NAME/AUTHOR/VERSION: the NACP is generated here and handed to it.
 nx_generate_nacp(hcu.nacp NAME "Hard Corps: Uprising" AUTHOR "hcu-switch" VERSION "${HCU_VERSION}")
-nx_create_nro(hcu NACP hcu.nacp)
+# The hbmenu icon: the title image from the game's own package, kept local (gitignored, game material); without it
+# the devkitPro default icon.
+set(HCU_NRO_ICON "${CMAKE_CURRENT_SOURCE_DIR}/packaging/switch/icon-local.jpg")
+if(EXISTS "${HCU_NRO_ICON}")
+    nx_create_nro(hcu NACP hcu.nacp ICON "${HCU_NRO_ICON}")
+else()
+    nx_create_nro(hcu NACP hcu.nacp)
+endif()
