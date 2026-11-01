@@ -51,6 +51,9 @@
 #include <rex/system/gpu_plugin.h>
 
 #include "../settings_menu.h"
+#ifdef __SWITCH__
+#include "../frame_recorder.h"
+#endif
 #include "ucode_hash.h"
 #include "untile_fast.h"
 
@@ -232,6 +235,9 @@ struct Frame {
   uint32_t next_descriptor = 0;
   std::unordered_map<uint64_t, uint32_t> descriptors;  // image (and swizzle) -> descriptor slot this frame
   uint32_t ts_off = UINT32_MAX;  // two GPU timestamps (16 bytes each) in `data`: frame start, after the last barrier
+  bool rec_pending = false;  // RECORD 5 SEC: this frame's front buffer copy waits in rec_ for the fence
+  uint32_t rec_swap = 0;
+  uint64_t rec_us = 0;
 };
 
 struct SysConstants {
@@ -542,7 +548,7 @@ void RenderOverlayText(uint32_t* px, const char* text) {
 }
 
 // The settings menu (src/settings_menu.cpp): kMenuW x kMenuH, one line per 18 rows.
-constexpr uint32_t kMenuLines = 14, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
+constexpr uint32_t kMenuLines = 16, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
 
 class Deko3dCommandProcessor : public CommandProcessor {
  public:
@@ -1162,6 +1168,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (widest) front = widest;
     }
     // Debug readback at two swaps: what the images hold (uniform colour = a broken stage).
+#ifdef __SWITCH__
+    RecordFrame(f, cmd, front);
+#endif
     std::vector<std::pair<std::string, uint32_t>> dumps;
     const bool menu_dump = hcu_settings.dump != 0;  // settings menu DUMP NEXT FRAME: every image as a raw file
     if (menu_dump || (dump_images_ && (swaps_ + 1 == 120 || swaps_ + 1 == 600 || swaps_ + 1 == 2400))) {
@@ -1572,6 +1581,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
         r = dkFenceWait(&f.fence, 2000000000ll);  // 2 s: a hang is logged, not silent
       }
       if (r != DkResult_Success) Log("frame %u: fence wait result %d (GPU hang?)", frame_, int(r));
+#ifdef __SWITCH__
+      if (f.rec_pending) {
+        const uint32_t bytes = kPresentWidth * kPresentHeight * 4;
+        dkMemBlockFlushCpuCache(rec_.block, frame_ * bytes, bytes);
+        hcu_rec_push(rec_.cpu + frame_ * bytes, f.rec_swap, f.rec_us);
+        f.rec_pending = false;
+      }
+#endif
       if (swaps_ < 6) Log("frame %u: fence done", frame_);
       f.fenced = false;
 #ifdef __SWITCH__
@@ -2485,6 +2502,55 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint32_t depth_resolves_ = 0;  // depth resolves so far (MergeDepthPieces looks again when it changed)
   std::string shader_dir_;
   std::string debug_dir_;
+#ifdef __SWITCH__
+  // Settings menu RECORD 5 SEC: the shown 1280x720 image of each drawn frame is copied into rec_ (one slot per frame)
+  // and handed to the recorder when the frame's fence has passed (BeginFrame): the GPU thread never waits for it.
+  MemBlock rec_;
+  bool rec_on_ = false;
+  uint64_t rec_start_tick_ = 0;
+  void RecordFrame(Frame& f, DkCmdBuf cmd, HostImage* front) {
+    if (!rec_on_ && hcu_settings.record) {
+      if (!rec_.block && !rec_.Create(device_, kPresentWidth * kPresentHeight * 4 * kFrames, DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuCached)) {
+        Log("RECORD 5 SEC: no memory block");
+        hcu_settings.record = 0;
+        return;
+      }
+      if (!hcu_rec_start((debug_dir_ + "rec/").c_str(), swaps_ + 1, kPresentWidth, kPresentHeight)) {
+        hcu_settings.record = 0;
+        return;
+      }
+      rec_on_ = true;
+      rec_start_tick_ = armGetSystemTick();
+    }
+    if (!rec_on_) return;
+    const uint64_t us = armTicksToNs(armGetSystemTick() - rec_start_tick_) / 1000;
+    if (us > 5000000) {
+      // Done: the frames still in flight are handed over, then the writer finishes the file.
+      dkQueueWaitIdle(queue_);
+      const uint32_t bytes = kPresentWidth * kPresentHeight * 4;
+      for (uint32_t i = 0; i < kFrames; i++) {
+        if (!frames_[i].rec_pending) continue;
+        dkMemBlockFlushCpuCache(rec_.block, i * bytes, bytes);
+        hcu_rec_push(rec_.cpu + i * bytes, frames_[i].rec_swap, frames_[i].rec_us);
+        frames_[i].rec_pending = false;
+      }
+      hcu_rec_stop();
+      rec_on_ = false;
+      hcu_settings.record = 0;
+      return;
+    }
+    if (!front || front->width != kPresentWidth || front->height != kPresentHeight || front->format != DkImageFormat_RGBA8_Unorm) return;
+    DkImageView v;
+    dkImageViewDefaults(&v, &front->image);
+    DkImageRect r{0, 0, 0, kPresentWidth, kPresentHeight, 1};
+    DkCopyBuf cb{rec_.gpu + uint64_t(frame_) * kPresentWidth * kPresentHeight * 4, 0, 0};
+    dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+    dkCmdBufCopyImageToBuffer(cmd, &v, &r, &cb, 0);
+    f.rec_pending = true;
+    f.rec_swap = swaps_ + 1;
+    f.rec_us = us;
+  }
+#endif
   uint32_t swap_interval_ = 1;
   bool skip_odd_frames_ = false;
   bool skip_busy_ = false;  // 60skip: a frame the GPU has no free slot for is not drawn (NextFrame)

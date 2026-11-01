@@ -8,7 +8,7 @@
 
 #include <unistd.h>
 
-HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0};
+HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0, 0};
 
 namespace {
 
@@ -55,6 +55,7 @@ const Item kItems[] = {
     {"VIEW STEP", {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}, 16, false,
      [] { return hcu_settings.view_step; }, [](int i) { hcu_settings.view_step = i; }},
     {"DUMP NEXT FRAME", {"NO", "YES"}, 2, false, [] { return hcu_settings.dump; }, [](int i) { hcu_settings.dump = i; }},
+    {"RECORD 5 SEC", {"NO", "YES"}, 2, false, [] { return hcu_settings.record; }, [](int i) { hcu_settings.record = i; }},
     {"PRECISE SHADERS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.precise; }, [](int i) { hcu_settings.precise = i; }},
     {"UPLOAD IN STRIPS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.upload_strips; },
      [](int i) { hcu_settings.upload_strips = i; }},
