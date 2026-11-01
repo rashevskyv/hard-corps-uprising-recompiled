@@ -33,7 +33,7 @@ int NearestF(float v, const float* opts, int n) {
     if (std::abs(opts[i] - v) < std::abs(opts[best] - v)) best = i;
   return best;
 }
-const float kShadow[] = {0.f, 32.f, 256.f, 1024.f};
+const float kShadow[] = {0.f, 32.f, 256.f, 1024.f, 16384.f, 262144.f};  // depth units of 2^-24: 262144 = 1/64 of the range
 const float kColour[] = {-16.f, 0.f};
 
 const Item kItems[] = {
@@ -41,8 +41,8 @@ const Item kItems[] = {
      [] { return hcu_settings.fps_mode; }, [](int i) { hcu_settings.fps_mode = i; }},
     {"PERFORMANCE STRIP", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
     {"RUMBLE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.rumble; }, [](int i) { hcu_settings.rumble = i; }},
-    {"SHADOW BIAS", {"OFF", "32", "256", "1024"}, 4, false,
-     [] { return hcu_settings.shadow_bias == 0.f && hcu_settings.shadow_slope == 0.f ? 0 : NearestF(hcu_settings.shadow_bias, kShadow, 4); },
+    {"SHADOW BIAS", {"OFF", "32", "256", "1024", "16384", "262144"}, 6, false,
+     [] { return hcu_settings.shadow_bias == 0.f && hcu_settings.shadow_slope == 0.f ? 0 : NearestF(hcu_settings.shadow_bias, kShadow, 6); },
      [](int i) {
        hcu_settings.shadow_bias = kShadow[i];
        hcu_settings.shadow_slope = i ? 1.5f : 0.f;

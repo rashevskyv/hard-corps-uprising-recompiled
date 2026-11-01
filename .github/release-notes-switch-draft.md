@@ -22,7 +22,7 @@ Press **both sticks** (L3 + R3) together to open or close it. Up/down picks a li
 | FRAME RATE | 30 (default), 60 SKIP WHEN BUSY, 60, 30 HALF SPEED | at once |
 | PERFORMANCE STRIP | OFF, ON | at once |
 | RUMBLE | OFF, ON | at once |
-| SHADOW BIAS | OFF, 32 (default), 256, 1024 | at once |
+| SHADOW BIAS | OFF, 32 (default), 256, 1024, 16384, 262144 | at once |
 | COLOUR BIAS | -16 (default), OFF | at once |
 | SHADOW MAP | ON (default), OFF | at once |
 | PRECISE SHADERS | OFF, ON (default) | next start |
