@@ -25,6 +25,7 @@ struct HcuSettings {
                       // shadow map (the depth texture the receivers sample), 3 = STEP: the image of the frame's
                       // resolve number view_step + 1 (colour and depth resolves in order), all stretched
   int view_step;      // VIEW STEP: 0 = the first resolve of the frame
+  int dump;           // DUMP NEXT FRAME: 1 = the backend writes the next drawn frame's images to dump/, then sets 0
   int upload_strips;  // 1 = textures go up in strips of 64 block rows (A/B of the console hatching; at start)
 };
 

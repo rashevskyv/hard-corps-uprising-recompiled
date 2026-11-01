@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -114,6 +115,16 @@ void Log(const char* fmt, ...) {
   // On the Switch stdout is the SD log, buffered by the host layer and flushed twice a second: a flush
   // per line is a filesystem call (a kernel wait of a millisecond or more on FAT) in the command
   // thread. HCU console 0.160: tens of image lines per stage frame made 63-66 ms of "draws" per frame.
+}
+
+// Bytes per pixel of an image read back for a dump (the block formats: their blocks, rounded up).
+uint32_t DumpBytesPerPixel(DkImageFormat f) {
+  switch (f) {
+    case DkImageFormat_RGBA16_Float: return 8;
+    case DkImageFormat_R8_Unorm: return 1;
+    case DkImageFormat_RG8_Unorm: return 2;
+    default: return 4;
+  }
 }
 
 void DebugCallback(void*, const char* context, DkResult result, const char* message) {
@@ -1152,10 +1163,16 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     // Debug readback at two swaps: what the images hold (uniform colour = a broken stage).
     std::vector<std::pair<std::string, uint32_t>> dumps;
-    if (dump_images_ && (swaps_ + 1 == 120 || swaps_ + 1 == 600 || swaps_ + 1 == 2400)) {
+    const bool menu_dump = hcu_settings.dump != 0;  // settings menu DUMP NEXT FRAME: every image as a raw file
+    if (menu_dump || (dump_images_ && (swaps_ + 1 == 120 || swaps_ + 1 == 600 || swaps_ + 1 == 2400))) {
+      std::vector<HostImage*> dump_imgs;
       auto queue_dump = [&](const char* what, HostImage* img) {
         if (!img) return;
-        uint32_t bytes = img->width * img->height * 4;
+        if (menu_dump) {
+          for (HostImage* d : dump_imgs) if (d == img) return;
+          dump_imgs.push_back(img);
+        }
+        uint32_t bytes = img->width * img->height * DumpBytesPerPixel(img->format);
         uint32_t off = f.staging.Alloc(bytes, 0x1000);
         if (off == UINT32_MAX) return;
         DkImageView v;
@@ -1165,12 +1182,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
         dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
         dkCmdBufCopyImageToBuffer(cmd, &v, &r, &cb, 0);
         char name[96];
-        std::snprintf(name, sizeof(name), "%s %ux%u", what, img->width, img->height);
+        std::snprintf(name, sizeof(name), "%s fmt%d %ux%u", what, int(img->format), img->width, img->height);
         dumps.emplace_back(name, off);
       };
       queue_dump("front", front);
-      for (auto& it : targets_) if (!it.second->is_depth) { char n[48]; std::snprintf(n, sizeof(n), "target base %u pitch %u", it.second->edram_base, it.second->edram_pitch); queue_dump(n, it.second); }
-      for (auto& it : guest_images_) if (it.second->width >= 600 && it.second != front) { char n[48]; std::snprintf(n, sizeof(n), "guest %08X%s", it.first, it.second->from_resolve ? " (resolve)" : " (upload)"); queue_dump(n, it.second); }
+      for (auto& it : targets_) if (menu_dump || !it.second->is_depth) { char n[48]; std::snprintf(n, sizeof(n), "target%s base %u pitch %u", it.second->is_depth ? "-depth" : "", it.second->edram_base, it.second->edram_pitch); queue_dump(n, it.second); }
+      for (auto& it : guest_images_) if ((menu_dump ? it.second->width >= 64 : it.second->width >= 600) && it.second != front) { char n[48]; std::snprintf(n, sizeof(n), "guest %08X%s", it.first, it.second->from_resolve ? " (resolve)" : " (upload)"); queue_dump(n, it.second); }
       dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
     }
 #ifdef HCU_DK_GL
@@ -1360,6 +1377,33 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #endif
     if (!dumps.empty()) {
       dkQueueWaitIdle(queue_);
+      if (menu_dump) {
+        // Raw bytes as the GPU holds them (RGBA8 = R,G,B,A; Z24S8 = depth in the low 24 bits, stencil on top; BC = blocks),
+        // one file each: dump/f<swap>_<what>_fmt<host format>_<w>x<h>.raw.
+        const std::string dir = debug_dir_ + "dump/";
+        mkdir(dir.c_str(), 0777);
+        uint64_t total = 0;
+        for (auto& d : dumps) {
+          uint32_t w = 0, h = 0;
+          std::sscanf(d.first.c_str() + d.first.rfind(' ') + 1, "%ux%u", &w, &h);
+          int fmt = 0;
+          const size_t fp = d.first.find(" fmt");
+          if (fp != std::string::npos) fmt = std::atoi(d.first.c_str() + fp + 4);
+          std::string n = d.first;
+          for (char& c : n) if (c == ' ' || c == '(' || c == ')') c = '_';
+          char path[300];
+          std::snprintf(path, sizeof(path), "%sf%u_%s.raw", dir.c_str(), swaps_ + 1, n.c_str());
+          const uint32_t bytes = w * h * DumpBytesPerPixel(DkImageFormat(fmt));
+          if (FILE* fp2 = std::fopen(path, "wb")) {
+            std::fwrite(f.staging.cpu + d.second, 1, bytes, fp2);
+            std::fclose(fp2);
+            total += bytes;
+          }
+        }
+        Log("dump at swap #%u: %zu images, %llu KB written to %s (DUMP NEXT FRAME)", swaps_ + 1, dumps.size(), (unsigned long long)(total >> 10),
+            dir.c_str());
+        hcu_settings.dump = 0;
+      }
       for (auto& d : dumps) {
         // The image's dims are in the name; recover them from the staging layout: sample a 16x16 grid.
         uint32_t w = 0, h = 0;
@@ -1416,13 +1460,29 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // guest never waits for the GPU (the game keeps its speed, fewer frames are shown). 60skip: only the busy skip.
   void NextFrame(bool drawn) {
     skip_frame_ = false;
+#ifdef __SWITCH__
+    if (dkQueueIsInErrorState(queue_)) {
+      Log("GPU queue in its error state at swap #%u (a list before it faulted); shadow map %d, view %d", swaps_, hcu_settings.shadow_map,
+          hcu_settings.view);
+      LogGpuChannelErrors();
+      rex_nx_quick_exit("the GPU queue is in its error state (see the lines before)");
+    }
+    if (busy_in_a_row_ == 300) {  // 5 s of skipped frames: the GPU has not finished the oldest one
+      Log("the GPU has not finished frame slot %u for 300 swaps (a GPU hang?); shadow map %d, view %d", frame_, hcu_settings.shadow_map,
+          hcu_settings.view);
+      LogGpuChannelErrors();
+      std::fflush(stdout);
+    }
+#endif
     if (skip_odd_frames_ && drawn) {
       skip_frame_ = true;
     } else if ((skip_odd_frames_ || skip_busy_) && frames_[frame_].fenced &&
                dkFenceWait(&frames_[frame_].fence, 0) != DkResult_Success) {
       skip_frame_ = true;
       busy_skips_++;
+      busy_in_a_row_++;
     }
+    if (!skip_frame_) busy_in_a_row_ = 0;
     if (!skip_frame_ && !begun_) {
       BeginFrame();
       begun_ = true;
@@ -2430,7 +2490,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool skip_busy_ = false;  // 60skip: a frame the GPU has no free slot for is not drawn (NextFrame)
   bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
   bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
-  uint32_t drawn_frames_ = 0, busy_skips_ = 0;
+  uint32_t drawn_frames_ = 0, busy_skips_ = 0, busy_in_a_row_ = 0;
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
   uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
