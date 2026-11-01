@@ -62,6 +62,8 @@ target_sources(hcu PRIVATE
 set(HCU_VERSION "0.0.unknown" CACHE STRING "NACP display version, from git (switch/build.sh)")
 # hcu_version.h is written by switch/build.sh into the build dir on every build.
 target_include_directories(hcu PRIVATE ${HCU_SWITCH_HOST}/include ${CMAKE_BINARY_DIR})
+# lz4 (src/frame_recorder.cpp) from devkitPro portlibs.
+target_include_directories(hcu PRIVATE "$ENV{DEVKITPRO}/portlibs/switch/include")
 target_link_options(hcu PRIVATE
     -Wl,--wrap=__syscall_thread_create
     -Wl,-u,vk_icdGetInstanceProcAddr
