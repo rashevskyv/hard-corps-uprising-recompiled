@@ -5,7 +5,9 @@
 // width, height, compressed bytes, 0} and the frame XOR the previous one (the first one XOR zero), LZ4 block compressed:
 // a still picture costs almost nothing. tools/dkrec.py turns it into PNGs, a video, a contact sheet and change maps.
 // The backend copies the frame (GPU) and hands it over once the frame's fence has passed; the writer thread does the
-// hashes, the XOR, the compression and the SD writes. A full ring drops the frame (counted in the log).
+// hashes, the XOR and the compression into a RAM arena, and the file is written after the 5 s: the SD card took only
+// part of the 50+ MB/s of compressed frames (console 0.264: 68-81 of about 170 frames dropped). A full ring or a full
+// arena drops a frame (counted in the log).
 #include "frame_recorder.h"
 
 #include <condition_variable>
@@ -20,10 +22,11 @@
 
 #include <lz4.h>
 #include <sys/stat.h>
+#include <switch.h>
 
 namespace {
 
-constexpr int kRing = 8;  // frames waiting for the writer (8 x 3.6 MB)
+constexpr int kRing = 16;  // frames waiting for the compressor (16 x 3.6 MB)
 
 struct Pending {
   std::vector<uint8_t> px;
@@ -37,6 +40,8 @@ std::deque<Pending*> g_queue, g_free;
 std::thread g_thread;
 bool g_active = false, g_stop = false;
 uint32_t g_w = 0, g_h = 0, g_pushed = 0, g_dropped = 0;
+uint8_t* g_arena = nullptr;  // the compressed frames until the file is written
+size_t g_arena_size = 0;
 
 uint16_t TileHash(const uint8_t* px, uint32_t w, uint32_t x0, uint32_t y0, uint32_t tw, uint32_t th) {
   uint32_t h = 2166136261u;
@@ -48,8 +53,10 @@ uint16_t TileHash(const uint8_t* px, uint32_t w, uint32_t x0, uint32_t y0, uint3
 }
 
 void Writer(std::string path) {
-  FILE* f = std::fopen(path.c_str(), "wb");
   const size_t bytes = size_t(g_w) * g_h * 4;
+  size_t used = 0;
+  uint32_t arena_full = 0;
+  uint64_t busy_ticks = 0;
   std::vector<uint8_t> prev(bytes, 0), delta(bytes), out(static_cast<size_t>(LZ4_compressBound(int(bytes))));
   uint32_t index = 0;
   uint64_t written = 0;
@@ -62,6 +69,7 @@ void Writer(std::string path) {
       p = g_queue.front();
       g_queue.pop_front();
     }
+    const uint64_t t0 = armGetSystemTick();
     // 16x9 tiles of 80x80 pixels (1280x720): one 16-bit hash each, and one for the frame.
     char line[16 * 9 * 5 + 96];
     int n = std::snprintf(line, sizeof(line), "[rec] frame %u swap %u t %llu ms:", index, p->swap, (unsigned long long)(p->us / 1000));
@@ -72,19 +80,29 @@ void Writer(std::string path) {
     for (size_t i = 0; i < bytes; i++) delta[i] = p->px[i] ^ prev[i];
     prev.swap(p->px);
     const int c = LZ4_compress_default(reinterpret_cast<const char*>(delta.data()), reinterpret_cast<char*>(out.data()), int(bytes), int(out.size()));
-    if (f && c > 0) {
+    if (c > 0 && used + 32 + size_t(c) <= g_arena_size) {
       const uint32_t hdr[8] = {0x43455248u /* "HREC" */, index, p->swap, uint32_t(p->us), g_w, g_h, uint32_t(c), 0};
-      std::fwrite(hdr, 1, sizeof(hdr), f);
-      std::fwrite(out.data(), 1, size_t(c), f);
-      written += sizeof(hdr) + size_t(c);
+      std::memcpy(g_arena + used, hdr, sizeof(hdr));
+      std::memcpy(g_arena + used + 32, out.data(), size_t(c));
+      used += 32 + size_t(c);
+      index++;
+    } else {
+      arena_full++;
+      prev.swap(p->px);  // undo: the next frame is XORed with the last one stored
     }
-    index++;
+    busy_ticks += armGetSystemTick() - t0;
     std::lock_guard<std::mutex> l(g_lock);
     g_free.push_back(p);
   }
-  if (f) std::fclose(f);
-  std::printf("[rec] stop: %u frames written (%llu KB) to %s, %u dropped (the writer was behind)\n", index, (unsigned long long)(written >> 10),
-              path.c_str(), g_dropped);
+  if (FILE* f = std::fopen(path.c_str(), "wb")) {
+    std::fwrite(g_arena, 1, used, f);
+    std::fclose(f);
+    written = used;
+  }
+  std::printf("[rec] stop: %u frames written (%llu KB) to %s; %u dropped (ring full: the compressor was behind), %u dropped (arena of %zu MB "
+              "full); compressor %.1f ms per frame\n",
+              index, (unsigned long long)(written >> 10), path.c_str(), g_dropped, arena_full, g_arena_size >> 20,
+              index + arena_full ? armTicksToNs(busy_ticks) / 1e6 / (index + arena_full) : 0.0);
   std::fflush(stdout);
 }
 
@@ -109,9 +127,19 @@ bool hcu_rec_start(const char* dir, uint32_t first_swap, uint32_t w, uint32_t h)
     g_free.clear();
     return false;
   }
+  for (size_t mb : {320, 192, 128, 64}) {
+    g_arena = static_cast<uint8_t*>(std::malloc(mb << 20));
+    if (g_arena) { g_arena_size = mb << 20; break; }
+  }
+  if (!g_arena) {
+    std::printf("[rec] not started: no memory for the arena\n");
+    for (Pending* p : g_free) delete p;
+    g_free.clear();
+    return false;
+  }
   char path[256];
   std::snprintf(path, sizeof(path), "%srec_%u.hrec", dir, first_swap);
-  std::printf("[rec] start at swap %u: %ux%u, 5 s, to %s\n", first_swap, w, h, path);
+  std::printf("[rec] start at swap %u: %ux%u, 5 s, to %s (arena %zu MB)\n", first_swap, w, h, path, g_arena_size >> 20);
   g_thread = std::thread(Writer, std::string(path));
   g_active = true;
   return true;
@@ -149,5 +177,7 @@ void hcu_rec_stop() {
   g_thread.join();
   for (Pending* p : g_free) delete p;
   g_free.clear();
+  std::free(g_arena);
+  g_arena = nullptr;
   g_active = false;
 }

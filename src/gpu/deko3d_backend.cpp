@@ -1505,6 +1505,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // slot for; "30" = every frame drawn, presented every second vblank (the game is frame-locked: it runs at half speed).
   // Read at start and every 60 swaps.
   void ReadSwapInterval() {
+    // The files record_now / dump_now in the debug dir do what the menu's RECORD 5 SEC / DUMP NEXT FRAME do (scripted
+    // runs: Eden); each is removed when seen.
+    if (!debug_dir_.empty()) {
+      if (unlink((debug_dir_ + "record_now").c_str()) == 0) hcu_settings.record = 1;
+      if (unlink((debug_dir_ + "dump_now").c_str()) == 0) hcu_settings.dump = 1;
+    }
     // The settings menu's live values (src/settings_menu.cpp; the fps file sets the start value).
     overlay_on_ = hcu_settings.strip != 0;
     shadow_bias_ = hcu_settings.shadow_bias;
