@@ -2213,7 +2213,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
       uint32_t w = info.coordinate_info.width_div_8 * 8, h = info.height_div_8 * 8;
       uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
       if (!dsrc || !w || !h) return true;
-      HostImage* dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, DkImageFormat_Z24S8, true);
+      // HCU's shadow cascades go into one 2048x2048 k_24_8 texture, each resolve with its own destination address
+      // (base + rows x pitch: 1E652000, 1EBD2000 = +704 rows, 1F152000 = +1408 rows), not a destination offset. A
+      // separate image per address left rows 704-2047 of the sampled texture with the bytes uploaded from guest memory
+      // into a depth image (console 0.254 pass list); the far cascades' receivers compared against them.
+      HostImage* dd = nullptr;
+      const uint32_t dest_row_bytes = info.copy_dest_coordinate_info.pitch_aligned_div_32 * 32 * 4;
+      if (dest_row_bytes) {
+        for (auto& g : guest_images_) {
+          HostImage* t = g.second;
+          if (!t->is_depth || g.first >= info.copy_dest_base || (info.copy_dest_base - g.first) % dest_row_bytes) continue;
+          const uint32_t rows = (info.copy_dest_base - g.first) / dest_row_bytes;
+          if (t->width < dx + w || t->height < rows + dy + h) continue;
+          dy += rows;
+          dd = t;
+          char key[48];
+          std::snprintf(key, sizeof(key), "cascade %08X", info.copy_dest_base);
+          LogOnce(key, "depth resolve to %08X goes into rows %u-%u of the %ux%u depth texture at %08X", info.copy_dest_base, dy, dy + h - 1,
+                  t->width, t->height, g.first);
+          break;
+        }
+      }
+      if (!dd) dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, DkImageFormat_Z24S8, true);
       if (!dd) return true;
       dd->from_resolve = true;
       dd->content_serial = serial_;
