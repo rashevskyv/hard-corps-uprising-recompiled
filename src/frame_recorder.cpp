@@ -50,7 +50,7 @@ uint16_t TileHash(const uint8_t* px, uint32_t w, uint32_t x0, uint32_t y0, uint3
 void Writer(std::string path) {
   FILE* f = std::fopen(path.c_str(), "wb");
   const size_t bytes = size_t(g_w) * g_h * 4;
-  std::vector<uint8_t> prev(bytes, 0), delta(bytes), out(size_t(LZ4_compressBound(int(bytes))));
+  std::vector<uint8_t> prev(bytes, 0), delta(bytes), out(static_cast<size_t>(LZ4_compressBound(int(bytes))));
   uint32_t index = 0;
   uint64_t written = 0;
   for (;;) {
