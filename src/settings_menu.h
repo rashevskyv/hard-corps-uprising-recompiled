@@ -27,6 +27,7 @@ struct HcuSettings {
   int view_step;      // VIEW STEP: 0 = the first resolve of the frame
   int dump;           // DUMP NEXT FRAME: 1 = the backend writes the next drawn frame's images to dump/, then sets 0
   int record;         // RECORD 5 SEC: 1 = the backend records the shown frames for 5 s (frame_recorder.cpp), then sets 0
+  int dxt_cpu;        // DXT ON CPU (at start): DXT1/3/5 textures are decoded to RGBA8 on the CPU, not copied as BC blocks
   int upload_strips;  // 1 = textures go up in strips of 64 block rows (A/B of the console hatching; at start)
 };
 

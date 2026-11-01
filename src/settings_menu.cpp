@@ -8,7 +8,7 @@
 
 #include <unistd.h>
 
-HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0, 0};
+HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0, 0, 0};
 
 namespace {
 
@@ -59,6 +59,7 @@ const Item kItems[] = {
     {"PRECISE SHADERS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.precise; }, [](int i) { hcu_settings.precise = i; }},
     {"UPLOAD IN STRIPS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.upload_strips; },
      [](int i) { hcu_settings.upload_strips = i; }},
+    {"DXT ON CPU", {"OFF", "ON"}, 2, true, [] { return hcu_settings.dxt_cpu; }, [](int i) { hcu_settings.dxt_cpu = i; }},
 };
 constexpr int kCount = sizeof(kItems) / sizeof(kItems[0]);
 
@@ -66,8 +67,8 @@ void Save() {
   if (g_dir.empty()) return;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
-    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\n",
-                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips);
+    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\n",
+                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu);
     std::fclose(f);
   }
 }
@@ -94,6 +95,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "precise")) s.precise = int(v);
       else if (!std::strcmp(key, "shadow_map")) s.shadow_map = int(v);
       else if (!std::strcmp(key, "upload_strips")) s.upload_strips = int(v);
+      else if (!std::strcmp(key, "dxt_cpu")) s.dxt_cpu = int(v);
     }
     std::fclose(f);
   }

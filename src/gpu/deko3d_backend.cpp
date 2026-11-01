@@ -120,6 +120,51 @@ void Log(const char* fmt, ...) {
   // thread. HCU console 0.160: tens of image lines per stage frame made 63-66 ms of "draws" per frame.
 }
 
+// DXT ON CPU: one 4x4 block of DXT1 (bc 1), DXT3 (2) or DXT5 (3) to RGBA8 at dst (row pitch in bytes), as the D3D9
+// decoders do (DXT1 with c0 <= c1: three colours and transparent black).
+void Rgb565(uint16_t c, int out[3]) {
+  out[0] = ((c >> 11) & 31) * 255 / 31;
+  out[1] = ((c >> 5) & 63) * 255 / 63;
+  out[2] = (c & 31) * 255 / 31;
+}
+void DecodeDxtBlock(const uint8_t* b, int bc, uint8_t* dst, uint32_t pitch, uint32_t cols, uint32_t rows) {
+  uint8_t alpha[16];
+  const uint8_t* cb = b;
+  if (bc == 2) {
+    for (int i = 0; i < 16; i++) alpha[i] = uint8_t(((b[i / 2] >> ((i & 1) * 4)) & 15) * 17);
+    cb = b + 8;
+  } else if (bc == 3) {
+    int a[8] = {b[0], b[1]};
+    if (a[0] > a[1]) for (int i = 2; i < 8; i++) a[i] = ((8 - i) * a[0] + (i - 1) * a[1]) / 7;
+    else { for (int i = 2; i < 6; i++) a[i] = ((6 - i) * a[0] + (i - 1) * a[1]) / 5; a[6] = 0; a[7] = 255; }
+    uint64_t bits = 0;
+    for (int i = 0; i < 6; i++) bits |= uint64_t(b[2 + i]) << (8 * i);
+    for (int i = 0; i < 16; i++) alpha[i] = uint8_t(a[(bits >> (3 * i)) & 7]);
+    cb = b + 8;
+  }
+  const uint16_t c0 = uint16_t(cb[0] | cb[1] << 8), c1 = uint16_t(cb[2] | cb[3] << 8);
+  int pal[4][4];
+  Rgb565(c0, pal[0]);
+  Rgb565(c1, pal[1]);
+  const bool four = bc != 1 || c0 > c1;
+  for (int k = 0; k < 3; k++) {
+    pal[2][k] = four ? (2 * pal[0][k] + pal[1][k]) / 3 : (pal[0][k] + pal[1][k]) / 2;
+    pal[3][k] = four ? (pal[0][k] + 2 * pal[1][k]) / 3 : 0;
+  }
+  pal[0][3] = pal[1][3] = pal[2][3] = 255;
+  pal[3][3] = four ? 255 : 0;
+  const uint32_t idx = uint32_t(cb[4] | cb[5] << 8 | cb[6] << 16 | uint32_t(cb[7]) << 24);
+  for (uint32_t y = 0; y < rows; y++)
+    for (uint32_t x = 0; x < cols; x++) {
+      const int i = int(y * 4 + x), s = (idx >> (2 * i)) & 3;
+      uint8_t* p = dst + y * pitch + x * 4;
+      p[0] = uint8_t(pal[s][0]);
+      p[1] = uint8_t(pal[s][1]);
+      p[2] = uint8_t(pal[s][2]);
+      p[3] = bc == 1 ? uint8_t(pal[s][3]) : alpha[i];
+    }
+}
+
 // Bytes per pixel of an image read back for a dump (the block formats: their blocks, rounded up).
 uint32_t DumpBytesPerPixel(DkImageFormat f) {
   switch (f) {
@@ -352,9 +397,11 @@ bool TextureFormatOf(xenos::TextureFormat f, DkImageFormat& out, bool& reversed)
     case TF::k_8_8_8_8: case TF::k_8_8_8_8_A: out = DkImageFormat_RGBA8_Unorm; return true;
     case TF::k_8: case TF::k_8_A: case TF::k_8_B: out = DkImageFormat_R8_Unorm; return true;
     case TF::k_8_8: out = DkImageFormat_RG8_Unorm; return true;
-    case TF::k_DXT1: out = DkImageFormat_RGBA_BC1; return true;
-    case TF::k_DXT2_3: out = DkImageFormat_RGBA_BC2; return true;
-    case TF::k_DXT4_5: out = DkImageFormat_RGBA_BC3; return true;
+    // DXT ON CPU (settings menu, at start): decoded to RGBA8 in UploadTexture (A/B of the console's brick-like hatching,
+    // which has the size of the sky's and sand's DXT1 blocks magnified).
+    case TF::k_DXT1: out = hcu_settings.dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC1; return true;
+    case TF::k_DXT2_3: out = hcu_settings.dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC2; return true;
+    case TF::k_DXT4_5: out = hcu_settings.dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC3; return true;
     case TF::k_DXN: out = DkImageFormat_RG_BC5_Unorm; return true;
     case TF::k_DXT5A: out = DkImageFormat_R_BC4_Unorm; return true;
     case TF::k_4_4_4_4: out = DkImageFormat_RGBA4_Unorm; reversed = true; return true;
@@ -2034,6 +2081,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
     uint32_t bh = (height + fi->block_height - 1) / fi->block_height;
     uint32_t bpb = fi->bytes_per_block();
     uint32_t bytes = bw * bh * bpb;
+    const int dxt = img.format == DkImageFormat_RGBA8_Unorm && fi->block_width == 4
+                        ? (info.format == xenos::TextureFormat::k_DXT1 ? 1 : info.format == xenos::TextureFormat::k_DXT2_3 ? 2
+                           : info.format == xenos::TextureFormat::k_DXT4_5 ? 3 : 0)
+                        : 0;
+    if (dxt) {
+      static std::vector<uint8_t> blocks;
+      blocks.resize(bytes);
+      const uint32_t rgba = width * height * 4;
+      uint32_t off = f.staging.Alloc(rgba, 0x100);
+      if (off == UINT32_MAX) { LogOnce("staging", "staging ring full: %u KB texture not uploaded", rgba >> 10); return false; }
+      const uint8_t* src = memory_->TranslatePhysical(info.memory.base_address);
+      if (info.is_tiled) {
+        if (!::hcu::UntileFast(blocks.data(), src, bw, bh, info.extent.block_pitch_h, bpb, static_cast<::hcu::SwapMode>(uint32_t(endian)))) return false;
+      } else {
+        for (uint32_t y = 0; y < bh; y++)
+          texture_conversion::CopySwapBlock(endian, blocks.data() + y * bw * bpb, src + y * info.extent.block_pitch_h * bpb, bw * bpb);
+      }
+      uint8_t* out = f.staging.cpu + off;
+      for (uint32_t by = 0; by < bh; by++)
+        for (uint32_t bx = 0; bx < bw; bx++)
+          DecodeDxtBlock(blocks.data() + (size_t(by) * bw + bx) * bpb, dxt, out + (size_t(by) * 4 * width + bx * 4) * 4, width * 4,
+                         std::min(4u, width - bx * 4), std::min(4u, height - by * 4));
+      DkCopyBuf dcb{f.staging.gpu + off, 0, 0};
+      DkImageView dview;
+      dkImageViewDefaults(&dview, &img.image);
+      DkImageRect drect{0, 0, 0, width, height, 1};
+      if (img.content_serial) dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, 0);
+      dkCmdBufCopyBufferToImage(f.cmdbuf, &dcb, &dview, &drect, 0);
+      dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
+      uploads_++;
+      upload_bytes_ += rgba;
+      LogOnce("dxtcpu", "DXT ON CPU: DXT textures are decoded to RGBA8 on the CPU (first: %s %ux%u at %08X)", fi->name, width, height,
+              info.memory.base_address);
+      return true;
+    }
     uint32_t off = f.staging.Alloc(bytes, 0x100);
     if (off == UINT32_MAX) { LogOnce("staging", "staging ring full: %u KB texture not uploaded", bytes >> 10); return false; }
     uint8_t* dst = f.staging.cpu + off;
