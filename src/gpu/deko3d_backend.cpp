@@ -767,12 +767,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (mode == xenos::EdramMode::kCopy) return Resolve();
     auto* vs = static_cast<DkShaderObj*>(active_vertex_shader());
     auto* ps = static_cast<DkShaderObj*>(active_pixel_shader());
-    if (!vs || !ps) { skipped_++; return true; }
+    if (!vs || !ps) { skipped_++; frame_skipped_++; return true; }
     auto mask = regs.Get<reg::RB_COLOR_MASK>();
     auto dc = draw_util::GetNormalizedDepthControl(regs);
     bool writes_color = mask.write_red0 || mask.write_green0 || mask.write_blue0 || mask.write_alpha0;
     bool writes_depth = dc.z_enable && dc.z_write_enable;
-    if (!writes_color && !writes_depth && !dc.stencil_enable) { skipped_++; return true; }
+    if (!writes_color && !writes_depth && !dc.stencil_enable) { skipped_++; frame_skipped_++; return true; }
     if (IsClearDraw(vs, ps, prim_type)) return ClearDraw(index_count, mode);
     if (!vs->loaded || !ps->loaded) {
 #ifdef HCU_DK_GL
@@ -946,10 +946,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
       LogOnce(key, "guest depth target format %s (RB_DEPTH_INFO) on base %u: host %s", d24f ? "D24FS8 (20e4 float)" : "D24S8 (unorm)",
               uint32_t(depth_info.depth_base), g_depth_fmt == DkImageFormat_Z24S8 ? "Z24S8" : "ZF32_X24S8");
     }
-    if (!color && !depth) { skipped_++; return true; }
+    if (!color && !depth) { skipped_++; frame_skipped_++; return true; }
     // Settings menu SHADOW MAP OFF (A/B of the console rings): the shadow pass (no colour target, depth written) is not
     // drawn, so the map keeps its clear and every receiver is lit. Rings that stay then do not come from the shadow test.
-    if (!color && dc.z_write_enable && !hcu_settings.shadow_map) { skipped_++; return true; }
+    if (!color && dc.z_write_enable && !hcu_settings.shadow_map) { skipped_++; frame_skipped_++; return true; }
     BindTargets(cmd, color, depth);
     uint32_t target_w = color ? color->width : depth->width;
     uint32_t target_h = color ? color->height : depth->height;
@@ -1090,7 +1090,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     uint32_t vertex_count = index_count;
     uint32_t index_offset = UINT32_MAX;
     if (index_buffer_info) {
-      if (!CopyIndices(f, *index_buffer_info, index_offset, vertex_count)) { skipped_++; return true; }
+      if (!CopyIndices(f, *index_buffer_info, index_offset, vertex_count)) { skipped_++; frame_skipped_++; return true; }
     }
     const uint32_t base_vertex = regs.Get<reg::VGT_INDX_OFFSET>().indx_offset;
     for (const auto& vb : vs->vertex_bindings()) {
@@ -1149,7 +1149,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufBindVtxBufferState(cmd, buffers, buffer_count);
 
     // Uniforms: the ALU constants and the system constants, per stage.
-    if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; return true; }
+    if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; frame_skipped_++; return true; }
 
 #ifdef HCU_DK_GL
     if (TraceFrame()) {
