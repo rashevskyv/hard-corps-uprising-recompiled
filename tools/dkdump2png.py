@@ -4,7 +4,7 @@
     python tools/dkdump2png.py <dump dir> [<out dir>]
 
 F is the deko3d DkImageFormat: 1 R8, 13 RG8, 28 RGBA8, 32 RGBA16F, 44 Z24S8 (depth in the low 24 bits; written as a
-16-bit grey PNG), 52 RGB10A2, 57-59 BC1-BC3. Needs Pillow and numpy.
+16-bit grey PNG), 45 ZF32_X24S8 (float depth, 16-bit grey), 52 RGB10A2, 57-59 BC1-BC3. Needs Pillow and numpy.
 """
 import re
 import sys
@@ -28,6 +28,9 @@ def convert(raw, fmt, w, h):
     if fmt == 44:
         v = np.frombuffer(raw[:n * 4], '<u4').reshape(h, w) & 0xFFFFFF
         return Image.fromarray((v >> 8).astype(np.uint16))
+    if fmt == 45:
+        v = np.frombuffer(raw[:n * 8], '<u4').reshape(h, w, 2)[:, :, 0].view(np.float32)
+        return Image.fromarray((np.clip(v, 0, 1) * 65535).astype(np.uint16))
     if fmt == 52:
         v = np.frombuffer(raw[:n * 4], '<u4').reshape(h, w)
         rgb = [((v >> s) & 1023) >> 2 for s in (0, 10, 20)]

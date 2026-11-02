@@ -120,6 +120,12 @@ void Log(const char* fmt, ...) {
   // thread. HCU console 0.160: tens of image lines per stage frame made 63-66 ms of "draws" per frame.
 }
 
+// Settings menu DEPTH 32 BIT (at start): the format of every depth target and depth texture. Z24S8 = what the 360's
+// D24S8 / D24FS8 EDRAM targets map to by default; ZF32_X24S8 = 32-bit float depth (an A/B of the console's rings and
+// grid, which look like two nearly coplanar surfaces fighting; Eden gives D24 targets 32-bit float depth on the PC).
+DkImageFormat g_depth_fmt = DkImageFormat_Z24S8;
+bool g_dxt_cpu = false;  // DXT ON CPU, read once at start (a live change flipped a texture's format between draws)
+
 // DXT ON CPU: one 4x4 block of DXT1 (bc 1), DXT3 (2) or DXT5 (3) to RGBA8 at dst (row pitch in bytes), as the D3D9
 // decoders do (DXT1 with c0 <= c1: three colours and transparent black).
 void Rgb565(uint16_t c, int out[3]) {
@@ -168,7 +174,7 @@ void DecodeDxtBlock(const uint8_t* b, int bc, uint8_t* dst, uint32_t pitch, uint
 // Bytes per pixel of an image read back for a dump (the block formats: their blocks, rounded up).
 uint32_t DumpBytesPerPixel(DkImageFormat f) {
   switch (f) {
-    case DkImageFormat_RGBA16_Float: return 8;
+    case DkImageFormat_RGBA16_Float: case DkImageFormat_ZF32_X24S8: return 8;
     case DkImageFormat_R8_Unorm: return 1;
     case DkImageFormat_RG8_Unorm: return 2;
     default: return 4;
@@ -399,9 +405,9 @@ bool TextureFormatOf(xenos::TextureFormat f, DkImageFormat& out, bool& reversed)
     case TF::k_8_8: out = DkImageFormat_RG8_Unorm; return true;
     // DXT ON CPU (settings menu, at start): decoded to RGBA8 in UploadTexture (A/B of the console's brick-like hatching,
     // which has the size of the sky's and sand's DXT1 blocks magnified).
-    case TF::k_DXT1: out = hcu_settings.dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC1; return true;
-    case TF::k_DXT2_3: out = hcu_settings.dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC2; return true;
-    case TF::k_DXT4_5: out = hcu_settings.dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC3; return true;
+    case TF::k_DXT1: out = g_dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC1; return true;
+    case TF::k_DXT2_3: out = g_dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC2; return true;
+    case TF::k_DXT4_5: out = g_dxt_cpu ? DkImageFormat_RGBA8_Unorm : DkImageFormat_RGBA_BC3; return true;
     case TF::k_DXN: out = DkImageFormat_RG_BC5_Unorm; return true;
     case TF::k_DXT5A: out = DkImageFormat_R_BC4_Unorm; return true;
     case TF::k_4_4_4_4: out = DkImageFormat_RGBA4_Unorm; reversed = true; return true;
@@ -421,7 +427,7 @@ bool TextureFormatOf(xenos::TextureFormat f, DkImageFormat& out, bool& reversed)
     case TF::k_2_10_10_10: case TF::k_2_10_10_10_AS_16_16_16_16: out = DkImageFormat_RGB10A2_Unorm; return true;
     case TF::k_8_8_8_8_AS_16_16_16_16: out = DkImageFormat_RGBA8_Unorm; return true;
     // A depth resolve target (HCU's stage shadow map, 8-tap compare in the pixel shader): the host depth image, sampled as depth.
-    case TF::k_24_8: case TF::k_24_8_FLOAT: out = DkImageFormat_Z24S8; return true;
+    case TF::k_24_8: case TF::k_24_8_FLOAT: out = g_depth_fmt; return true;
     default: return false;
   }
 }
@@ -642,6 +648,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     const std::string sdir = REXCVAR_GET(deko3d_shader_dir);  // shader_dir_ is set below; the debug dir is its parent
     const size_t scut = sdir.size() >= 2 ? sdir.rfind('/', sdir.size() - 2) : std::string::npos;
     hcu_settings_load(scut == std::string::npos ? "" : sdir.substr(0, scut + 1).c_str());
+    g_dxt_cpu = hcu_settings.dxt_cpu != 0;
+    g_depth_fmt = hcu_settings.depth32 ? DkImageFormat_ZF32_X24S8 : DkImageFormat_Z24S8;
+    Log("depth images: %s (DEPTH 32 BIT %s); DXT ON CPU %s", hcu_settings.depth32 ? "ZF32_X24S8" : "Z24S8", hcu_settings.depth32 ? "on" : "off",
+        g_dxt_cpu ? "on" : "off");
     const int force_filter = hcu_settings.filter;  // 1 linear, 2 nearest
     const float lod_bias = hcu_settings.lod_bias, aniso = hcu_settings.aniso;
     Log("sfix: filters %s, lod bias %g, anisotropy %g", force_filter == 1 ? "all linear" : force_filter == 2 ? "all nearest" : "as the game sets them",
@@ -928,7 +938,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
     HostImage* color = (mode != xenos::EdramMode::kDepthOnly && writes_color)
                            ? TargetImage(color_info.color_base, pitch, ColorTargetFormatOf(color_info.color_format), false)
                            : nullptr;
-    HostImage* depth = (dc.z_enable || dc.stencil_enable) ? TargetImage(depth_info.depth_base, pitch, DkImageFormat_Z24S8, true) : nullptr;
+    HostImage* depth = (dc.z_enable || dc.stencil_enable) ? TargetImage(depth_info.depth_base, pitch, g_depth_fmt, true) : nullptr;
+    if (depth) {
+      char key[24];
+      std::snprintf(key, sizeof(key), "depthfmt %u", uint32_t(depth_info.depth_format));
+      LogOnce(key, "guest depth target format %s (RB_DEPTH_INFO) on base %u: host %s", uint32_t(depth_info.depth_format) ? "D24FS8 (20e4 float)" : "D24S8 (unorm)",
+              depth_info.depth_base, g_depth_fmt == DkImageFormat_Z24S8 ? "Z24S8" : "ZF32_X24S8");
+    }
     if (!color && !depth) { skipped_++; return true; }
     // Settings menu SHADOW MAP OFF (A/B of the console rings): the shadow pass (no colour target, depth written) is not
     // drawn, so the map keeps its clear and every receiver is lit. Rings that stay then do not come from the shadow test.
@@ -1865,7 +1881,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         // The memory was reused with another format (a texture over an old resolve destination or the
         // reverse): a new image. ponytail: the old image's pool memory is not reclaimed (bump pool);
         // a free list when the pool fills in a stage.
-        HostImage* fresh = CreateImage(std::max(width, create_w), std::max(height, create_h), format, DkImageFlags_UsageRender, format == DkImageFormat_Z24S8);
+        HostImage* fresh = CreateImage(std::max(width, create_w), std::max(height, create_h), format, DkImageFlags_UsageRender, format == g_depth_fmt);
         if (!fresh) return nullptr;
         fresh->guest_base = base;
         if (create_w || create_h) ClearNewImage(fresh);
@@ -1904,7 +1920,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       return resized;
     }
     HostImage* img = CreateImage(std::max(width, create_w), std::max(height, create_h), format,
-                                 DkImageFlags_UsageRender, format == DkImageFormat_Z24S8);
+                                 DkImageFlags_UsageRender, format == g_depth_fmt);
     if (!img) return nullptr;
     img->guest_base = base;
     guest_images_.emplace(base, img);
@@ -1921,7 +1937,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     const uint32_t stride = ((img->width + 31) & ~31u) * 32 * 4;  // bytes of one row of 32x32 tiles
     for (auto& it : guest_images_) {
       HostImage* p = it.second;
-      if (p == img || p->format != DkImageFormat_Z24S8 || !p->from_resolve || it.first <= img->guest_base) continue;
+      if (p == img || p->format != g_depth_fmt || !p->from_resolve || it.first <= img->guest_base) continue;
       uint32_t delta = it.first - img->guest_base;
       if (delta % stride) continue;
       uint32_t y = delta / stride * 32;
@@ -1953,9 +1969,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     uint32_t base = info.memory.base_address;
     // TextureInfo keeps the fetch constant's fields: the size minus one.
-    HostImage* img = GuestImage(f, base, info.width + 1, info.height + 1, format, format == DkImageFormat_Z24S8, 0, 0, true);
+    HostImage* img = GuestImage(f, base, info.width + 1, info.height + 1, format, format == g_depth_fmt, 0, 0, true);
     if (!img) return nullptr;
-    if (format == DkImageFormat_Z24S8) {
+    if (format == g_depth_fmt) {
       // Only a depth resolve fills a depth image. One never resolved here (a sample before the first
       // shadow pass) reads "nothing in the way": depth 1.
       if (!img->content_serial) {
@@ -2306,12 +2322,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
       HostImage* depth_img = nullptr;
       if (mode == xenos::EdramMode::kColorDepth) {
         color_img = TargetImage(color_info.color_base, pitch, ColorTargetFormatOf(color_info.color_format), false);
-        depth_img = TargetImage(depth_info.depth_base, pitch, DkImageFormat_Z24S8, true);
+        depth_img = TargetImage(depth_info.depth_base, pitch, g_depth_fmt, true);
       } else if (mode == xenos::EdramMode::kDepthOnly) {
         // Depth-only through the alias: the XDK fills a color surface's EDRAM this way too.
         auto it = targets_.find((uint64_t(depth_info.depth_base) << 32) | (uint64_t(pitch) << 1));
         if (it != targets_.end()) color_img = it->second;
-        else depth_img = TargetImage(depth_info.depth_base, pitch, DkImageFormat_Z24S8, true);
+        else depth_img = TargetImage(depth_info.depth_base, pitch, g_depth_fmt, true);
       }
       if (!color_img && !depth_img) continue;
       BindTargets(cmd, color_img, depth_img);
@@ -2351,7 +2367,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // scene keeps the last frame's (or uninitialized) depth and every LEQUAL fragment fails (HCU's
       // stage: the 3D level never showed, the depth-less HUD did). D24S8: depth in the top 24 bits.
       uint32_t dpitch = info.depth_edram_info.pitch_tiles * 80;
-      HostImage* d = TargetImage(info.depth_original_base, dpitch, DkImageFormat_Z24S8, true);
+      HostImage* d = TargetImage(info.depth_original_base, dpitch, g_depth_fmt, true);
       uint32_t cx = info.coordinate_info.edram_offset_x_div_8 * 8, cy = info.coordinate_info.edram_offset_y_div_8 * 8;
       uint32_t cw = info.coordinate_info.width_div_8 * 8, ch = info.height_div_8 * 8;
       if (d && cx < d->width && cy < d->height) {
@@ -2373,12 +2389,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // A depth resolve into a texture (the stage's shadow map): the depth image is copied into a depth
       // image aliased at the destination address, which the pixel shaders then sample as a k_24_8 texture.
       uint32_t dpitch = info.depth_edram_info.pitch_tiles * 80;
-      HostImage* dsrc = TargetImage(info.depth_original_base, dpitch, DkImageFormat_Z24S8, true);
+      HostImage* dsrc = TargetImage(info.depth_original_base, dpitch, g_depth_fmt, true);
       uint32_t x = info.coordinate_info.edram_offset_x_div_8 * 8, y = info.coordinate_info.edram_offset_y_div_8 * 8;
       uint32_t w = info.coordinate_info.width_div_8 * 8, h = info.height_div_8 * 8;
       uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
       if (!dsrc || !w || !h) return true;
-      HostImage* dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, DkImageFormat_Z24S8, true);
+      HostImage* dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, g_depth_fmt, true);
       if (!dd) return true;
       dd->from_resolve = true;
       dd->content_serial = serial_;

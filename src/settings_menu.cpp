@@ -8,7 +8,7 @@
 
 #include <unistd.h>
 
-HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0, 0, 0};
+HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0, 0, 0, 0};
 
 namespace {
 
@@ -60,6 +60,7 @@ const Item kItems[] = {
     {"UPLOAD IN STRIPS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.upload_strips; },
      [](int i) { hcu_settings.upload_strips = i; }},
     {"DXT ON CPU", {"OFF", "ON"}, 2, true, [] { return hcu_settings.dxt_cpu; }, [](int i) { hcu_settings.dxt_cpu = i; }},
+    {"DEPTH 32 BIT", {"OFF", "ON"}, 2, true, [] { return hcu_settings.depth32; }, [](int i) { hcu_settings.depth32 = i; }},
 };
 constexpr int kCount = sizeof(kItems) / sizeof(kItems[0]);
 
@@ -67,8 +68,8 @@ void Save() {
   if (g_dir.empty()) return;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
-    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\n",
-                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu);
+    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\n",
+                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32);
     std::fclose(f);
   }
 }
@@ -96,6 +97,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "shadow_map")) s.shadow_map = int(v);
       else if (!std::strcmp(key, "upload_strips")) s.upload_strips = int(v);
       else if (!std::strcmp(key, "dxt_cpu")) s.dxt_cpu = int(v);
+      else if (!std::strcmp(key, "depth32")) s.depth32 = int(v);
     }
     std::fclose(f);
   }
@@ -152,7 +154,7 @@ int hcu_menu_input(uint32_t held) {
   if (down & (HCU_MENU_RIGHT | HCU_MENU_A)) it.set((was + 1) % it.count);
   if (down & HCU_MENU_LEFT) it.set((was + it.count - 1) % it.count);
   if (it.get() != was) {
-    std::printf("[nx] menu: %s %s -> %s%s\n", it.label, it.names[was], it.names[it.get()], it.at_start ? " (at the next start)" : "");
+    std::printf("[nx] menu: %s %s -> %s%s\n", it.label, it.names[was], it.names[it.get()], it.at_start ? " (saved; applies at the next start)" : "");
     std::fflush(stdout);
   }
   return 1;
@@ -164,8 +166,8 @@ int hcu_menu_lines(char lines[][48], int max_lines) {
   std::snprintf(lines[n++], 48, "  SETTINGS");
   for (int i = 0; i < kCount; i++) {
     const Item& it = kItems[i];
-    std::snprintf(lines[n++], 48, "%c %-18s %s%s", i == g_row ? '>' : ' ', it.label, it.names[it.get()], it.at_start ? " (R)" : "");
+    std::snprintf(lines[n++], 48, "%c %-18s %s%s", i == g_row ? '>' : ' ', it.label, it.names[it.get()], it.at_start ? " (RESTART)" : "");
   }
-  std::snprintf(lines[n++], 48, "  B CLOSE  (R) = AT NEXT START");
+  std::snprintf(lines[n++], 48, "  B CLOSE   RESTART = SAVED, APPLIES AT THE NEXT START");
   return n;
 }
