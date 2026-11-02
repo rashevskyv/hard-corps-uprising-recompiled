@@ -69,7 +69,10 @@ target_link_options(hcu PRIVATE
     -Wl,-u,vk_icdGetInstanceProcAddr
 )
 # zstd, expat and zlib from devkitPro portlibs (the SDK links them on Linux through the system).
-target_link_libraries(hcu PRIVATE "${NVK_SDK}/lib/libvulkan.a" deko3d zstd lz4 expat z nx m stdc++)
+# HCU_DEKO3D_DEBUG: libdeko3dd checks the arguments of every call and, when the GPU channel faults, hands the fault
+# (page fault address, bad method, timeout) to the backend's debug callback; the release libdeko3d drops the text.
+option(HCU_DEKO3D_DEBUG "link the debug deko3d (argument checks, fault text in the log)" ON)
+target_link_libraries(hcu PRIVATE "${NVK_SDK}/lib/libvulkan.a" $<IF:$<BOOL:${HCU_DEKO3D_DEBUG}>,deko3dd,deko3d> zstd lz4 expat z nx m stdc++)
 # nx_create_nro ignores NAME/AUTHOR/VERSION: the NACP is generated here and handed to it.
 nx_generate_nacp(hcu.nacp NAME "Hard Corps: Uprising" AUTHOR "hcu-switch" VERSION "${HCU_VERSION}")
 # The hbmenu icon: the title image from the game's own package, kept local (gitignored, game material); without it

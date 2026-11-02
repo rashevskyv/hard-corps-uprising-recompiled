@@ -181,28 +181,22 @@ uint32_t DumpBytesPerPixel(DkImageFormat f) {
   }
 }
 
+#ifdef __SWITCH__
+extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why);  // switch/host/switch_nx.cpp
+#endif
+
+// libdeko3dd's warnings (result 0: the GPU channel's fault, decoded) and errors (a bad argument; the library would
+// show the error applet and exit(1) when this returns: the clean exit instead, with the log flushed).
 void DebugCallback(void*, const char* context, DkResult result, const char* message) {
   Log("deko3d %s: result %d: %s", context ? context : "?", int(result), message ? message : "");
   std::fflush(stdout);
+#ifdef __SWITCH__
+  if (result != DkResult_Success) rex_nx_quick_exit("deko3d reported an error (see the line before)");
+#endif
 }
 
 #ifdef __SWITCH__
-extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why);  // switch/host/switch_nx.cpp
 
-// The GPU channel's error, when deko3d put the queue in its error state (a fault in a list submitted before; the release
-// libdeko3d drops its message and aborts at the next queue call). The channel's fd is not in deko3d's API: every nvdrv fd
-// is asked, the others refuse the ioctl. Types: 8 idle timeout, 24 semaphore timeout, 25 illegal method, 31 MMU fault,
-// 32 PBDMA error.
-void LogGpuChannelErrors() {
-  for (u32 fd = 0; fd < 128; fd++) {
-    NvNotification n{};
-    if (R_FAILED(nvioctlChannel_GetErrorNotification(fd, &n))) continue;
-    NvError e{};
-    const Result ri = nvioctlChannel_GetErrorInfo(fd, &e);
-    Log("gpu channel fd %u: notification type %u info16 0x%X status 0x%X time %llu; error info rc 0x%X type %u info %08X %08X %08X %08X", fd,
-        n.info32, n.info16, n.status, (unsigned long long)n.timestamp, ri, e.type, e.info[0], e.info[1], e.info[2], e.info[3]);
-  }
-}
 #endif
 
 struct MemBlock {
@@ -1338,7 +1332,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
       Log("GPU queue in its error state at swap #%u (a list before it faulted); colour bias %g, shadow bias %g/%g, shadow map %d, "
           "menu %s, %u draws this frame",
           swaps_ + 1, z_bias_, shadow_bias_, shadow_slope_, hcu_settings.shadow_map, menu ? "open" : "closed", frame_draws_);
-      LogGpuChannelErrors();
       rex_nx_quick_exit("the GPU queue is in its error state (see the lines before)");
     }
 #endif
@@ -1513,6 +1506,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       }
     }
     dirty_pages_at_swap_ = dirty_pages_;
+    last_drawn_swap_ = swaps_;
+    last_drawn_draws_ = frame_draws_;
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
     frame_ = (frame_ + 1) % kFrames;
     begun_ = false;
@@ -1535,31 +1530,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
     skip_frame_ = false;
 #ifdef __SWITCH__
     if (dkQueueIsInErrorState(queue_)) {
-      Log("GPU queue in its error state at swap #%u (a list before it faulted); shadow map %d, view %d", swaps_, hcu_settings.shadow_map,
-          hcu_settings.view);
-      LogGpuChannelErrors();
+      Log("GPU queue in its error state at swap #%u; the last drawn frame was swap #%u with %u draws; shadow map %d, view %d", swaps_,
+          last_drawn_swap_, last_drawn_draws_, hcu_settings.shadow_map, hcu_settings.view);
       rex_nx_quick_exit("the GPU queue is in its error state (see the lines before)");
     }
-    if (busy_in_a_row_ == 300 || busy_in_a_row_ == 900) {  // 5 s of skipped frames: the GPU has not finished the oldest one
-      Log("the GPU has not finished frame slot %u for %u swaps (a GPU hang?); shadow map %d, view %d", frame_, busy_in_a_row_,
-          hcu_settings.shadow_map, hcu_settings.view);
-      LogGpuChannelErrors();
-      for (uint32_t i = 0; i < kFrames; i++) {
-        const DkResult r = frames_[i].fenced ? dkFenceWait(&frames_[i].fence, 100000000ll) : DkResult_Success;
-        Log("frame slot %u: %s, fence wait (100 ms) result %d", i, frames_[i].fenced ? "fenced" : "not fenced", int(r));
-      }
-      std::fflush(stdout);
-      if (busy_in_a_row_ == 900) rex_nx_quick_exit("the GPU has not finished a frame for 15 s");
-      // The experiment (console 0.258/0.267, both under 60skip, no channel error): the fences are dropped and drawing
-      // goes on. The picture comes back = our fence tracking; it freezes again = the GPU itself (exit after 15 s).
-      for (uint32_t i = 0; i < kFrames; i++) frames_[i].fenced = false;
-      Log("recovery: the frame fences are dropped, drawing goes on");
-    }
 #endif
+    // The busy poll. A wait of 0 only reads the fence's semaphore; one with a timeout also asks the GPU channel for
+    // its error (deko3d gpu_error.cpp): a fault then puts the queue in its error state (the exit above, with the fault
+    // in the log from libdeko3dd) and signals every fence. Console 0.273: a fault under 60skip was 300 busy polls of 0
+    // in a row (the picture frozen), found only by the first wait with a timeout.
+    const int64_t poll_ns = busy_in_a_row_ && busy_in_a_row_ % 30 == 0 ? 1000000ll : 0;
     if (skip_odd_frames_ && drawn) {
       skip_frame_ = true;
     } else if ((skip_odd_frames_ || skip_busy_) && frames_[frame_].fenced &&
-               dkFenceWait(&frames_[frame_].fence, 0) != DkResult_Success) {
+               dkFenceWait(&frames_[frame_].fence, poll_ns) != DkResult_Success) {
       skip_frame_ = true;
       busy_skips_++;
       busy_in_a_row_++;
@@ -2671,6 +2655,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
   bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
   uint32_t drawn_frames_ = 0, busy_skips_ = 0, busy_in_a_row_ = 0;
+  uint32_t last_drawn_swap_ = 0, last_drawn_draws_ = 0;  // the frame a GPU fault is in (the error-state log line)
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
   uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
