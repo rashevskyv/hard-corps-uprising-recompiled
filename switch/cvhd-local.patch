@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..310f096 100644
+index 2205439..7085017 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,9 +21,11 @@
@@ -415,9 +415,18 @@ index 2205439..310f096 100644
      if (Skipping()) return true;
      SyncDirtyPages();
      const RegisterFile& regs = *register_file_;
-@@ -482,7 +774,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -475,14 +767,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     if (mode == xenos::EdramMode::kCopy) return Resolve();
+     auto* vs = static_cast<DkShaderObj*>(active_vertex_shader());
+     auto* ps = static_cast<DkShaderObj*>(active_pixel_shader());
+-    if (!vs || !ps) { skipped_++; return true; }
++    if (!vs || !ps) { skipped_++; frame_skipped_++; return true; }
+     auto mask = regs.Get<reg::RB_COLOR_MASK>();
+     auto dc = draw_util::GetNormalizedDepthControl(regs);
+     bool writes_color = mask.write_red0 || mask.write_green0 || mask.write_blue0 || mask.write_alpha0;
      bool writes_depth = dc.z_enable && dc.z_write_enable;
-     if (!writes_color && !writes_depth && !dc.stencil_enable) { skipped_++; return true; }
+-    if (!writes_color && !writes_depth && !dc.stencil_enable) { skipped_++; return true; }
++    if (!writes_color && !writes_depth && !dc.stencil_enable) { skipped_++; frame_skipped_++; return true; }
      if (IsClearDraw(vs, ps, prim_type)) return ClearDraw(index_count, mode);
 -    if (!vs->loaded || !ps->loaded) { missing_draws_++; return true; }
 +    if (!vs->loaded || !ps->loaded) {
@@ -552,6 +561,7 @@ index 2205439..310f096 100644
                             ? TargetImage(color_info.color_base, pitch, ColorTargetFormatOf(color_info.color_format), false)
                             : nullptr;
 -    HostImage* depth = (dc.z_enable || dc.stencil_enable) ? TargetImage(depth_info.depth_base, pitch, DkImageFormat_Z24S8, true) : nullptr;
+-    if (!color && !depth) { skipped_++; return true; }
 +    HostImage* depth = (dc.z_enable || dc.stencil_enable) ? TargetImage(depth_info.depth_base, pitch, g_depth_fmt, true) : nullptr;
 +    if (depth) {
 +      const bool d24f = depth_info.depth_format == xenos::DepthRenderTargetFormat::kD24FS8;
@@ -560,10 +570,10 @@ index 2205439..310f096 100644
 +      LogOnce(key, "guest depth target format %s (RB_DEPTH_INFO) on base %u: host %s", d24f ? "D24FS8 (20e4 float)" : "D24S8 (unorm)",
 +              uint32_t(depth_info.depth_base), g_depth_fmt == DkImageFormat_Z24S8 ? "Z24S8" : "ZF32_X24S8");
 +    }
-     if (!color && !depth) { skipped_++; return true; }
++    if (!color && !depth) { skipped_++; frame_skipped_++; return true; }
 +    // Settings menu SHADOW MAP OFF (A/B of the console rings): the shadow pass (no colour target, depth written) is not
 +    // drawn, so the map keeps its clear and every receiver is lit. Rings that stay then do not come from the shadow test.
-+    if (!color && dc.z_write_enable && !hcu_settings.shadow_map) { skipped_++; return true; }
++    if (!color && dc.z_write_enable && !hcu_settings.shadow_map) { skipped_++; frame_skipped_++; return true; }
      BindTargets(cmd, color, depth);
      uint32_t target_w = color ? color->width : depth->width;
      uint32_t target_h = color ? color->height : depth->height;
@@ -670,9 +680,12 @@ index 2205439..310f096 100644
      dkCmdBufBindDepthStencilState(cmd, &ds);
  
      // Shaders (the whole graphics mask: a stage without a shader here is unbound).
-@@ -657,21 +1092,37 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -655,23 +1090,39 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     uint32_t vertex_count = index_count;
+     uint32_t index_offset = UINT32_MAX;
      if (index_buffer_info) {
-       if (!CopyIndices(f, *index_buffer_info, index_offset, vertex_count)) { skipped_++; return true; }
+-      if (!CopyIndices(f, *index_buffer_info, index_offset, vertex_count)) { skipped_++; return true; }
++      if (!CopyIndices(f, *index_buffer_info, index_offset, vertex_count)) { skipped_++; frame_skipped_++; return true; }
      }
 +    const uint32_t base_vertex = regs.Get<reg::VGT_INDX_OFFSET>().indx_offset;
      for (const auto& vb : vs->vertex_bindings()) {
@@ -711,9 +724,12 @@ index 2205439..310f096 100644
        dkCmdBufBindVtxBuffer(cmd, buffer_count, f.data.gpu + off, bytes);
        buffers[buffer_count] = DkVtxBufferState{stride, 0};
        for (const auto& a : vb.attributes) {
-@@ -700,6 +1151,18 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -698,8 +1149,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     dkCmdBufBindVtxBufferState(cmd, buffers, buffer_count);
+ 
      // Uniforms: the ALU constants and the system constants, per stage.
-     if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; return true; }
+-    if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; return true; }
++    if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; frame_skipped_++; return true; }
  
 +#ifdef HCU_DK_GL
 +    if (TraceFrame()) {
@@ -1019,7 +1035,7 @@ index 2205439..310f096 100644
        for (auto& d : dumps) {
          // The image's dims are in the name; recover them from the staging layout: sample a 16x16 grid.
          uint32_t w = 0, h = 0;
-@@ -827,26 +1490,116 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -827,26 +1490,125 @@ class Deko3dCommandProcessor : public CommandProcessor {
              w && h ? px[(h / 2) * w + w / 2] : 0, w && h ? px[(3 * h / 4) * w + 3 * w / 4] : 0, w && h ? px[(h - 1) * w + w - 1] : 0);
        }
      }
@@ -1078,11 +1094,20 @@ index 2205439..310f096 100644
 +      LogGpuChannelErrors();
 +      rex_nx_quick_exit("the GPU queue is in its error state (see the lines before)");
 +    }
-+    if (busy_in_a_row_ == 300) {  // 5 s of skipped frames: the GPU has not finished the oldest one
-+      Log("the GPU has not finished frame slot %u for 300 swaps (a GPU hang?); shadow map %d, view %d", frame_, hcu_settings.shadow_map,
-+          hcu_settings.view);
++    if (busy_in_a_row_ == 300 || busy_in_a_row_ == 900) {  // 5 s of skipped frames: the GPU has not finished the oldest one
++      Log("the GPU has not finished frame slot %u for %u swaps (a GPU hang?); shadow map %d, view %d", frame_, busy_in_a_row_,
++          hcu_settings.shadow_map, hcu_settings.view);
 +      LogGpuChannelErrors();
++      for (uint32_t i = 0; i < kFrames; i++) {
++        const DkResult r = frames_[i].fenced ? dkFenceWait(&frames_[i].fence, 100000000ll) : DkResult_Success;
++        Log("frame slot %u: %s, fence wait (100 ms) result %d", i, frames_[i].fenced ? "fenced" : "not fenced", int(r));
++      }
 +      std::fflush(stdout);
++      if (busy_in_a_row_ == 900) rex_nx_quick_exit("the GPU has not finished a frame for 15 s");
++      // The experiment (console 0.258/0.267, both under 60skip, no channel error): the fences are dropped and drawing
++      // goes on. The picture comes back = our fence tracking; it freezes again = the GPU itself (exit after 15 s).
++      for (uint32_t i = 0; i < kFrames; i++) frames_[i].fenced = false;
++      Log("recovery: the frame fences are dropped, drawing goes on");
 +    }
 +#endif
 +    if (skip_odd_frames_ && drawn) {
@@ -1141,7 +1166,7 @@ index 2205439..310f096 100644
  #ifdef HCU_DK_GL
      static const uint32_t start = std::getenv("HCU_DK_START_SWAP") ? uint32_t(std::atoi(std::getenv("HCU_DK_START_SWAP"))) : 0;
      static const char* dir = std::getenv("HCU_DK_DUMP_DIR");
-@@ -863,17 +1616,60 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -863,17 +1625,60 @@ class Deko3dCommandProcessor : public CommandProcessor {
  #endif
    }
    mutable bool skip_checked_[1] = {false};
@@ -1203,7 +1228,7 @@ index 2205439..310f096 100644
      f.data.Reset();
      f.staging.Reset();
      f.next_descriptor = 0;
-@@ -882,6 +1678,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -882,6 +1687,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
      dkCmdBufAddMemory(f.cmdbuf, cmdmem_.block, f.cmd_offset, kFrameCmdBytes);
      dkCmdBufBindImageDescriptorSet(f.cmdbuf, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
      dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
@@ -1217,7 +1242,7 @@ index 2205439..310f096 100644
      bound_color_ = nullptr;
      bound_depth_ = nullptr;
    }
-@@ -923,6 +1726,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -923,6 +1735,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // serials. Linux: a hash of the range against the hash taken when the contents were set.
    uint64_t HashMemory(uint32_t physical, uint32_t bytes) const {
  #ifdef HCU_DK_GL
@@ -1226,7 +1251,7 @@ index 2205439..310f096 100644
      const uint8_t* p = memory_->TranslatePhysical(physical);
      uint64_t h = 1469598103934665603ull;
      uint32_t words = bytes / 8;
-@@ -1060,20 +1865,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1060,20 +1874,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // The image at a guest address (resolve destinations, textures). A fetch or a swap asks for the
    // exact size (a resolve created it with the aligned height: resized once, contents copied); a
    // resolve asks for a minimum size (`at_least`) and creates with the aligned size (`create_w/h`).
@@ -1259,7 +1284,7 @@ index 2205439..310f096 100644
              img->height, fresh->width, fresh->height);
          it->second = fresh;
          RecycleImage(img);
-@@ -1081,11 +1894,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1081,11 +1903,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
        }
        if (img->width == width && img->height == height) return img;
        if (at_least && width <= img->width && height <= img->height) return img;
@@ -1273,7 +1298,7 @@ index 2205439..310f096 100644
        if (!resized) return img;
        ClearNewImage(resized);
        uint32_t cw = std::min(width, img->width), ch = std::min(height, img->height);
-@@ -1097,16 +1911,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1097,16 +1920,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
        dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
        dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
        resized->from_resolve = img->from_resolve;
@@ -1293,7 +1318,7 @@ index 2205439..310f096 100644
      if (!img) return nullptr;
      img->guest_base = base;
      guest_images_.emplace(base, img);
-@@ -1114,6 +1929,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1114,6 +1938,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
      return img;
    }
  
@@ -1332,7 +1357,7 @@ index 2205439..310f096 100644
    HostImage* TextureImage(Frame& f, const TextureInfo& info, const xenos::xe_gpu_texture_fetch_t& fetch) {
      DkImageFormat format;
      bool reversed;
-@@ -1123,13 +1970,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1123,13 +1979,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
      }
      uint32_t base = info.memory.base_address;
      // TextureInfo keeps the fetch constant's fields: the size minus one.
@@ -1376,7 +1401,7 @@ index 2205439..310f096 100644
      // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
      if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
      if (img->content_serial) {
-@@ -1197,6 +2072,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1197,6 +2081,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
    uint32_t dump_count_ = 0;
  #endif
  
@@ -1402,7 +1427,7 @@ index 2205439..310f096 100644
    bool UploadTexture(Frame& f, HostImage& img, const TextureInfo& info, xenos::Endian endian) {
      const FormatInfo* fi = info.format_info();
      const uint32_t width = info.width + 1, height = info.height + 1;  // TextureInfo keeps size minus one
-@@ -1204,6 +2098,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1204,6 +2107,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t bh = (height + fi->block_height - 1) / fi->block_height;
      uint32_t bpb = fi->bytes_per_block();
      uint32_t bytes = bw * bh * bpb;
@@ -1444,7 +1469,7 @@ index 2205439..310f096 100644
      uint32_t off = f.staging.Alloc(bytes, 0x100);
      if (off == UINT32_MAX) { LogOnce("staging", "staging ring full: %u KB texture not uploaded", bytes >> 10); return false; }
      uint8_t* dst = f.staging.cpu + off;
-@@ -1226,7 +2155,21 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1226,7 +2164,21 @@ class Deko3dCommandProcessor : public CommandProcessor {
      // A re-upload (the game reuses sprite memory between draws): earlier draws of this frame may still be
      // sampling the image.
      if (img.content_serial) dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, 0);
@@ -1467,7 +1492,7 @@ index 2205439..310f096 100644
      dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
      uploads_++;
      upload_bytes_ += bytes;
-@@ -1293,8 +2236,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1293,8 +2245,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
      uint32_t sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
      if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
@@ -1497,7 +1522,7 @@ index 2205439..310f096 100644
      SysConstants sys{};
      for (int i = 0; i < 3; i++) {
        sys.ndc_scale[i] = vi.ndc_scale[i];
-@@ -1311,8 +2273,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1311,8 +2282,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
      dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
      dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
@@ -1506,7 +1531,7 @@ index 2205439..310f096 100644
      return true;
    }
  
-@@ -1363,12 +2323,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1363,12 +2332,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
        HostImage* depth_img = nullptr;
        if (mode == xenos::EdramMode::kColorDepth) {
          color_img = TargetImage(color_info.color_base, pitch, ColorTargetFormatOf(color_info.color_format), false);
@@ -1521,7 +1546,7 @@ index 2205439..310f096 100644
        }
        if (!color_img && !depth_img) continue;
        BindTargets(cmd, color_img, depth_img);
-@@ -1387,6 +2347,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1387,6 +2356,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
                  depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
                  color[1], color[2], color[3], z, scale);
        }
@@ -1532,7 +1557,7 @@ index 2205439..310f096 100644
        clears_++;
        frame_clears_++;
      }
-@@ -1399,8 +2363,66 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1399,8 +2372,66 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -1600,7 +1625,7 @@ index 2205439..310f096 100644
        return true;
      }
      uint32_t src_pitch = info.color_edram_info.pitch_tiles * 80;
-@@ -1412,10 +2434,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1412,10 +2443,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
      (void)dest_pitch; (void)dest_height;
      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
@@ -1619,7 +1644,7 @@ index 2205439..310f096 100644
      dst->mem_bytes = dest_pitch * dest_height * 4;
      dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
      if (x + w > src->width) w = x < src->width ? src->width - x : 0;
-@@ -1447,11 +2476,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1447,11 +2485,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
        LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
                x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
      }
@@ -1648,7 +1673,7 @@ index 2205439..310f096 100644
    // ----- shaders --------------------------------------------------------------------------------
    // The same two files as Shader::DumpUcode (shader_<hash>.ucode.bin.<ext> and the disassembly
    // shader_<hash>.ucode.<ext>, the translator's input), written with stdio: the SDK's version goes
-@@ -1521,7 +2567,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1521,7 +2576,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      std::vprintf(fmt, ap);
      std::printf("\n");
      va_end(ap);
@@ -1658,7 +1683,7 @@ index 2205439..310f096 100644
    }
  
    DkDevice device_ = nullptr;
-@@ -1536,8 +2584,84 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1536,8 +2593,84 @@ class Deko3dCommandProcessor : public CommandProcessor {
    DkShader present_vs_shader_{}, present_fs_shader_{};
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
@@ -1743,7 +1768,7 @@ index 2205439..310f096 100644
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
    uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
-@@ -1547,10 +2671,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1547,10 +2680,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
    HostImage* bound_color_ = nullptr;
    HostImage* bound_depth_ = nullptr;
    std::unordered_set<std::string> logged_;
