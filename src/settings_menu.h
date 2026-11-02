@@ -29,6 +29,8 @@ struct HcuSettings {
   int record;         // RECORD 5 SEC: 1 = the backend records the shown frames for 5 s (frame_recorder.cpp), then sets 0
   int dxt_cpu;        // DXT ON CPU (at start): DXT1/3/5 textures are decoded to RGBA8 on the CPU, not copied as BC blocks
   int depth32;        // DEPTH 32 BIT (at start): every depth target and depth texture is ZF32_X24S8 instead of Z24S8
+  int prepass;        // DEPTH PREPASS: 0 = the game's depth-only draws of the colour pass are skipped (A/B of the console's
+                      // brick hatching: the colour pass repeats them with another vertex shader under LEQUAL)
   int upload_strips;  // 1 = textures go up in strips of 64 block rows (A/B of the console hatching; at start)
 };
 

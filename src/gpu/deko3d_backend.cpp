@@ -866,11 +866,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
         // Each texture's first bind, once: what the game draws with (correlates with the uploads).
         char key[32];
         std::snprintf(key, sizeof(key), "tex %08X", info.memory.base_address);
-        LogOnce(key, "texture at %08X: %s %ux%u %s endian %u swizzle %03X exp_adjust %d sign %u%u%u%u filters min %u mag %u (instr %u/%u) clamp %u/%u (%u KB)%s",
+        LogOnce(key, "texture at %08X: %s %ux%u %s endian %u swizzle %03X exp_adjust %d sign %u%u%u%u filters min %u mag %u mip %u (instr %u/%u/%u) aniso %u "
+                     "lod bias %d mips %u..%u (mip data %u KB at %08X%s) clamp %u/%u (%u KB)%s",
                 info.memory.base_address, info.format_info()->name, info.width + 1, info.height + 1, info.is_tiled ? "tiled" : "linear",
                 uint32_t(fetch.endianness), fetch.swizzle, int(fetch.exp_adjust), uint32_t(fetch.sign_x), uint32_t(fetch.sign_y), uint32_t(fetch.sign_z), uint32_t(fetch.sign_w), uint32_t(fetch.min_filter), uint32_t(fetch.mag_filter),
-                uint32_t(tb.fetch_instr.attributes.min_filter), uint32_t(tb.fetch_instr.attributes.mag_filter), uint32_t(fetch.clamp_x),
-                uint32_t(fetch.clamp_y), info.memory.base_size >> 10, tex->from_resolve ? " (a resolve image)" : "");
+                uint32_t(fetch.mip_filter), uint32_t(tb.fetch_instr.attributes.min_filter), uint32_t(tb.fetch_instr.attributes.mag_filter),
+                uint32_t(tb.fetch_instr.attributes.mip_filter), uint32_t(fetch.aniso_filter), int(fetch.lod_bias), uint32_t(fetch.mip_min_level),
+                uint32_t(fetch.mip_max_level), info.memory.mip_size >> 10, info.memory.mip_address, info.has_packed_mips ? ", packed" : "",
+                uint32_t(fetch.clamp_x), uint32_t(fetch.clamp_y), info.memory.base_size >> 10, tex->from_resolve ? " (a resolve image)" : "");
       }
       DkResHandle handle = dkMakeTextureHandle(slot, sampler);
       dkCmdBufBindTextures(cmd, DkStage_Fragment, tb.fetch_constant, &handle, 1);
@@ -944,6 +947,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // Settings menu SHADOW MAP OFF (A/B of the console rings): the shadow pass (no colour target, depth written) is not
     // drawn, so the map keeps its clear and every receiver is lit. Rings that stay then do not come from the shadow test.
     if (!color && dc.z_write_enable && !hcu_settings.shadow_map) { skipped_++; frame_skipped_++; return true; }
+    // DEPTH PREPASS SKIP: the game's depth-only draws into a colour target (its depth pre-pass; the colour pass repeats the
+    // mesh with another vertex shader under LEQUAL and writes depth itself, so the picture needs none of them).
+    if (color && !writes_color && dc.z_write_enable && !hcu_settings.prepass) {
+      LogOnce("prepass", "DEPTH PREPASS SKIP: first skipped depth-only draw (VS %016llX, swap #%u)", (unsigned long long)vs->ucode_data_hash(), swaps_);
+      skipped_++;
+      frame_skipped_++;
+      return true;
+    }
     BindTargets(cmd, color, depth);
     uint32_t target_w = color ? color->width : depth->width;
     uint32_t target_h = color ? color->height : depth->height;
