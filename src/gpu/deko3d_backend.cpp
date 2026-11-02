@@ -940,10 +940,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
                            : nullptr;
     HostImage* depth = (dc.z_enable || dc.stencil_enable) ? TargetImage(depth_info.depth_base, pitch, g_depth_fmt, true) : nullptr;
     if (depth) {
+      const bool d24f = depth_info.depth_format == xenos::DepthRenderTargetFormat::kD24FS8;
       char key[24];
-      std::snprintf(key, sizeof(key), "depthfmt %u", uint32_t(depth_info.depth_format));
-      LogOnce(key, "guest depth target format %s (RB_DEPTH_INFO) on base %u: host %s", uint32_t(depth_info.depth_format) ? "D24FS8 (20e4 float)" : "D24S8 (unorm)",
-              depth_info.depth_base, g_depth_fmt == DkImageFormat_Z24S8 ? "Z24S8" : "ZF32_X24S8");
+      std::snprintf(key, sizeof(key), "depthfmt %u", d24f ? 1u : 0u);
+      LogOnce(key, "guest depth target format %s (RB_DEPTH_INFO) on base %u: host %s", d24f ? "D24FS8 (20e4 float)" : "D24S8 (unorm)",
+              uint32_t(depth_info.depth_base), g_depth_fmt == DkImageFormat_Z24S8 ? "Z24S8" : "ZF32_X24S8");
     }
     if (!color && !depth) { skipped_++; return true; }
     // Settings menu SHADOW MAP OFF (A/B of the console rings): the shadow pass (no colour target, depth written) is not
