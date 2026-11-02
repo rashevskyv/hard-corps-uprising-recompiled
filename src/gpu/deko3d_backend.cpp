@@ -595,7 +595,7 @@ void RenderOverlayText(uint32_t* px, const char* text) {
 }
 
 // The settings menu (src/settings_menu.cpp): kMenuW x kMenuH, one line per 18 rows.
-constexpr uint32_t kMenuLines = 16, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
+constexpr uint32_t kMenuLines = 20, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
 
 class Deko3dCommandProcessor : public CommandProcessor {
  public:

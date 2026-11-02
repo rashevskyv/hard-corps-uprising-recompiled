@@ -161,7 +161,7 @@ int hcu_menu_input(uint32_t held) {
 }
 
 int hcu_menu_lines(char lines[][48], int max_lines) {
-  if (!g_open || max_lines < kCount + 3) return 0;
+  if (!g_open || max_lines < kCount + 2) return 0;  // the title, the items, the footer (0.270 with 14 items asked for 17 of 16 lines: no menu)
   int n = 0;
   std::snprintf(lines[n++], 48, "  SETTINGS");
   for (int i = 0; i < kCount; i++) {
