@@ -8,7 +8,7 @@
 
 #include <unistd.h>
 
-HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0, 0, 0, 0, 1};
+HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1};
 
 namespace {
 
@@ -51,6 +51,8 @@ const Item kItems[] = {
      [](int i) { hcu_settings.colour_bias = kColour[i]; }},
     {"SHADOW MAP", {"OFF", "ON"}, 2, false, [] { return hcu_settings.shadow_map; }, [](int i) { hcu_settings.shadow_map = i; }},
     {"DEPTH PREPASS", {"SKIP", "ON"}, 2, false, [] { return hcu_settings.prepass; }, [](int i) { hcu_settings.prepass = i; }},
+    {"GAMMA RAMP", {"IDENTITY", "GAME"}, 2, false, [] { return hcu_settings.gamma; }, [](int i) { hcu_settings.gamma = i; }},
+    {"SCENE RT 16F", {"OFF", "ON"}, 2, true, [] { return hcu_settings.rt16; }, [](int i) { hcu_settings.rt16 = i; }},
     {"VIEW", {"GAME", "SCENE BEFORE POST", "SHADOW MAP DEPTH", "STEP"}, 4, false, [] { return hcu_settings.view; },
      [](int i) { hcu_settings.view = i; }},
     {"VIEW STEP", {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}, 16, false,
@@ -69,8 +71,8 @@ void Save() {
   if (g_dir.empty()) return;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
-    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass=%d\n",
-                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass);
+    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass=%d\ngamma=%d\nrt16=%d\n",
+                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass, s.gamma, s.rt16);
     std::fclose(f);
   }
 }
@@ -100,6 +102,8 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "dxt_cpu")) s.dxt_cpu = int(v);
       else if (!std::strcmp(key, "depth32")) s.depth32 = int(v);
       else if (!std::strcmp(key, "prepass")) s.prepass = int(v);
+      else if (!std::strcmp(key, "gamma")) s.gamma = int(v);
+      else if (!std::strcmp(key, "rt16")) s.rt16 = int(v);
     }
     std::fclose(f);
   }

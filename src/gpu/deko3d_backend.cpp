@@ -124,6 +124,9 @@ void Log(const char* fmt, ...) {
 // D24S8 / D24FS8 EDRAM targets map to by default; ZF32_X24S8 = 32-bit float depth (an A/B of the console's rings and
 // grid, which look like two nearly coplanar surfaces fighting; Eden gives D24 targets 32-bit float depth on the PC).
 DkImageFormat g_depth_fmt = DkImageFormat_Z24S8;
+// SCENE RT 16F (settings menu, at start): the game's 8_8_8_8 colour targets (its scene and its final composite) as
+// RGBA16_Float images (an A/B of the console's brick hatching: 8-bit quantisation of the scene target).
+bool g_rt16 = false;
 bool g_dxt_cpu = false;  // DXT ON CPU, read once at start (a live change flipped a texture's format between draws)
 
 // DXT ON CPU: one 4x4 block of DXT1 (bc 1), DXT3 (2) or DXT5 (3) to RGBA8 at dst (row pitch in bytes), as the D3D9
@@ -431,7 +434,7 @@ DkImageFormat ColorTargetFormatOf(xenos::ColorRenderTargetFormat f) {
     case xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA: return DkImageFormat_RGBA8_Unorm_sRGB;
     case xenos::ColorRenderTargetFormat::k_2_10_10_10: return DkImageFormat_RGB10A2_Unorm;
     case xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT: return DkImageFormat_RGBA16_Float;
-    default: return DkImageFormat_RGBA8_Unorm;
+    default: return g_rt16 ? DkImageFormat_RGBA16_Float : DkImageFormat_RGBA8_Unorm;
   }
 }
 
@@ -644,8 +647,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     hcu_settings_load(scut == std::string::npos ? "" : sdir.substr(0, scut + 1).c_str());
     g_dxt_cpu = hcu_settings.dxt_cpu != 0;
     g_depth_fmt = hcu_settings.depth32 ? DkImageFormat_ZF32_X24S8 : DkImageFormat_Z24S8;
-    Log("depth images: %s (DEPTH 32 BIT %s); DXT ON CPU %s", hcu_settings.depth32 ? "ZF32_X24S8" : "Z24S8", hcu_settings.depth32 ? "on" : "off",
-        g_dxt_cpu ? "on" : "off");
+    g_rt16 = hcu_settings.rt16 != 0;
+    Log("depth images: %s (DEPTH 32 BIT %s); DXT ON CPU %s; 8_8_8_8 colour targets: %s (SCENE RT 16F %s)", hcu_settings.depth32 ? "ZF32_X24S8" : "Z24S8",
+        hcu_settings.depth32 ? "on" : "off", g_dxt_cpu ? "on" : "off", g_rt16 ? "RGBA16_Float" : "RGBA8_Unorm", g_rt16 ? "on" : "off");
     const int force_filter = hcu_settings.filter;  // 1 linear, 2 nearest
     const float lod_bias = hcu_settings.lod_bias, aniso = hcu_settings.aniso;
     Log("sfix: filters %s, lod bias %g, anisotropy %g", force_filter == 1 ? "all linear" : force_filter == 2 ? "all nearest" : "as the game sets them",
@@ -1396,7 +1400,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (ramp_off != UINT32_MAX) {
           float* r = reinterpret_cast<float*>(f.data.cpu + ramp_off);
           const auto* ramp = gamma_ramp_256_entry_table();
-          const bool identity = front->format != DkImageFormat_RGBA8_Unorm;
+          const bool identity = !hcu_settings.gamma || front->format == DkImageFormat_RGB10A2_Unorm;
           for (uint32_t i = 0; i < 256; i++) {
             r[i * 4 + 0] = identity ? i / 255.0f : ramp[i].color_10_red / 1023.0f;
             r[i * 4 + 1] = identity ? i / 255.0f : ramp[i].color_10_green / 1023.0f;
@@ -1870,7 +1874,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // exact size (a resolve created it with the aligned height: resized once, contents copied); a
   // resolve asks for a minimum size (`at_least`) and creates with the aligned size (`create_w/h`).
   // 32-bit colour formats that read the same through a sampler (an 8-bit and a 10-bit colour image).
-  static bool IsColor32(DkImageFormat f) { return f == DkImageFormat_RGBA8_Unorm || f == DkImageFormat_RGB10A2_Unorm; }
+  static bool IsColor32(DkImageFormat f) {
+    return f == DkImageFormat_RGBA8_Unorm || f == DkImageFormat_RGB10A2_Unorm || (g_rt16 && f == DkImageFormat_RGBA16_Float);
+  }
 
   // `texture`: a texture fetch asking for the image. The image of a resolve is then used as it is when its colour
   // format reads the same (HCU's blur chain: a 2_10_10_10 target resolved, then fetched as 8_8_8_8) and when it is at
@@ -2615,6 +2621,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // Settings menu RECORD 5 SEC: the shown 1280x720 image of each drawn frame is copied into rec_ (one slot per frame)
   // and handed to the recorder when the frame's fence has passed (BeginFrame): the GPU thread never waits for it.
   MemBlock rec_;
+  HostImage* rec_img_ = nullptr;  // SCENE RT 16F: the RGBA8 copy of a float front buffer
   bool rec_on_ = false;
   uint64_t rec_start_tick_ = 0;
   void RecordFrame(Frame& f, DkCmdBuf cmd, HostImage* front) {
@@ -2648,7 +2655,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
       hcu_settings.record = 0;
       return;
     }
-    if (!front || front->width != kPresentWidth || front->height != kPresentHeight || front->format != DkImageFormat_RGBA8_Unorm) return;
+    if (!front || front->width != kPresentWidth || front->height != kPresentHeight) return;
+    if (front->format == DkImageFormat_RGBA16_Float) {
+      // SCENE RT 16F: the front buffer is a float image; the recorder's rows are RGBA8, so it is blitted into one first.
+      if (!rec_img_) rec_img_ = CreateImage(kPresentWidth, kPresentHeight, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
+      if (!rec_img_) return;
+      DkImageView sv, dv;
+      dkImageViewDefaults(&sv, &front->image);
+      dkImageViewDefaults(&dv, &rec_img_->image);
+      DkImageRect br{0, 0, 0, kPresentWidth, kPresentHeight, 1};
+      dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+      dkCmdBufBlitImage(cmd, &sv, &br, &dv, &br, 0, 0);
+      front = rec_img_;
+    }
+    if (front->format != DkImageFormat_RGBA8_Unorm) return;
     DkImageView v;
     dkImageViewDefaults(&v, &front->image);
     DkImageRect r{0, 0, 0, kPresentWidth, kPresentHeight, 1};
