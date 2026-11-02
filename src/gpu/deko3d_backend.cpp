@@ -1540,11 +1540,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
       LogGpuChannelErrors();
       rex_nx_quick_exit("the GPU queue is in its error state (see the lines before)");
     }
-    if (busy_in_a_row_ == 300) {  // 5 s of skipped frames: the GPU has not finished the oldest one
-      Log("the GPU has not finished frame slot %u for 300 swaps (a GPU hang?); shadow map %d, view %d", frame_, hcu_settings.shadow_map,
-          hcu_settings.view);
+    if (busy_in_a_row_ == 300 || busy_in_a_row_ == 900) {  // 5 s of skipped frames: the GPU has not finished the oldest one
+      Log("the GPU has not finished frame slot %u for %u swaps (a GPU hang?); shadow map %d, view %d", frame_, busy_in_a_row_,
+          hcu_settings.shadow_map, hcu_settings.view);
       LogGpuChannelErrors();
+      for (uint32_t i = 0; i < kFrames; i++) {
+        const DkResult r = frames_[i].fenced ? dkFenceWait(&frames_[i].fence, 100000000ll) : DkResult_Success;
+        Log("frame slot %u: %s, fence wait (100 ms) result %d", i, frames_[i].fenced ? "fenced" : "not fenced", int(r));
+      }
       std::fflush(stdout);
+      if (busy_in_a_row_ == 900) rex_nx_quick_exit("the GPU has not finished a frame for 15 s");
+      // The experiment (console 0.258/0.267, both under 60skip, no channel error): the fences are dropped and drawing
+      // goes on. The picture comes back = our fence tracking; it freezes again = the GPU itself (exit after 15 s).
+      for (uint32_t i = 0; i < kFrames; i++) frames_[i].fenced = false;
+      Log("recovery: the frame fences are dropped, drawing goes on");
     }
 #endif
     if (skip_odd_frames_ && drawn) {
