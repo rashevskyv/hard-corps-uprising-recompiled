@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..ecca37a 100644
+index 2205439..df36e5a 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,9 +21,11 @@
@@ -327,7 +327,7 @@ index 2205439..ecca37a 100644
 +}
 +
 +// The settings menu (src/settings_menu.cpp): kMenuW x kMenuH, one line per 18 rows.
-+constexpr uint32_t kMenuLines = 16, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
++constexpr uint32_t kMenuLines = 20, kMenuW = 768, kMenuH = kMenuLines * 18 + 12;
 +
  class Deko3dCommandProcessor : public CommandProcessor {
   public:
