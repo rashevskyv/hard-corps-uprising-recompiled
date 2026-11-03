@@ -1492,13 +1492,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
         // The image's dims are in the name; recover them from the staging layout: sample a 16x16 grid.
         uint32_t w = 0, h = 0;
         std::sscanf(d.first.c_str() + d.first.rfind(' ') + 1, "%ux%u", &w, &h);
-        const uint32_t* px = reinterpret_cast<const uint32_t*>(f.staging.cpu + d.second);
+        // The staged bytes are w*h*bpp of the image's format (1 or 2 bytes for R8/RG8, 8 for the float formats): a pixel is
+        // read at its own stride, up to 4 bytes (the first 4 of a float pixel).
+        int fmt = 0;
+        const size_t fp = d.first.find(" fmt");
+        if (fp != std::string::npos) fmt = std::atoi(d.first.c_str() + fp + 4);
+        const uint32_t bpp = DumpBytesPerPixel(DkImageFormat(fmt));
+        const uint8_t* base = f.staging.cpu + d.second;
+        auto px = [&](uint32_t x, uint32_t y) { uint32_t v = 0; std::memcpy(&v, base + (size_t(y) * w + x) * bpp, std::min(bpp, 4u)); return v; };
         std::unordered_set<uint32_t> distinct;
         for (uint32_t y = 0; y < 16 && h; y++)
-          for (uint32_t x = 0; x < 16 && w; x++) distinct.insert(px[(y * h / 16) * w + x * w / 16]);
+          for (uint32_t x = 0; x < 16 && w; x++) distinct.insert(px(x * w / 16, y * h / 16));
         Log("dump at swap #%u: %s: %zu distinct colours in a 16x16 grid; pixels %08X %08X %08X %08X %08X", swaps_ + 1,
-            d.first.c_str(), distinct.size(), w && h ? px[0] : 0, w && h ? px[(h / 4) * w + w / 4] : 0,
-            w && h ? px[(h / 2) * w + w / 2] : 0, w && h ? px[(3 * h / 4) * w + 3 * w / 4] : 0, w && h ? px[(h - 1) * w + w - 1] : 0);
+            d.first.c_str(), distinct.size(), w && h ? px(0, 0) : 0, w && h ? px(w / 4, h / 4) : 0,
+            w && h ? px(w / 2, h / 2) : 0, w && h ? px(3 * w / 4, 3 * h / 4) : 0, w && h ? px(w - 1, h - 1) : 0);
       }
     }
     rex_nx_meter_cp_swap(meter_block_us_);
