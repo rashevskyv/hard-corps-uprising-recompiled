@@ -1957,10 +1957,10 @@ index 9a59d5b..cd3e81c 100644
 +// The same, as a command in the buffer (runs between the draws recorded before and after it).
 +void dkglCmdDumpImage(DkCmdBuf cmd, const DkImage* image, const char* path);
 diff --git b/src/gpu/shaders/present.frag a/src/gpu/shaders/present.frag
-index 432d3f0..b81fd58 100644
+index 432d3f0..4e61183 100644
 --- b/src/gpu/shaders/present.frag
 +++ a/src/gpu/shaders/present.frag
-@@ -1,7 +1,11 @@
+@@ -1,7 +1,12 @@
  #version 460
 +// Present pass: the guest front buffer through the display gamma ramp the game set (the SDK's swap applies it the
 +// same way: a 256-entry table of 10 bits per channel; here as floats, uploaded by the backend).
@@ -1970,7 +1970,8 @@ index 432d3f0..b81fd58 100644
  layout(location = 0) out vec4 color;
  void main() {
 -  color = vec4(texture(front, uv).rgb, 1.0);
-+  uvec3 i = uvec3(texture(front, uv).rgb * 255.0 + 0.5);
++  // SCENE RT 16F: a float front buffer is not clamped by its format, and the table has 256 entries.
++  uvec3 i = uvec3(clamp(texture(front, uv).rgb, 0.0, 1.0) * 255.0 + 0.5);
 +  color = vec4(c[i.r].x, c[i.g].y, c[i.b].z, 1.0);
  }
 diff --git b/switch/eden-shot.ps1 a/switch/eden-shot.ps1
