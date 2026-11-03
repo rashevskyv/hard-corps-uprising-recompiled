@@ -841,7 +841,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     const bool first_set = First(set_key);
     bool want_text = first_set;
 #ifdef HCU_DK_GL
-    want_text = want_text || TraceFrame();
+    want_text = want_text || TraceFrame() || hcu_settings.dump;  // DUMP NEXT FRAME: every draw of the dumped frame with its textures
 #endif
     for (size_t ti = 0; ti < tbs.size(); ti++) {
       const auto& tb = tbs[ti];
@@ -916,6 +916,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
         bound_textures += t;
       }
     }
+    if (hcu_settings.dump)
+      Log("dump draw VS %016llX PS %016llX prim %u n=%u:%s", (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash(),
+          uint32_t(prim_type), index_count, bound_textures.empty() ? " no textures" : bound_textures.c_str());
     if (first_set) {
       // Each shader pair's first draw with each texture set, once (the texture bases name the layer).
       char key[160];
