@@ -242,7 +242,11 @@ class Translator:
             if not self.dbg_uv:
                 self.dbg_uv = True
                 self.body.append('dbg_uv = (%s).xy;' % coord)
-            self.body.append('vec4 %s = alpha.w > 0.5 && alpha.w < 1.5 ? vec4(1.0) : texture(tf_%d, %s);' % (tmp, slot, coord))
+            # The fetch stays unconditional: a texture() inside a branch (0.292's ternary) broke the console's sprites and
+            # UI into 4x4 squares. Level 0 explicitly: no texture of this game has a mip chain and the samplers do not
+            # filter mips, so the result is the same as texture(); only the instruction differs (no quad derivatives).
+            self.body.append('vec4 %s = textureLod(tf_%d, %s, 0.0);' % (tmp, slot, coord))
+            self.body.append('if (alpha.w > 0.5 && alpha.w < 1.5) %s = vec4(1.0);' % tmp)
         else:
             self.body.append('vec4 %s = texture(tf_%d, %s);' % (tmp, slot, coord))
         self.body.extend(self.write_masked(target, comps, tmp, False))
