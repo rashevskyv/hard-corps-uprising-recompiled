@@ -2582,7 +2582,7 @@ index 670c4d3..7b07d7a 100644
          raise SystemExit('threading_posix.cpp: anchor not found: ' + old[:60])
      src = src.replace(old, new)
 diff --git b/tools/xenos2glsl.py a/tools/xenos2glsl.py
-index c9e15e7..90ce0f0 100644
+index c9e15e7..e3e6953 100644
 --- b/tools/xenos2glsl.py
 +++ a/tools/xenos2glsl.py
 @@ -6,7 +6,8 @@ its translator_disasm.cpp. Only what the game's shaders use is implemented; anyt
@@ -2657,7 +2657,7 @@ index c9e15e7..90ce0f0 100644
          attr = {
              'index': len(self.attrs),
              'slot': self.cur_slot,
-@@ -221,7 +236,15 @@ class Translator:
+@@ -221,7 +236,19 @@ class Translator:
              if k not in ('FetchValidOnly', 'UseComputedLOD', 'MagFilter', 'MinFilter', 'MipFilter', 'AnisoFilter'):
                  self.err('unsupported tfetch attribute %r' % p, rest)
          tmp = 'tex_%d' % self.tmp_counter()
@@ -2668,13 +2668,17 @@ index c9e15e7..90ce0f0 100644
 +            if not self.dbg_uv:
 +                self.dbg_uv = True
 +                self.body.append('dbg_uv = (%s).xy;' % coord)
-+            self.body.append('vec4 %s = alpha.w > 0.5 && alpha.w < 1.5 ? vec4(1.0) : texture(tf_%d, %s);' % (tmp, slot, coord))
++            # The fetch stays unconditional: a texture() inside a branch (0.292's ternary) broke the console's sprites and
++            # UI into 4x4 squares. Level 0 explicitly: no texture of this game has a mip chain and the samplers do not
++            # filter mips, so the result is the same as texture(); only the instruction differs (no quad derivatives).
++            self.body.append('vec4 %s = textureLod(tf_%d, %s, 0.0);' % (tmp, slot, coord))
++            self.body.append('if (alpha.w > 0.5 && alpha.w < 1.5) %s = vec4(1.0);' % tmp)
 +        else:
 +            self.body.append('vec4 %s = texture(tf_%d, %s);' % (tmp, slot, coord))
          self.body.extend(self.write_masked(target, comps, tmp, False))
  
      _tmp = 0
-@@ -313,6 +336,11 @@ class Translator:
+@@ -313,6 +340,11 @@ class Translator:
              self.has_kill = True
              self.extra_kill = 'if (%s %s) discard;' % (a[0], cmp)
              return 'float(%s %s)' % (a[0], cmp)
@@ -2686,7 +2690,7 @@ index c9e15e7..90ce0f0 100644
          if op == 'retain_prev': return 'ps'
          self.err('scalar op %s is not implemented' % op)
  
-@@ -497,6 +525,13 @@ class Translator:
+@@ -497,6 +529,13 @@ class Translator:
          out = ['#version 460', '// hcu xenos2glsl: %s (%s)' % (self.name, self.stage)]
          ind = '  '
          if self.stage == 'vert':
@@ -2700,7 +2704,7 @@ index c9e15e7..90ce0f0 100644
              for a in self.attrs:
                  out.append('layout(location = %d) in vec4 in_%d;  // vf%d offset %d %s' % (
                      a['index'], a['index'], a['slot'], a['offset_words'], a['format']))
-@@ -511,7 +546,7 @@ class Translator:
+@@ -511,7 +550,7 @@ class Translator:
          colors = sorted(int(e[2:]) for e in self.exports if e.startswith('oC'))
          if self.stage == 'vert':
              for k in interps:
@@ -2709,7 +2713,7 @@ index c9e15e7..90ce0f0 100644
          else:
              for k in colors:
                  out.append('layout(location = %d) out vec4 oC_%d;' % (k, k))
-@@ -524,7 +559,10 @@ class Translator:
+@@ -524,7 +563,10 @@ class Translator:
          for e in sorted(self.exports):
              out.append(ind + 'vec4 %s = vec4(0.0);' % e)
          out.append(ind + 'bool p0 = false;')
@@ -2720,7 +2724,7 @@ index c9e15e7..90ce0f0 100644
  
          def block_cond(b):
              conds = []
-@@ -596,6 +634,7 @@ class Translator:
+@@ -596,6 +638,7 @@ class Translator:
                  out.append(ind + 'o_%d = o%d;' % (k, k))
          else:
              if colors:
@@ -2728,7 +2732,7 @@ index c9e15e7..90ce0f0 100644
                  out.append(ind + '// Alpha test (RB_COLORCONTROL): alpha.x enable, alpha.y function, alpha.z reference.')
                  out.append(ind + 'if (alpha.x > 0.5) {')
                  out.append(ind + '  uint f = uint(alpha.y); float a = oC0.w; bool pass = f == 7u || (f == 1u && a < alpha.z) || '
-@@ -668,7 +707,10 @@ def main():
+@@ -668,7 +711,10 @@ def main():
      ap.add_argument('--all', help='translate every *.ucode.vert/frag in this directory')
      ap.add_argument('--out-dir', help='output directory for --all')
      ap.add_argument('--check', action='store_true', help='compile the output with uam')
