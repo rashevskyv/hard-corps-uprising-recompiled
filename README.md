@@ -16,7 +16,7 @@
 
 ## Nintendo Switch (experimental)
 
-The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled game code, running on the console with a native deko3d renderer (libnx). Ready builds are on the [Releases](https://github.com/rashevskyv/hard-corps-uprising-recompiled/releases) page. **No game data is included.**
+The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled game code, running on the console with a native deko3d renderer (libnx). Ready builds are on the [Releases](https://github.com/rashevskyv/hard-corps-uprising-recompiled/releases) page, with Windows and Linux builds of the same branch (the codegen fix the intro movie needs; see the release notes). **No game data is included.**
 
 > **Read this first.**
 > - **Very little testing**: a few hours of single player on one console. Graphical glitches, crashes and freezes are possible, and save data may be lost.

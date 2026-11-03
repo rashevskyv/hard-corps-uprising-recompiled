@@ -67,9 +67,10 @@ function Invoke-Native([string]$What, [scriptblock]$Command) {
 function Import-VsEnvironment {
     $vsRoot = Get-VisualStudioRoot
     $vsDevCmd = Join-Path $vsRoot 'Common7\Tools\VsDevCmd.bat'
-    $llvmBin = Join-Path $vsRoot 'VC\Tools\Llvm\x64\bin'
+    $llvmBin = Get-LlvmBin
     $cmakeBin = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'
     $ninjaBin = Join-Path $vsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+    if ($env:HCU_LLVM_BIN) { $cmakeBin = $llvmBin; $ninjaBin = $llvmBin }
     foreach ($tool in @($vsDevCmd, (Join-Path $llvmBin 'clang++.exe'), (Join-Path $cmakeBin 'cmake.exe'), (Join-Path $ninjaBin 'ninja.exe'))) {
         if (-not (Test-Path $tool)) { throw "Required tool not found: $tool" }
     }
@@ -135,9 +136,12 @@ function Install-PatchedRuntime {
     Import-VsEnvironment
     # -ffile-prefix-map keeps the build folder out of the runtime's log strings.
     $flags = "$RuntimeBuildFlags -ffile-prefix-map=$srcCmake=."
+    $llvmArgs = @(Get-LlvmCMakeArgs)
+    # HCU_DX_HEADERS: microsoft/DirectX-Headers include/directx, for a Windows SDK older than 10.0.20348 (D3D12 options 8).
+    if ($env:HCU_DX_HEADERS) { $flags += " -I$($env:HCU_DX_HEADERS.Replace('\', '/'))" }
     Push-Location $src
     try {
-        Invoke-Native 'ReXGlue configure' { cmake --preset win-amd64 "-DCMAKE_C_FLAGS=$flags" "-DCMAKE_CXX_FLAGS=$flags" }
+        Invoke-Native 'ReXGlue configure' { cmake --preset win-amd64 "-DCMAKE_C_FLAGS=$flags" "-DCMAKE_CXX_FLAGS=$flags" @llvmArgs }
         $parallel = @(if ($Jobs -gt 0) { '--parallel'; $Jobs } else { '--parallel' })
         foreach ($config in $RuntimeBuildConfigs) {
             Invoke-Native "ReXGlue build ($config)" { cmake --build out/build/win-amd64 --config $config --target $RuntimeBuildTargets @parallel }

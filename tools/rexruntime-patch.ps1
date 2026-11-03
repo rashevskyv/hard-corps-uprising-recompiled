@@ -12,7 +12,10 @@ $RuntimeBuildFlags = '-march=x86-64-v2'
 $RuntimeBuildTargets = @('rexruntime', 'rexgpu-xenos')
 $RuntimeBuildConfigs = @('RelWithDebInfo', 'Release')
 
+# HCU_VS_ROOT names another Visual Studio than vswhere's latest (the 2022 Build Tools, say), HCU_LLVM_BIN another LLVM
+# than Visual Studio's: MSYS2's C:\msys64\ucrt64\bin, which also brings cmake and ninja (the Build Tools have none).
 function Get-VisualStudioRoot {
+    if ($env:HCU_VS_ROOT) { return $env:HCU_VS_ROOT }
     $vsRoot = $null
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (Test-Path $vswhere) { $vsRoot = "$(& $vswhere -latest -products * -property installationPath)".Trim() }
@@ -20,12 +23,26 @@ function Get-VisualStudioRoot {
     return $vsRoot
 }
 
+function Get-LlvmBin {
+    if ($env:HCU_LLVM_BIN) { return $env:HCU_LLVM_BIN }
+    return (Join-Path (Get-VisualStudioRoot) 'VC\Tools\Llvm\x64\bin')
+}
+
+# With another LLVM than Visual Studio's, CMake needs the MSVC target, lld and the LLVM resource and manifest tools.
+function Get-LlvmCMakeArgs {
+    if (-not $env:HCU_LLVM_BIN) { return @() }
+    $bin = $env:HCU_LLVM_BIN.Replace('\', '/')
+    return @('-DCMAKE_C_COMPILER_TARGET=x86_64-pc-windows-msvc', '-DCMAKE_CXX_COMPILER_TARGET=x86_64-pc-windows-msvc',
+        "-DCMAKE_AR=$bin/llvm-ar.exe", "-DCMAKE_RC_COMPILER=$bin/llvm-rc.exe", "-DCMAKE_MT=$bin/llvm-mt.exe",
+        '-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=lld', '-DCMAKE_SHARED_LINKER_FLAGS=-fuse-ld=lld')
+}
+
 # The clang and MSVC toolset versions ReXGlue is built with.
 $script:RuntimeCompiler = $null
 function Get-RuntimeCompiler {
     if (-not $script:RuntimeCompiler) {
         $vsRoot = Get-VisualStudioRoot
-        $clang = "$(& (Join-Path $vsRoot 'VC\Tools\Llvm\x64\bin\clang++.exe') --version | Select-Object -First 1)".Trim()
+        $clang = "$(& (Join-Path (Get-LlvmBin) 'clang++.exe') --version | Select-Object -First 1)".Trim()
         $msvc = "$(Get-Content -LiteralPath (Join-Path $vsRoot 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -TotalCount 1)".Trim()
         $script:RuntimeCompiler = "$clang; MSVC $msvc"
     }

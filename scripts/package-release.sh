@@ -1,7 +1,9 @@
 #!/bin/bash
-# Packs the Switch release (WSL): hcu-<version>-switch.zip, SHA1SUMS and SHA256SUMS into /root/hcu/release/<version>/.
+# Packs the release (WSL): hcu-<version>-switch.zip, the PC builds when given (HCU_LINUX, HCU_WINDOWS), SHA1SUMS and
+# SHA256SUMS into /root/hcu/release/<version>/.
 #   scripts/package-release.sh [switch stage dir, default /root/hcu/src/out/build/switch/stage]
 # Build first (switch/build.sh). The version comes from the build's hcu_version.h ("0.<count>.<sha7>").
+# To add files to a published release: HCU_SWITCH_ZIP=<the published zip> keeps its hash in the sums.
 # The archive holds the recompiled program and the translated shaders only; the script refuses game files.
 set -eu
 STAGE=${1:-/root/hcu/src/out/build/switch/stage}
@@ -21,8 +23,13 @@ cp "$GIT_DIR/README.md" "$GIT_DIR/LICENSE" pkg/switch/; echo "$V" > pkg/switch/V
 bad=$(find pkg -type f \( -iname '*.xex' -o -iname '*.xexp' -o -iname '*.dds' -o -iname '*.arc' -o -iname '*.xma' \
       -o -iname '*.xwb' -o -iname '*.bin' -o -iname '*.pak' -o -iname '*.jpg' \)) || true
 [ -z "$bad" ] || { echo "game data in the package: $bad" >&2; exit 1; }
-(cd pkg/switch && zip -qr "../../hcu-$V-switch.zip" .)
+# HCU_SWITCH_ZIP: the already published Switch zip of this version (a new zip never has the same hash).
+if [ -n "${HCU_SWITCH_ZIP:-}" ]; then cp "$HCU_SWITCH_ZIP" "hcu-$V-switch.zip"; else (cd pkg/switch && zip -qr "../../hcu-$V-switch.zip" .); fi
 rm -rf pkg
+# The PC builds, when given: HCU_LINUX = the AppImage of tools/package-linux.sh, HCU_WINDOWS = the zip of
+# tools/package-release.ps1 (both refuse game files themselves). They take the release's names.
+[ -z "${HCU_LINUX:-}" ] || cp "$HCU_LINUX" "hcu-$V-linux-x86_64.AppImage"
+[ -z "${HCU_WINDOWS:-}" ] || cp "$HCU_WINDOWS" "hcu-$V-windows-x64.zip"
 sha1sum hcu-$V-* > SHA1SUMS
 sha256sum hcu-$V-* > SHA256SUMS
 echo "NRO SHA-1: $(sha1sum "$STAGE/hcu.nro" | cut -c1-40)  version $V"

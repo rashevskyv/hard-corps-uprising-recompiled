@@ -35,14 +35,18 @@ $UserData = Join-Path $BuildDir 'user_data'
 $Exe = Join-Path $BuildDir 'hard_corps_uprising.exe'
 $XexSha256 = '530EDE8ED5271051A2AB19C077A97FB167E4F30B094C292E8F59D37D0D2069DC'
 
-$VsRoot = 'C:\Program Files\Microsoft Visual Studio\18\Community'
+# HCU_VS_ROOT and HCU_LLVM_BIN (tools\rexruntime-patch.ps1) pick another Visual Studio and LLVM than VS 18's.
+$VsRoot = Get-VisualStudioRoot
 $VsDevCmd = Join-Path $VsRoot 'Common7\Tools\VsDevCmd.bat'
-$LlvmBin = Join-Path $VsRoot 'VC\Tools\Llvm\x64\bin'
+$LlvmBin = Get-LlvmBin
+$LlvmArgs = @(Get-LlvmCMakeArgs)
+# HCU_DX_HEADERS: a Windows SDK older than 10.0.22000 also lacks the launcher's PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION.
+if ($env:HCU_DX_HEADERS) { $LlvmArgs += "-DCMAKE_CXX_FLAGS=-DPROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION=0x4 -I$($env:HCU_DX_HEADERS.Replace('\', '/'))" }
 $Clang = Join-Path $LlvmBin 'clang.exe'
 $ClangXX = Join-Path $LlvmBin 'clang++.exe'
 $LldLink = Join-Path $LlvmBin 'lld-link.exe'
-$CMake = Join-Path $VsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
-$Ninja = Join-Path $VsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+$CMake = if ($env:HCU_LLVM_BIN) { Join-Path $LlvmBin 'cmake.exe' } else { Join-Path $VsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe' }
+$Ninja = if ($env:HCU_LLVM_BIN) { Join-Path $LlvmBin 'ninja.exe' } else { Join-Path $VsRoot 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe' }
 
 foreach ($tool in @($VsDevCmd, $Clang, $ClangXX, $LldLink, $CMake, $Ninja)) {
     if (-not (Test-Path $tool)) { throw "Required tool not found: $tool" }
@@ -116,7 +120,7 @@ try {
     if (-not $configured) {
         Write-Host 'Configuring...'
         & $CMake -S $Root -B $BuildDir -G Ninja "-DCMAKE_BUILD_TYPE=$Config" `
-            "-DCMAKE_CXX_COMPILER:FILEPATH=$ClangXX" "-DCMAKE_LINKER:FILEPATH=$LldLink" "-DCMAKE_MAKE_PROGRAM:FILEPATH=$Ninja"
+            "-DCMAKE_C_COMPILER:FILEPATH=$Clang" "-DCMAKE_CXX_COMPILER:FILEPATH=$ClangXX" "-DCMAKE_LINKER:FILEPATH=$LldLink" "-DCMAKE_MAKE_PROGRAM:FILEPATH=$Ninja" @LlvmArgs
         if ($LASTEXITCODE) { throw "CMake configure failed ($LASTEXITCODE)" }
     }
 

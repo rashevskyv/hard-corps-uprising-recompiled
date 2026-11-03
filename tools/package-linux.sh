@@ -23,7 +23,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # On the Linux filesystem: much faster than a Windows drive under /mnt, and case-sensitive.
 WORK="${HCU_WORK:-$HOME/hcu-linux-build}"
 PRESET=linux-amd64-release
-MAX_GLIBC=2.31
+MAX_GLIBC=${HCU_MAX_GLIBC:-2.31}  # the floor of a build made elsewhere than Ubuntu 20.04, documented in the release notes
 
 SDK_VERSION=0.10.0
 SDK_SHA256=0388edb3f8fb1444f1b0ad5d440cb02d9690ac20a76b04fd6b7dcc19f59328a6
