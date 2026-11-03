@@ -1,4 +1,4 @@
-Hard Corps: Uprising (Xbox 360 XBLA, 2011) on Nintendo Switch, by static recompilation with the ReXGlue SDK. Built from commit `<commit>`.
+Hard Corps: Uprising (Xbox 360 XBLA, 2011) on Nintendo Switch, by static recompilation with the ReXGlue SDK. Built from commit `5be467e`.
 
 ## Read this first: experimental
 
@@ -12,10 +12,10 @@ Hard Corps: Uprising (Xbox 360 XBLA, 2011) on Nintendo Switch, by static recompi
 
 | File | What |
 |---|---|
-| `hcu-<version>-switch.zip` | Switch (Atmosphère + hbmenu). Unzip to the SD root |
+| `hcu-0.297.5be467e-switch.zip` | Switch (Atmosphère + hbmenu). Unzip to the SD root |
 | `SHA1SUMS`, `SHA256SUMS` | checksums |
 
-Switch NRO SHA-1: `<nro sha1>` (build `<version>`).
+Switch NRO SHA-1: `0f96ad4e7eb6cfbc28c446608fe93ae9919c2beb` (build `0.297.5be467e`).
 
 ## You need your own copy of the game
 
