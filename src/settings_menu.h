@@ -34,6 +34,9 @@ struct HcuSettings {
   int prepass;        // DEPTH PREPASS: 0 = the game's depth-only draws of the colour pass are skipped (A/B of the console's
                       // brick hatching: the colour pass repeats them with another vertex shader under LEQUAL)
   int upload_strips;  // 1 = textures go up in strips of 64 block rows (A/B of the console hatching; at start)
+  int tex_view;       // TEXTURE VIEW (live, not saved; Sys alpha.w of every pixel shader): 1 = every texture fetch
+                      // returns white, 2/3 = the colour is fract(first fetch coordinate x 16 / x 256): the console's
+                      // hatching is in the texels (gone at 1, stripes smooth) or in the interpolated UV (stripes jagged)
 };
 
 extern HcuSettings hcu_settings;

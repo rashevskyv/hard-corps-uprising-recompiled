@@ -1164,7 +1164,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufBindVtxBufferState(cmd, buffers, buffer_count);
 
     // Uniforms: the ALU constants and the system constants, per stage.
-    if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; frame_skipped_++; return true; }
+    if (!BindUniforms(f, vs, ps, vi, regs, depth != nullptr)) { skipped_++; frame_skipped_++; return true; }
 
 #ifdef HCU_DK_GL
     if (TraceFrame()) {
@@ -2263,7 +2263,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     return true;
   }
 
-  bool BindUniforms(Frame& f, DkShaderObj* vs, DkShaderObj* ps, const draw_util::ViewportInfo& vi, const RegisterFile& regs) {
+  bool BindUniforms(Frame& f, DkShaderObj* vs, DkShaderObj* ps, const draw_util::ViewportInfo& vi, const RegisterFile& regs, bool scene) {
     DkCmdBuf cmd = f.cmdbuf;
     uint32_t vs_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
     uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
@@ -2299,6 +2299,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     sys.alpha[0] = cc.alpha_test_enable ? 1.0f : 0.0f;
     sys.alpha[1] = float(uint32_t(cc.alpha_func));
     sys.alpha[2] = regs.Get<float>(XE_GPU_REG_RB_ALPHA_REF);
+    // Settings menu TEXTURE VIEW (tools/xenos2glsl.py emit_fetch_texture): only draws with a depth target (the scene's
+    // geometry); the post-effect and present passes (no depth) keep their fetches, so the picture reaches the screen.
+    sys.alpha[3] = scene ? float(hcu_settings.tex_view) : 0.f;
     std::memcpy(sys.bools, &regs.values[XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031], sizeof(sys.bools));
     std::memcpy(sys.loops, &regs.values[XE_GPU_REG_SHADER_CONSTANT_LOOP_00], sizeof(sys.loops));
     std::memcpy(f.data.cpu + sys_off, &sys, sizeof(sys));

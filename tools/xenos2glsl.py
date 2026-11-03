@@ -52,6 +52,7 @@ class Translator:
         self.blocks = []      # (cf_index, kind, statements, extra) in order
         self.attrs = []       # vertex attributes: dict(slot, offset, format, stride, signed, integer)
         self.textures = {}    # slot -> dimension ('2D', '1D', '3D', 'Cube')
+        self.dbg_uv = False   # frag: the first fetch coordinate was stored for TEXTURE VIEW
         self.max_reg = -1
         self.reads_before_write = set()
         self.written = {}     # register index -> components written so far (per component: `r0.z = ...`
@@ -235,7 +236,15 @@ class Translator:
             if k not in ('FetchValidOnly', 'UseComputedLOD', 'MagFilter', 'MinFilter', 'MipFilter', 'AnisoFilter'):
                 self.err('unsupported tfetch attribute %r' % p, rest)
         tmp = 'tex_%d' % self.tmp_counter()
-        self.body.append('vec4 %s = texture(tf_%d, %s);' % (tmp, slot, coord))
+        if self.stage == 'frag':
+            # Settings menu TEXTURE VIEW (Sys alpha.w, 0 = off): 1 = every fetch returns white (the picture without
+            # textures), 2/3 = the colour output is fract(first fetch coordinate x 16 / x 256) (the interpolated UV).
+            if not self.dbg_uv:
+                self.dbg_uv = True
+                self.body.append('dbg_uv = (%s).xy;' % coord)
+            self.body.append('vec4 %s = alpha.w > 0.5 && alpha.w < 1.5 ? vec4(1.0) : texture(tf_%d, %s);' % (tmp, slot, coord))
+        else:
+            self.body.append('vec4 %s = texture(tf_%d, %s);' % (tmp, slot, coord))
         self.body.extend(self.write_masked(target, comps, tmp, False))
 
     _tmp = 0
@@ -552,6 +561,8 @@ class Translator:
         out.append(ind + 'bool p0 = false;')
         out.append(ind + 'int a0 = 0;')
         out.append(ind + 'float ps = 0.0;')
+        if self.stage == 'frag':
+            out.append(ind + 'vec2 dbg_uv = vec2(0.0);')
 
         def block_cond(b):
             conds = []
@@ -623,6 +634,7 @@ class Translator:
                 out.append(ind + 'o_%d = o%d;' % (k, k))
         else:
             if colors:
+                out.append(ind + 'if (alpha.w > 1.5) oC0 = vec4(fract(dbg_uv * (alpha.w > 2.5 ? 256.0 : 16.0)), 0.0, 1.0);  // TEXTURE VIEW')
                 out.append(ind + '// Alpha test (RB_COLORCONTROL): alpha.x enable, alpha.y function, alpha.z reference.')
                 out.append(ind + 'if (alpha.x > 0.5) {')
                 out.append(ind + '  uint f = uint(alpha.y); float a = oC0.w; bool pass = f == 7u || (f == 1u && a < alpha.z) || '

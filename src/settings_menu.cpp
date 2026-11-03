@@ -64,6 +64,9 @@ const Item kItems[] = {
      [](int i) { hcu_settings.upload_strips = i; }},
     {"DXT ON CPU", {"OFF", "ON"}, 2, true, [] { return hcu_settings.dxt_cpu; }, [](int i) { hcu_settings.dxt_cpu = i; }},
     {"DEPTH 32 BIT", {"OFF", "ON"}, 2, true, [] { return hcu_settings.depth32; }, [](int i) { hcu_settings.depth32 = i; }},
+    // 18 items = kMenuLines (20) - 2: one more line and hcu_menu_lines draws no menu (0.270).
+    {"TEXTURE VIEW", {"GAME", "ALL WHITE", "UV X16", "UV X256"}, 4, false, [] { return hcu_settings.tex_view; },
+     [](int i) { hcu_settings.tex_view = i; }},
 };
 constexpr int kCount = sizeof(kItems) / sizeof(kItems[0]);
 
@@ -104,6 +107,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "prepass")) s.prepass = int(v);
       else if (!std::strcmp(key, "gamma")) s.gamma = int(v);
       else if (!std::strcmp(key, "rt16")) s.rt16 = int(v);
+      else if (!std::strcmp(key, "tex_view")) s.tex_view = int(v);  // read only (the Linux host has no pad)
     }
     std::fclose(f);
   }
