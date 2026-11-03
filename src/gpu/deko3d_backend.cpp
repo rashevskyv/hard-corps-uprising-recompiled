@@ -432,7 +432,10 @@ bool TextureFormatOf(xenos::TextureFormat f, DkImageFormat& out, bool& reversed)
 DkImageFormat ColorTargetFormatOf(xenos::ColorRenderTargetFormat f) {
   switch (f) {
     case xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA: return DkImageFormat_RGBA8_Unorm_sRGB;
-    case xenos::ColorRenderTargetFormat::k_2_10_10_10: return DkImageFormat_RGB10A2_Unorm;
+    case xenos::ColorRenderTargetFormat::k_2_10_10_10: case xenos::ColorRenderTargetFormat::k_2_10_10_10_AS_10_10_10_10: return DkImageFormat_RGB10A2_Unorm;
+    // 7e3 (unsigned floats 0..32 per channel): RGBA16_Float holds every value exactly; the guest reads such a resolve
+    // back as 16_16_16_16_FLOAT. Was the default (RGBA8_Unorm: values over 1 clipped, 2 bits of alpha lost).
+    case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT: case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16:
     case xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT: return DkImageFormat_RGBA16_Float;
     default: return g_rt16 ? DkImageFormat_RGBA16_Float : DkImageFormat_RGBA8_Unorm;
   }
@@ -1842,7 +1845,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (!pitch) return nullptr;
     uint64_t key = (uint64_t(edram_base) << 32) | (uint64_t(pitch) << 1) | (is_depth ? 1 : 0);
     auto it = targets_.find(key);
-    if (it != targets_.end()) return it->second;
+    if (it != targets_.end()) {
+      // The key has no format: the first creator's host format stays (the resolve and the depth-only alias rely on getting
+      // the draw's image back). A guest that reuses the same EDRAM base and pitch with another format is logged, not served.
+      if (it->second->format != format) {
+        char k[48];
+        std::snprintf(k, sizeof(k), "tfmt %u %u %u", edram_base, pitch, uint32_t(format));
+        LogOnce(k, "%s target EDRAM base %u pitch %u: created as host format %u, now requested as %u (kept)", is_depth ? "depth" : "color", edram_base,
+                pitch, uint32_t(it->second->format), uint32_t(format));
+      }
+      return it->second;
+    }
     uint32_t tiles = edram_base < kEdramTiles ? kEdramTiles - edram_base : 0;
     uint32_t rows = tiles ? uint32_t((uint64_t(tiles) * 80 * 16) / pitch) : 0;
     if (rows > kMaxTargetHeight) rows = kMaxTargetHeight;
@@ -1853,8 +1866,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     img->edram_pitch = pitch;
     targets_.emplace(key, img);
     ClearNewImage(img);
-    Log("%s target: EDRAM base %u pitch %u -> %ux%u image (%u MB in images)", is_depth ? "depth" : "color", edram_base, pitch,
-        img->width, img->height, images_.used >> 20);
+    Log("%s target: EDRAM base %u pitch %u -> %ux%u image, host format %u (%u MB in images)", is_depth ? "depth" : "color", edram_base, pitch,
+        img->width, img->height, uint32_t(format), images_.used >> 20);
     return img;
   }
 
@@ -2436,7 +2449,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
       return true;
     }
     uint32_t src_pitch = info.color_edram_info.pitch_tiles * 80;
-    HostImage* src = TargetImage(info.color_edram_info.base_tiles, src_pitch, DkImageFormat_RGBA8_Unorm, false);
+    // The target's own format (the one a draw created it with); a resolve that comes first creates it right.
+    HostImage* src = TargetImage(info.color_edram_info.base_tiles, src_pitch,
+                                 ColorTargetFormatOf(xenos::ColorRenderTargetFormat(info.color_edram_info.format)), false);
     if (!src) return true;
     uint32_t x = info.coordinate_info.edram_offset_x_div_8 * 8, y = info.coordinate_info.edram_offset_y_div_8 * 8;
     uint32_t w = info.coordinate_info.width_div_8 * 8, h = info.height_div_8 * 8;
