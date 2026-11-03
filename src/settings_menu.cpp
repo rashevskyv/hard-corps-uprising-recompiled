@@ -8,7 +8,12 @@
 
 #include <unistd.h>
 
-HcuSettings hcu_settings = {0, 1, 1, 32.f, 1.5f, -16.f, 1, 0, 0.f, 1.f, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1};
+// The defaults are the configuration the user verified on the console (run14, build 0.294): the hidden settings are still
+// read from settings.txt (A/B tests), the menu shows only the user settings.
+HcuSettings hcu_settings = {.fps_mode = 0, .strip = 1, .fps_counter = 1, .rumble = 1, .shadow_bias = 0.f, .shadow_slope = 0.f,
+                            .colour_bias = 0.f, .precise = 0, .filter = 0, .lod_bias = 0.f, .aniso = 1.f, .shadow_map = 1,
+                            .view = 0, .view_step = 0, .dump = 0, .record = 0, .dxt_cpu = 1, .depth32 = 0, .gamma = 0,
+                            .rt16 = 1, .prepass = 0, .upload_strips = 0, .tex_view = 0};
 
 namespace {
 
@@ -27,46 +32,14 @@ struct Item {
   void (*set)(int);
 };
 
-int NearestF(float v, const float* opts, int n) {
-  int best = 0;
-  for (int i = 1; i < n; i++)
-    if (std::abs(opts[i] - v) < std::abs(opts[best] - v)) best = i;
-  return best;
-}
-const float kShadow[] = {0.f, 32.f, 256.f, 1024.f, 16384.f, 262144.f};  // depth units of 2^-24: 262144 = 1/64 of the range
-const float kColour[] = {-16.f, -256.f, -4096.f, 0.f};
-
 const Item kItems[] = {
     {"FRAME RATE", {"30", "60 SKIP WHEN BUSY", "60", "30 HALF SPEED"}, 4, false,
      [] { return hcu_settings.fps_mode; }, [](int i) { hcu_settings.fps_mode = i; }},
-    {"FPS COUNTER", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
+    {"OVERLAY", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
+    {"FPS COUNTER", {"OFF", "ON"}, 2, false, [] { return hcu_settings.fps_counter; }, [](int i) { hcu_settings.fps_counter = i; }},
     {"RUMBLE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.rumble; }, [](int i) { hcu_settings.rumble = i; }},
-    {"SHADOW BIAS", {"OFF", "32", "256", "1024", "16384", "262144"}, 6, false,
-     [] { return hcu_settings.shadow_bias == 0.f && hcu_settings.shadow_slope == 0.f ? 0 : NearestF(hcu_settings.shadow_bias, kShadow, 6); },
-     [](int i) {
-       hcu_settings.shadow_bias = kShadow[i];
-       hcu_settings.shadow_slope = i ? 1.5f : 0.f;
-     }},
-    {"COLOUR BIAS", {"-16", "-256", "-4096", "OFF"}, 4, false, [] { return NearestF(hcu_settings.colour_bias, kColour, 4); },
-     [](int i) { hcu_settings.colour_bias = kColour[i]; }},
-    {"SHADOW MAP", {"OFF", "ON"}, 2, false, [] { return hcu_settings.shadow_map; }, [](int i) { hcu_settings.shadow_map = i; }},
-    {"DEPTH PREPASS", {"SKIP", "ON"}, 2, false, [] { return hcu_settings.prepass; }, [](int i) { hcu_settings.prepass = i; }},
-    {"GAMMA RAMP", {"IDENTITY", "GAME"}, 2, false, [] { return hcu_settings.gamma; }, [](int i) { hcu_settings.gamma = i; }},
-    {"SCENE RT 16F", {"OFF", "ON"}, 2, true, [] { return hcu_settings.rt16; }, [](int i) { hcu_settings.rt16 = i; }},
-    {"VIEW", {"GAME", "SCENE BEFORE POST", "SHADOW MAP DEPTH", "STEP"}, 4, false, [] { return hcu_settings.view; },
-     [](int i) { hcu_settings.view = i; }},
-    {"VIEW STEP", {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"}, 16, false,
-     [] { return hcu_settings.view_step; }, [](int i) { hcu_settings.view_step = i; }},
-    {"DUMP NEXT FRAME", {"NO", "YES"}, 2, false, [] { return hcu_settings.dump; }, [](int i) { hcu_settings.dump = i; }},
-    {"RECORD 5 SEC", {"NO", "YES"}, 2, false, [] { return hcu_settings.record; }, [](int i) { hcu_settings.record = i; }},
-    {"PRECISE SHADERS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.precise; }, [](int i) { hcu_settings.precise = i; }},
-    {"UPLOAD IN STRIPS", {"OFF", "ON"}, 2, true, [] { return hcu_settings.upload_strips; },
-     [](int i) { hcu_settings.upload_strips = i; }},
-    {"DXT ON CPU", {"OFF", "ON"}, 2, true, [] { return hcu_settings.dxt_cpu; }, [](int i) { hcu_settings.dxt_cpu = i; }},
-    {"DEPTH 32 BIT", {"OFF", "ON"}, 2, true, [] { return hcu_settings.depth32; }, [](int i) { hcu_settings.depth32 = i; }},
-    // 18 items = kMenuLines (20) - 2: one more line and hcu_menu_lines draws no menu (0.270).
-    {"TEXTURE VIEW", {"GAME", "ALL WHITE", "UV X16", "UV X256"}, 4, false, [] { return hcu_settings.tex_view; },
-     [](int i) { hcu_settings.tex_view = i; }},
+    // The diagnostic items (biases, shadow map, prepass, gamma, 16F targets, views, dumps, precise, strips, DXT, depth
+    // 32, texture view) left the menu for the release (git history before 2026-11-03); settings.txt still sets them.
 };
 constexpr int kCount = sizeof(kItems) / sizeof(kItems[0]);
 
@@ -74,8 +47,8 @@ void Save() {
   if (g_dir.empty()) return;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
-    std::fprintf(f, "fps_mode=%d\nstrip=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass=%d\ngamma=%d\nrt16=%d\n",
-                 s.fps_mode, s.strip, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass, s.gamma, s.rt16);
+    std::fprintf(f, "fps_mode=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass=%d\ngamma=%d\nrt16=%d\n",
+                 s.fps_mode, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass, s.gamma, s.rt16);
     std::fclose(f);
   }
 }
@@ -95,6 +68,7 @@ void hcu_settings_load(const char* dir) {
       if (std::sscanf(line, "%31[^=]=%f", key, &v) != 2) continue;
       if (!std::strcmp(key, "fps_mode")) s.fps_mode = int(v);
       else if (!std::strcmp(key, "strip")) s.strip = int(v);
+      else if (!std::strcmp(key, "fps_counter")) s.fps_counter = int(v);
       else if (!std::strcmp(key, "rumble")) s.rumble = int(v);
       else if (!std::strcmp(key, "shadow_bias")) s.shadow_bias = v;
       else if (!std::strcmp(key, "shadow_slope")) s.shadow_slope = v;
@@ -171,13 +145,13 @@ int hcu_menu_input(uint32_t held) {
 }
 
 int hcu_menu_lines(char lines[][48], int max_lines) {
-  if (!g_open || max_lines < kCount + 2) return 0;  // the title, the items, the footer (0.270 with 14 items asked for 17 of 16 lines: no menu)
+  if (!g_open || max_lines < kCount + 2) return 0;  // the title, the items, the footer
   int n = 0;
   std::snprintf(lines[n++], 48, "  SETTINGS");
   for (int i = 0; i < kCount; i++) {
     const Item& it = kItems[i];
     std::snprintf(lines[n++], 48, "%c %-18s %s%s", i == g_row ? '>' : ' ', it.label, it.names[it.get()], it.at_start ? " (RESTART)" : "");
   }
-  std::snprintf(lines[n++], 48, "  B CLOSE   RESTART = SAVED, APPLIES AT THE NEXT START");
+  std::snprintf(lines[n++], 48, "  B CLOSE   LEFT / RIGHT / A CHANGE");
   return n;
 }

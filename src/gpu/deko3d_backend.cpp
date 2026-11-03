@@ -1304,7 +1304,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
       overlay = overlay_[frame_];
       if (overlay) {
         char text[96];
-        std::snprintf(text, sizeof(text), "HCU %s  %u.%u fps  %s", rex_nx_version(), fps_x10_ / 10, fps_x10_ % 10, rex_nx_meter_text);
+        char fps[24] = "";
+        if (hcu_settings.fps_counter) std::snprintf(fps, sizeof(fps), "%u.%u fps  ", fps_x10_ / 10, fps_x10_ % 10);
+        std::snprintf(text, sizeof(text), "HCU %s  %s%s", rex_nx_version(), fps, rex_nx_meter_text);
         if (std::strcmp(text, overlay_text_) != 0) {
           RenderOverlayText(overlay_px_.data(), text);
           std::memcpy(overlay_text_, text, sizeof(overlay_text_));

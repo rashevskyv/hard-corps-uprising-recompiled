@@ -14,6 +14,54 @@
 
 <img width="1966" height="1179" alt="title_screen" src="https://github.com/user-attachments/assets/bff13f4f-3a4e-488d-8cf0-1b6cde1c0875" />
 
+## Nintendo Switch (experimental)
+
+The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled game code, running on the console with a native deko3d renderer (libnx). Ready builds are on the [Releases](https://github.com/rashevskyv/hard-corps-uprising-recompiled/releases) page. **No game data is included.**
+
+> **Read this first.**
+> - **Very little testing**: a few hours of single player on one console. Graphical glitches, crashes and freezes are possible, and save data may be lost.
+> - **One controller.** Local 2-player and the Xbox LIVE features are not available. The DLC characters are not supported.
+> - **30 fps by default.** The game runs at full speed and every second frame is drawn. The 60 fps modes can slow the game down in busy scenes.
+> - No launcher, cheats, achievements or display options: those are PC features.
+
+### Install
+
+1. Unzip the Switch zip to the root of the SD card. It creates `sdmc:/switch/hcu/` with `hcu.nro`, the `deko3d` marker file and `shaders/`.
+2. Extract your own Xbox Live Arcade package (`python tools/stfs_extract.py <package> <folder>`, or the PC launcher's **Install from package...**) and copy the extracted files (`default.xex` and the data folders) into `sdmc:/switch/hcu/game/`.
+3. Start **Hard Corps: Uprising** from the Homebrew Menu with title takeover: hold **R** while you start any installed game. Applet mode is not tested.
+
+Logs: `sdmc:/switch/hcu/hcu_log.txt` and `hcu_rex_log.txt`. Settings: `sdmc:/switch/hcu/settings.txt`.
+
+### Controls and the settings menu
+
+Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, **Y** = X, **X** = Y; **+** = START, **-** = BACK. The button prompts show the Switch letters.
+
+**L3 + R3** (press both sticks) opens the port's settings menu. Up and down pick a line, left, right or **A** change it, **B** closes it and saves `settings.txt`. The game keeps running under the menu, so open it from the pause screen.
+
+| Setting | Values |
+| --- | --- |
+| FRAME RATE | 30 (default), 60 SKIP WHEN BUSY, 60, 30 HALF SPEED |
+| OVERLAY | the version and performance line at the bottom of the screen: ON (default), OFF |
+| FPS COUNTER | the frame rate in that line: ON (default), OFF |
+| RUMBLE | ON (default), OFF |
+
+### Building the Switch NRO yourself
+
+`switch/build.sh` builds the NRO in WSL or on Linux. You need:
+
+- devkitPro with devkitA64, libnx, switch-tools and `uam` (the deko3d shader compiler).
+- The ReXGlue SDK v0.10.0 source with `patches/rexglue-sdk` (the common and `.linux` patches) applied, then `switch/sdk-edits.py` and `switch/sdk-edits-hcu.py` (the Switch host layer; `build.sh` applies them). The SDK's host CLI built for Linux (`cmake --preset linux-amd64`, target `rexglue`).
+- An NVK (mesa-switch) `libvulkan.a` for the Switch (the executable links it; the renderer in use is deko3d).
+- Your own extracted game files in `game/extracted/` (never committed; the recompiled C++ is generated from your `default.xex`).
+- The game's shader microcode: the backend writes every shader it lacks to `sdmc:/switch/hcu/shaders/missing/`. Put those files into the dump folder (`HCU_SHADER_DUMPS`) and build again: `tools/xenos2glsl.py` and `uam` translate them into `out/build/switch/stage/shaders/`.
+
+The paths are variables at the top of `switch/build.sh` (`HCU_ROOT`, `REXSDK_DIR`, `NVK_SDK`, `HCU_SHADER_DUMPS`). The hbmenu icon is the game's own title image (`packaging/switch/icon-local.jpg`, not in the repository); without it the NRO gets the devkitPro default icon. Details and the port's history: [docs/switch.md](docs/switch.md).
+
+### Legal note
+
+The Switch release contains the recompiled game program, which is a derived work of the game, and the translated shaders. It contains no game data (no graphics, sound, music or text). Use it only with a copy of the game you own. Hard Corps: Uprising belongs to Konami. This is an unofficial fan project, not affiliated with Konami, Arc System Works, Microsoft or Nintendo.
+
+
 ## Features
 
 - **Native Aspect Ratio** (v0.6.0): 16:9 Original, 16:10, 21:9 Ultrawide, 32:9 Super Ultrawide, 4:3 and 5:4. The game renders in the chosen format instead of stretching a 16:9 picture, so wider formats can show more of the sides of the scene. Menus and videos made for 16:9 are not redesigned for every format.
