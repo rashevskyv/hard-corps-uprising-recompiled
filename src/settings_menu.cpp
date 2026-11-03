@@ -39,7 +39,7 @@ const float kColour[] = {-16.f, -256.f, -4096.f, 0.f};
 const Item kItems[] = {
     {"FRAME RATE", {"30", "60 SKIP WHEN BUSY", "60", "30 HALF SPEED"}, 4, false,
      [] { return hcu_settings.fps_mode; }, [](int i) { hcu_settings.fps_mode = i; }},
-    {"PERFORMANCE STRIP", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
+    {"FPS COUNTER", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
     {"RUMBLE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.rumble; }, [](int i) { hcu_settings.rumble = i; }},
     {"SHADOW BIAS", {"OFF", "32", "256", "1024", "16384", "262144"}, 6, false,
      [] { return hcu_settings.shadow_bias == 0.f && hcu_settings.shadow_slope == 0.f ? 0 : NearestF(hcu_settings.shadow_bias, kShadow, 6); },
