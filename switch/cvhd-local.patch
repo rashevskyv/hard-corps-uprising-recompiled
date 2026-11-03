@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..da090ae 100644
+index 2205439..8b339fb 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,9 +21,11 @@
@@ -758,7 +758,7 @@ index 2205439..da090ae 100644
  
      // Uniforms: the ALU constants and the system constants, per stage.
 -    if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; return true; }
-+    if (!BindUniforms(f, vs, ps, vi, regs)) { skipped_++; frame_skipped_++; return true; }
++    if (!BindUniforms(f, vs, ps, vi, regs, depth != nullptr)) { skipped_++; frame_skipped_++; return true; }
  
 +#ifdef HCU_DK_GL
 +    if (TraceFrame()) {
@@ -1560,7 +1560,14 @@ index 2205439..da090ae 100644
      dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
      uploads_++;
      upload_bytes_ += bytes;
-@@ -1293,8 +2269,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1287,14 +2263,33 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     return true;
+   }
+ 
+-  bool BindUniforms(Frame& f, DkShaderObj* vs, DkShaderObj* ps, const draw_util::ViewportInfo& vi, const RegisterFile& regs) {
++  bool BindUniforms(Frame& f, DkShaderObj* vs, DkShaderObj* ps, const draw_util::ViewportInfo& vi, const RegisterFile& regs, bool scene) {
+     DkCmdBuf cmd = f.cmdbuf;
+     uint32_t vs_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
      uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
      uint32_t sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
      if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
@@ -1590,7 +1597,17 @@ index 2205439..da090ae 100644
      SysConstants sys{};
      for (int i = 0; i < 3; i++) {
        sys.ndc_scale[i] = vi.ndc_scale[i];
-@@ -1311,8 +2306,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1304,6 +2299,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+     sys.alpha[0] = cc.alpha_test_enable ? 1.0f : 0.0f;
+     sys.alpha[1] = float(uint32_t(cc.alpha_func));
+     sys.alpha[2] = regs.Get<float>(XE_GPU_REG_RB_ALPHA_REF);
++    // Settings menu TEXTURE VIEW (tools/xenos2glsl.py emit_fetch_texture): only draws with a depth target (the scene's
++    // geometry); the post-effect and present passes (no depth) keep their fetches, so the picture reaches the screen.
++    sys.alpha[3] = scene ? float(hcu_settings.tex_view) : 0.f;
+     std::memcpy(sys.bools, &regs.values[XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031], sizeof(sys.bools));
+     std::memcpy(sys.loops, &regs.values[XE_GPU_REG_SHADER_CONSTANT_LOOP_00], sizeof(sys.loops));
+     std::memcpy(f.data.cpu + sys_off, &sys, sizeof(sys));
+@@ -1311,8 +2309,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
      dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
      dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
@@ -1599,7 +1616,7 @@ index 2205439..da090ae 100644
      return true;
    }
  
-@@ -1363,12 +2356,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1363,12 +2359,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
        HostImage* depth_img = nullptr;
        if (mode == xenos::EdramMode::kColorDepth) {
          color_img = TargetImage(color_info.color_base, pitch, ColorTargetFormatOf(color_info.color_format), false);
@@ -1614,7 +1631,7 @@ index 2205439..da090ae 100644
        }
        if (!color_img && !depth_img) continue;
        BindTargets(cmd, color_img, depth_img);
-@@ -1387,6 +2380,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1387,6 +2383,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
                  depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
                  color[1], color[2], color[3], z, scale);
        }
@@ -1625,7 +1642,7 @@ index 2205439..da090ae 100644
        clears_++;
        frame_clears_++;
      }
-@@ -1399,12 +2396,72 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1399,12 +2399,72 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -1700,7 +1717,7 @@ index 2205439..da090ae 100644
      if (!src) return true;
      uint32_t x = info.coordinate_info.edram_offset_x_div_8 * 8, y = info.coordinate_info.edram_offset_y_div_8 * 8;
      uint32_t w = info.coordinate_info.width_div_8 * 8, h = info.height_div_8 * 8;
-@@ -1412,10 +2469,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1412,10 +2472,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
      (void)dest_pitch; (void)dest_height;
      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
@@ -1719,7 +1736,7 @@ index 2205439..da090ae 100644
      dst->mem_bytes = dest_pitch * dest_height * 4;
      dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
      if (x + w > src->width) w = x < src->width ? src->width - x : 0;
-@@ -1447,11 +2511,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1447,11 +2514,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
        LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
                x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
      }
@@ -1748,7 +1765,7 @@ index 2205439..da090ae 100644
    // ----- shaders --------------------------------------------------------------------------------
    // The same two files as Shader::DumpUcode (shader_<hash>.ucode.bin.<ext> and the disassembly
    // shader_<hash>.ucode.<ext>, the translator's input), written with stdio: the SDK's version goes
-@@ -1521,7 +2602,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1521,7 +2605,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      std::vprintf(fmt, ap);
      std::printf("\n");
      va_end(ap);
@@ -1758,7 +1775,7 @@ index 2205439..da090ae 100644
    }
  
    DkDevice device_ = nullptr;
-@@ -1536,8 +2619,99 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1536,8 +2622,99 @@ class Deko3dCommandProcessor : public CommandProcessor {
    DkShader present_vs_shader_{}, present_fs_shader_{};
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
@@ -1858,7 +1875,7 @@ index 2205439..da090ae 100644
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
    uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
-@@ -1547,10 +2721,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1547,10 +2724,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
    HostImage* bound_color_ = nullptr;
    HostImage* bound_depth_ = nullptr;
    std::unordered_set<std::string> logged_;
@@ -2565,7 +2582,7 @@ index 670c4d3..7b07d7a 100644
          raise SystemExit('threading_posix.cpp: anchor not found: ' + old[:60])
      src = src.replace(old, new)
 diff --git b/tools/xenos2glsl.py a/tools/xenos2glsl.py
-index c9e15e7..537caca 100644
+index c9e15e7..90ce0f0 100644
 --- b/tools/xenos2glsl.py
 +++ a/tools/xenos2glsl.py
 @@ -6,7 +6,8 @@ its translator_disasm.cpp. Only what the game's shaders use is implemented; anyt
@@ -2588,7 +2605,15 @@ index c9e15e7..537caca 100644
  class Translator:
      def __init__(self, text, stage, name):
          self.stage = stage  # 'vert' or 'frag'
-@@ -102,14 +106,15 @@ class Translator:
+@@ -48,6 +52,7 @@ class Translator:
+         self.blocks = []      # (cf_index, kind, statements, extra) in order
+         self.attrs = []       # vertex attributes: dict(slot, offset, format, stride, signed, integer)
+         self.textures = {}    # slot -> dimension ('2D', '1D', '3D', 'Cube')
++        self.dbg_uv = False   # frag: the first fetch coordinate was stored for TEXTURE VIEW
+         self.max_reg = -1
+         self.reads_before_write = set()
+         self.written = {}     # register index -> components written so far (per component: `r0.z = ...`
+@@ -102,14 +107,15 @@ class Translator:
  
      def parse_source(self, tok, count):
          """Source operand -> GLSL expression with exactly `count` components (1, 2 or 4)."""
@@ -2609,7 +2634,7 @@ index c9e15e7..537caca 100644
          if swz is None:
              swz = 'xyzw'
          if len(swz) == 1:
-@@ -121,6 +126,8 @@ class Translator:
+@@ -121,6 +127,8 @@ class Translator:
              base = 'r%d' % idx
          elif relative:
              base = 'c[%d + aL]' % idx
@@ -2618,7 +2643,7 @@ index c9e15e7..537caca 100644
          else:
              base = 'c[%d]' % idx
          if count == 1:
-@@ -178,6 +185,13 @@ class Translator:
+@@ -178,6 +186,13 @@ class Translator:
          if op == 'vfetch_full':
              self.cur_slot = slot
              self.stride_words = int(kv.get('Stride', '0'))
@@ -2632,7 +2657,24 @@ index c9e15e7..537caca 100644
          attr = {
              'index': len(self.attrs),
              'slot': self.cur_slot,
-@@ -313,6 +327,11 @@ class Translator:
+@@ -221,7 +236,15 @@ class Translator:
+             if k not in ('FetchValidOnly', 'UseComputedLOD', 'MagFilter', 'MinFilter', 'MipFilter', 'AnisoFilter'):
+                 self.err('unsupported tfetch attribute %r' % p, rest)
+         tmp = 'tex_%d' % self.tmp_counter()
+-        self.body.append('vec4 %s = texture(tf_%d, %s);' % (tmp, slot, coord))
++        if self.stage == 'frag':
++            # Settings menu TEXTURE VIEW (Sys alpha.w, 0 = off): 1 = every fetch returns white (the picture without
++            # textures), 2/3 = the colour output is fract(first fetch coordinate x 16 / x 256) (the interpolated UV).
++            if not self.dbg_uv:
++                self.dbg_uv = True
++                self.body.append('dbg_uv = (%s).xy;' % coord)
++            self.body.append('vec4 %s = alpha.w > 0.5 && alpha.w < 1.5 ? vec4(1.0) : texture(tf_%d, %s);' % (tmp, slot, coord))
++        else:
++            self.body.append('vec4 %s = texture(tf_%d, %s);' % (tmp, slot, coord))
+         self.body.extend(self.write_masked(target, comps, tmp, False))
+ 
+     _tmp = 0
+@@ -313,6 +336,11 @@ class Translator:
              self.has_kill = True
              self.extra_kill = 'if (%s %s) discard;' % (a[0], cmp)
              return 'float(%s %s)' % (a[0], cmp)
@@ -2644,7 +2686,7 @@ index c9e15e7..537caca 100644
          if op == 'retain_prev': return 'ps'
          self.err('scalar op %s is not implemented' % op)
  
-@@ -497,6 +516,13 @@ class Translator:
+@@ -497,6 +525,13 @@ class Translator:
          out = ['#version 460', '// hcu xenos2glsl: %s (%s)' % (self.name, self.stage)]
          ind = '  '
          if self.stage == 'vert':
@@ -2658,7 +2700,7 @@ index c9e15e7..537caca 100644
              for a in self.attrs:
                  out.append('layout(location = %d) in vec4 in_%d;  // vf%d offset %d %s' % (
                      a['index'], a['index'], a['slot'], a['offset_words'], a['format']))
-@@ -511,7 +537,7 @@ class Translator:
+@@ -511,7 +546,7 @@ class Translator:
          colors = sorted(int(e[2:]) for e in self.exports if e.startswith('oC'))
          if self.stage == 'vert':
              for k in interps:
@@ -2667,15 +2709,26 @@ index c9e15e7..537caca 100644
          else:
              for k in colors:
                  out.append('layout(location = %d) out vec4 oC_%d;' % (k, k))
-@@ -524,6 +550,7 @@ class Translator:
+@@ -524,7 +559,10 @@ class Translator:
          for e in sorted(self.exports):
              out.append(ind + 'vec4 %s = vec4(0.0);' % e)
          out.append(ind + 'bool p0 = false;')
 +        out.append(ind + 'int a0 = 0;')
          out.append(ind + 'float ps = 0.0;')
++        if self.stage == 'frag':
++            out.append(ind + 'vec2 dbg_uv = vec2(0.0);')
  
          def block_cond(b):
-@@ -668,7 +695,10 @@ def main():
+             conds = []
+@@ -596,6 +634,7 @@ class Translator:
+                 out.append(ind + 'o_%d = o%d;' % (k, k))
+         else:
+             if colors:
++                out.append(ind + 'if (alpha.w > 1.5) oC0 = vec4(fract(dbg_uv * (alpha.w > 2.5 ? 256.0 : 16.0)), 0.0, 1.0);  // TEXTURE VIEW')
+                 out.append(ind + '// Alpha test (RB_COLORCONTROL): alpha.x enable, alpha.y function, alpha.z reference.')
+                 out.append(ind + 'if (alpha.x > 0.5) {')
+                 out.append(ind + '  uint f = uint(alpha.y); float a = oC0.w; bool pass = f == 7u || (f == 1u && a < alpha.z) || '
+@@ -668,7 +707,10 @@ def main():
      ap.add_argument('--all', help='translate every *.ucode.vert/frag in this directory')
      ap.add_argument('--out-dir', help='output directory for --all')
      ap.add_argument('--check', action='store_true', help='compile the output with uam')
