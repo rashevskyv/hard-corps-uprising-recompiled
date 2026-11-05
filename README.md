@@ -57,7 +57,7 @@ To pair or reorder controllers without leaving the game, open the settings menu,
 
 The Switch build reads DLC from `sdmc:/switch/hcu/user/`, in the same layout as the PC port's user data folder. You need your own Xbox Live Arcade marketplace packages of the DLC (content type `00000002` of title `58410A18`). Two ways to install them:
 
-- **With the PC port**: install the DLC in the PC launcher (**Install from package...** with each DLC package). Copy the folder `user_data/0000000000000000/58410A18` (next to the PC executable) to `sdmc:/switch/hcu/user/0000000000000000/58410A18`.
+- **With the PC port**: install the DLC in the PC launcher (the **DLC** page, **Install DLC...** with each DLC package). Copy the folder `user_data/0000000000000000/58410A18` (next to the PC executable) to `sdmc:/switch/hcu/user/0000000000000000/58410A18`.
 - **With the script**: `python tools/stfs_extract.py --dlc <package> <SD>/switch/hcu/user` for each package, where `<SD>` is the SD card root (or any folder you copy to the card afterwards).
 
 Both end with `sdmc:/switch/hcu/user/0000000000000000/58410A18/00000002/<content id>/` (the DLC files) and `.../58410A18/Headers/00000002/<content id>.header`. The Switch build treats every installed DLC as licensed.
