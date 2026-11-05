@@ -1,5 +1,5 @@
 diff --git b/src/gpu/deko3d_backend.cpp a/src/gpu/deko3d_backend.cpp
-index 2205439..912d3ec 100644
+index 2205439..5ecbf30 100644
 --- b/src/gpu/deko3d_backend.cpp
 +++ a/src/gpu/deko3d_backend.cpp
 @@ -21,9 +21,11 @@
@@ -820,14 +820,14 @@ index 2205439..912d3ec 100644
        // The resolve created it with the aligned height: the first swap trims it to the front buffer's size.
 -      front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, DkImageFormat_RGBA8_Unorm, false);
 +      front = GuestImage(f, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, guest_images_[frontbuffer_ptr]->format, false);
-     }
++    }
 +    if (view_image_) front = view_image_;  // settings menu VIEW (A/B of the console hatching)
 +    view_image_ = nullptr;
 +    if (step_log_) {
 +      Log("frame passes end: %u resolves, %u draws after the last one (VIEW STEP shows resolve %d)", step_n_, step_draws_,
 +          hcu_settings.view_step + 1);
 +      step_log_ = false;
-+    }
+     }
 +    if (hcu_settings.view == 3 && (hcu_settings.view_step != step_logged_ || !step_logged_once_)) {
 +      step_log_ = true;  // the next drawn frame lists its passes
 +      step_logged_ = hcu_settings.view_step;
@@ -860,7 +860,7 @@ index 2205439..912d3ec 100644
          uint32_t off = f.staging.Alloc(bytes, 0x1000);
          if (off == UINT32_MAX) return;
          DkImageView v;
-@@ -753,16 +1270,100 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -753,16 +1270,117 @@ class Deko3dCommandProcessor : public CommandProcessor {
          dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
          dkCmdBufCopyImageToBuffer(cmd, &v, &r, &cb, 0);
          char name[96];
@@ -886,9 +886,10 @@ index 2205439..912d3ec 100644
 +      trace_vf_.clear();
 +    }
 +#endif
-+    // The on-screen strip (gh-recomp): the version and the fps, uploaded into this frame's image before the present pass.
-+    HostImage* overlay = nullptr;
-+    if (overlay_on_) {
++    // The on-screen strip (gh-recomp), uploaded into this frame's image before the present pass. Two independent
++    // settings: OVERLAY = the version and the meter, FPS COUNTER = the fps. Each shows its own part; the fps alone is a
++    // short strip (overlay_w).
++    {
 +      const uint64_t now = armGetSystemTick();
 +      if (!fps_tick_) fps_tick_ = now;
 +      fps_frames_++;
@@ -897,13 +898,23 @@ index 2205439..912d3ec 100644
 +        fps_tick_ = now;
 +        fps_frames_ = 0;
 +      }
++    }
++    HostImage* overlay = nullptr;
++    uint32_t overlay_w = kOverlayW;
++    const bool strip_on = hcu_settings.strip != 0, fps_on = hcu_settings.fps_counter != 0;
++    if (strip_on || fps_on) {
 +      if (!overlay_[frame_]) overlay_[frame_] = CreateImage(kOverlayW, kOverlayH, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
 +      overlay = overlay_[frame_];
 +      if (overlay) {
 +        char text[96];
 +        char fps[24] = "";
-+        if (hcu_settings.fps_counter) std::snprintf(fps, sizeof(fps), "%u.%u fps  ", fps_x10_ / 10, fps_x10_ % 10);
-+        std::snprintf(text, sizeof(text), "HCU %s  %s%s", rex_nx_version(), fps, rex_nx_meter_text);
++        if (fps_on) std::snprintf(fps, sizeof(fps), "%u.%u fps", fps_x10_ / 10, fps_x10_ % 10);
++        if (strip_on) {
++          std::snprintf(text, sizeof(text), "HCU %s  %s%s%s", rex_nx_version(), fps, fps_on ? "  " : "", rex_nx_meter_text);
++        } else {
++          std::snprintf(text, sizeof(text), "%s", fps);
++          overlay_w = 4 + uint32_t(std::strlen(text)) * 6 * kOverlayScale + 2;  // DrawText: from x = 4, 6 columns a glyph
++        }
 +        if (std::strcmp(text, overlay_text_) != 0) {
 +          RenderOverlayText(overlay_px_.data(), text);
 +          std::memcpy(overlay_text_, text, sizeof(overlay_text_));
@@ -923,11 +934,17 @@ index 2205439..912d3ec 100644
 +        }
 +      }
 +    }
-+    // The settings menu, while it is open: drawn over the picture in the middle of the screen.
++    // The settings menu, while it is open: drawn over the picture in the middle of the screen, as large as its lines
++    // (menu_w x menu_h of the kMenuW x kMenuH image).
 +    HostImage* menu = nullptr;
++    uint32_t menu_w = kMenuW, menu_h = kMenuH;
 +    {
 +      char lines[kMenuLines][48];
 +      const int n = hcu_menu_lines(lines, kMenuLines);
++      size_t longest = 0;
++      for (int i = 0; i < n; i++) longest = std::max(longest, std::strlen(lines[i]));
++      menu_w = std::min(kMenuW, 24 + uint32_t(longest) * 6 * kOverlayScale);  // DrawText: from x = 12, 6 columns a glyph
++      menu_h = std::min(kMenuH, 14 + uint32_t(n) * 18);                       // from y = 8, 18 rows a line
 +      if (n && !menu_[frame_]) menu_[frame_] = CreateImage(kMenuW, kMenuH, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
 +      if (n && menu_[frame_]) {
 +        for (uint32_t& p : menu_px_) p = 0xFF202020u;
@@ -965,7 +982,7 @@ index 2205439..912d3ec 100644
      if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
      HostImage* target = swap_images_[slot];
      dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
-@@ -800,53 +1401,228 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -800,53 +1418,227 @@ class Deko3dCommandProcessor : public CommandProcessor {
        if (dslot != UINT32_MAX) {
          DkResHandle handle = dkMakeTextureHandle(dslot, 4);  // linear, clamp
          dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &handle, 1);
@@ -994,7 +1011,7 @@ index 2205439..912d3ec 100644
 +          const uint32_t ox = 8, oy = kPresentHeight - kOverlayH - 8;
 +          DkViewport ovp{float(ox), float(oy), float(kOverlayW), float(kOverlayH), 0.0f, 1.0f};
 +          dkCmdBufSetViewports(cmd, 0, &ovp, 1);
-+          DkScissor osc{ox, oy, kOverlayW, kOverlayH};
++          DkScissor osc{ox, oy, overlay_w, kOverlayH};  // the viewport stays the whole image: 1:1 pixels
 +          dkCmdBufSetScissors(cmd, 0, &osc, 1);
 +          DkResHandle oh = dkMakeTextureHandle(oslot, 0);  // nearest, clamp
 +          dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &oh, 1);
@@ -1004,10 +1021,10 @@ index 2205439..912d3ec 100644
 +      if (menu) {
 +        const uint32_t mslot = DescriptorFor(f, menu, 0);
 +        if (mslot != UINT32_MAX) {
-+          const uint32_t mx = (kPresentWidth - kMenuW) / 2, my = (kPresentHeight - kMenuH) / 2;
-+          DkViewport mvp{float(mx), float(my), float(kMenuW), float(kMenuH), 0.0f, 1.0f};
++          const uint32_t mx = (kPresentWidth - menu_w) / 2, my = (kPresentHeight - menu_h) / 2;
++          DkViewport mvp{float(mx), float(my), float(kMenuW), float(kMenuH), 0.0f, 1.0f};  // the whole image: 1:1 pixels
 +          dkCmdBufSetViewports(cmd, 0, &mvp, 1);
-+          DkScissor msc{mx, my, kMenuW, kMenuH};
++          DkScissor msc{mx, my, menu_w, menu_h};
 +          dkCmdBufSetScissors(cmd, 0, &msc, 1);
 +          DkResHandle mh = dkMakeTextureHandle(mslot, 0);
 +          dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &mh, 1);
@@ -1177,7 +1194,6 @@ index 2205439..912d3ec 100644
 +      if (unlink((debug_dir_ + "dump_now").c_str()) == 0) hcu_settings.dump = 1;
 +    }
 +    // The settings menu's live values (src/settings_menu.cpp; the fps file sets the start value).
-+    overlay_on_ = hcu_settings.strip != 0;
 +    shadow_bias_ = hcu_settings.shadow_bias;
 +    shadow_slope_ = hcu_settings.shadow_slope;
 +    z_bias_ = hcu_settings.colour_bias;
@@ -1204,7 +1220,7 @@ index 2205439..912d3ec 100644
  #ifdef HCU_DK_GL
      static const uint32_t start = std::getenv("HCU_DK_START_SWAP") ? uint32_t(std::atoi(std::getenv("HCU_DK_START_SWAP"))) : 0;
      static const char* dir = std::getenv("HCU_DK_DUMP_DIR");
-@@ -863,17 +1639,60 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -863,17 +1655,60 @@ class Deko3dCommandProcessor : public CommandProcessor {
  #endif
    }
    mutable bool skip_checked_[1] = {false};
@@ -1266,7 +1282,7 @@ index 2205439..912d3ec 100644
      f.data.Reset();
      f.staging.Reset();
      f.next_descriptor = 0;
-@@ -882,6 +1701,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -882,6 +1717,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
      dkCmdBufAddMemory(f.cmdbuf, cmdmem_.block, f.cmd_offset, kFrameCmdBytes);
      dkCmdBufBindImageDescriptorSet(f.cmdbuf, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
      dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
@@ -1280,7 +1296,7 @@ index 2205439..912d3ec 100644
      bound_color_ = nullptr;
      bound_depth_ = nullptr;
    }
-@@ -923,6 +1749,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -923,6 +1765,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // serials. Linux: a hash of the range against the hash taken when the contents were set.
    uint64_t HashMemory(uint32_t physical, uint32_t bytes) const {
  #ifdef HCU_DK_GL
@@ -1289,7 +1305,7 @@ index 2205439..912d3ec 100644
      const uint8_t* p = memory_->TranslatePhysical(physical);
      uint64_t h = 1469598103934665603ull;
      uint32_t words = bytes / 8;
-@@ -1029,7 +1857,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1029,7 +1873,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
      if (!pitch) return nullptr;
      uint64_t key = (uint64_t(edram_base) << 32) | (uint64_t(pitch) << 1) | (is_depth ? 1 : 0);
      auto it = targets_.find(key);
@@ -1308,7 +1324,7 @@ index 2205439..912d3ec 100644
      uint32_t tiles = edram_base < kEdramTiles ? kEdramTiles - edram_base : 0;
      uint32_t rows = tiles ? uint32_t((uint64_t(tiles) * 80 * 16) / pitch) : 0;
      if (rows > kMaxTargetHeight) rows = kMaxTargetHeight;
-@@ -1040,8 +1878,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1040,8 +1894,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
      img->edram_pitch = pitch;
      targets_.emplace(key, img);
      ClearNewImage(img);
@@ -1319,7 +1335,7 @@ index 2205439..912d3ec 100644
      return img;
    }
  
-@@ -1060,20 +1898,30 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1060,20 +1914,30 @@ class Deko3dCommandProcessor : public CommandProcessor {
    // The image at a guest address (resolve destinations, textures). A fetch or a swap asks for the
    // exact size (a resolve created it with the aligned height: resized once, contents copied); a
    // resolve asks for a minimum size (`at_least`) and creates with the aligned size (`create_w/h`).
@@ -1354,7 +1370,7 @@ index 2205439..912d3ec 100644
              img->height, fresh->width, fresh->height);
          it->second = fresh;
          RecycleImage(img);
-@@ -1081,11 +1929,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1081,11 +1945,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
        }
        if (img->width == width && img->height == height) return img;
        if (at_least && width <= img->width && height <= img->height) return img;
@@ -1368,7 +1384,7 @@ index 2205439..912d3ec 100644
        if (!resized) return img;
        ClearNewImage(resized);
        uint32_t cw = std::min(width, img->width), ch = std::min(height, img->height);
-@@ -1097,16 +1946,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1097,16 +1962,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
        dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
        dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
        resized->from_resolve = img->from_resolve;
@@ -1388,7 +1404,7 @@ index 2205439..912d3ec 100644
      if (!img) return nullptr;
      img->guest_base = base;
      guest_images_.emplace(base, img);
-@@ -1114,6 +1964,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1114,6 +1980,38 @@ class Deko3dCommandProcessor : public CommandProcessor {
      return img;
    }
  
@@ -1427,7 +1443,7 @@ index 2205439..912d3ec 100644
    HostImage* TextureImage(Frame& f, const TextureInfo& info, const xenos::xe_gpu_texture_fetch_t& fetch) {
      DkImageFormat format;
      bool reversed;
-@@ -1123,13 +2005,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1123,13 +2021,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
      }
      uint32_t base = info.memory.base_address;
      // TextureInfo keeps the fetch constant's fields: the size minus one.
@@ -1471,7 +1487,7 @@ index 2205439..912d3ec 100644
      // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
      if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
      if (img->content_serial) {
-@@ -1197,6 +2107,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1197,6 +2123,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
    uint32_t dump_count_ = 0;
  #endif
  
@@ -1497,7 +1513,7 @@ index 2205439..912d3ec 100644
    bool UploadTexture(Frame& f, HostImage& img, const TextureInfo& info, xenos::Endian endian) {
      const FormatInfo* fi = info.format_info();
      const uint32_t width = info.width + 1, height = info.height + 1;  // TextureInfo keeps size minus one
-@@ -1204,6 +2133,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1204,6 +2149,41 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t bh = (height + fi->block_height - 1) / fi->block_height;
      uint32_t bpb = fi->bytes_per_block();
      uint32_t bytes = bw * bh * bpb;
@@ -1539,7 +1555,7 @@ index 2205439..912d3ec 100644
      uint32_t off = f.staging.Alloc(bytes, 0x100);
      if (off == UINT32_MAX) { LogOnce("staging", "staging ring full: %u KB texture not uploaded", bytes >> 10); return false; }
      uint8_t* dst = f.staging.cpu + off;
-@@ -1226,7 +2190,21 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1226,7 +2206,21 @@ class Deko3dCommandProcessor : public CommandProcessor {
      // A re-upload (the game reuses sprite memory between draws): earlier draws of this frame may still be
      // sampling the image.
      if (img.content_serial) dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, 0);
@@ -1562,7 +1578,7 @@ index 2205439..912d3ec 100644
      dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
      uploads_++;
      upload_bytes_ += bytes;
-@@ -1287,14 +2265,33 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1287,14 +2281,33 @@ class Deko3dCommandProcessor : public CommandProcessor {
      return true;
    }
  
@@ -1599,7 +1615,7 @@ index 2205439..912d3ec 100644
      SysConstants sys{};
      for (int i = 0; i < 3; i++) {
        sys.ndc_scale[i] = vi.ndc_scale[i];
-@@ -1304,6 +2301,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1304,6 +2317,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      sys.alpha[0] = cc.alpha_test_enable ? 1.0f : 0.0f;
      sys.alpha[1] = float(uint32_t(cc.alpha_func));
      sys.alpha[2] = regs.Get<float>(XE_GPU_REG_RB_ALPHA_REF);
@@ -1609,7 +1625,7 @@ index 2205439..912d3ec 100644
      std::memcpy(sys.bools, &regs.values[XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031], sizeof(sys.bools));
      std::memcpy(sys.loops, &regs.values[XE_GPU_REG_SHADER_CONSTANT_LOOP_00], sizeof(sys.loops));
      std::memcpy(f.data.cpu + sys_off, &sys, sizeof(sys));
-@@ -1311,8 +2311,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1311,8 +2327,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
      dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
      dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
@@ -1618,7 +1634,7 @@ index 2205439..912d3ec 100644
      return true;
    }
  
-@@ -1363,12 +2361,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1363,12 +2377,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
        HostImage* depth_img = nullptr;
        if (mode == xenos::EdramMode::kColorDepth) {
          color_img = TargetImage(color_info.color_base, pitch, ColorTargetFormatOf(color_info.color_format), false);
@@ -1633,7 +1649,7 @@ index 2205439..912d3ec 100644
        }
        if (!color_img && !depth_img) continue;
        BindTargets(cmd, color_img, depth_img);
-@@ -1387,6 +2385,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1387,6 +2401,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
                  depth_img ? " depth" : "", color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0],
                  color[1], color[2], color[3], z, scale);
        }
@@ -1644,7 +1660,7 @@ index 2205439..912d3ec 100644
        clears_++;
        frame_clears_++;
      }
-@@ -1399,12 +2401,72 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1399,12 +2417,72 @@ class Deko3dCommandProcessor : public CommandProcessor {
      DkCmdBuf cmd = f.cmdbuf;
      draw_util::ResolveInfo info;
      if (!draw_util::GetResolveInfo(regs, *memory_, 1, 1, false, false, info)) { LogOnce("resolve", "GetResolveInfo failed"); return true; }
@@ -1719,7 +1735,7 @@ index 2205439..912d3ec 100644
      if (!src) return true;
      uint32_t x = info.coordinate_info.edram_offset_x_div_8 * 8, y = info.coordinate_info.edram_offset_y_div_8 * 8;
      uint32_t w = info.coordinate_info.width_div_8 * 8, h = info.height_div_8 * 8;
-@@ -1412,10 +2474,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1412,10 +2490,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
      uint32_t dest_height = info.copy_dest_coordinate_info.height_aligned_div_32 * 32;
      (void)dest_pitch; (void)dest_height;
      uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
@@ -1738,7 +1754,7 @@ index 2205439..912d3ec 100644
      dst->mem_bytes = dest_pitch * dest_height * 4;
      dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
      if (x + w > src->width) w = x < src->width ? src->width - x : 0;
-@@ -1447,11 +2516,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1447,11 +2532,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
        LogOnce(key, "resolve EDRAM %u pitch %u rect %u,%u %ux%u -> %08X (%ux%u image) at %u,%u%s", info.color_edram_info.base_tiles, src_pitch,
                x, y, w, h, info.copy_dest_base, dst->width, dst->height, dx, dy, info.IsClearingColor() ? ", then cleared" : "");
      }
@@ -1767,7 +1783,7 @@ index 2205439..912d3ec 100644
    // ----- shaders --------------------------------------------------------------------------------
    // The same two files as Shader::DumpUcode (shader_<hash>.ucode.bin.<ext> and the disassembly
    // shader_<hash>.ucode.<ext>, the translator's input), written with stdio: the SDK's version goes
-@@ -1521,7 +2607,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1521,7 +2623,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
      std::vprintf(fmt, ap);
      std::printf("\n");
      va_end(ap);
@@ -1777,7 +1793,7 @@ index 2205439..912d3ec 100644
    }
  
    DkDevice device_ = nullptr;
-@@ -1536,8 +2624,99 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1536,8 +2640,98 @@ class Deko3dCommandProcessor : public CommandProcessor {
    DkShader present_vs_shader_{}, present_fs_shader_{};
    bool present_vs_ = false, present_fs_ = false;
    bool present_target_ = false;
@@ -1790,7 +1806,6 @@ index 2205439..912d3ec 100644
 +  float z_bias_ = -16.f;
 +  float shadow_bias_ = 32.f, shadow_slope_ = 1.5f;  // shadow-pass depth bias (file zfix)
 +  bool no_precise_ = false;  // zfix "noprecise"
-+  bool overlay_on_ = true;
 +  HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
 +  HostImage* menu_[kFrames] = {};     // the settings menu, the same way
 +  std::vector<uint32_t> menu_px_ = std::vector<uint32_t>(kMenuW * kMenuH);
@@ -1877,7 +1892,7 @@ index 2205439..912d3ec 100644
    std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
    uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
    uint64_t dirty_pages_ = 0, dirty_pages_at_swap_ = 0;
-@@ -1547,10 +2726,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
+@@ -1547,10 +2741,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
    HostImage* bound_color_ = nullptr;
    HostImage* bound_depth_ = nullptr;
    std::unordered_set<std::string> logged_;
@@ -2091,28 +2106,29 @@ index 8fed3c9..e6a3cab 100644
  static inline void* dlopen(const char* filename, int flags) {
      (void)filename;
 diff --git b/switch/host/include/rex/input/nx/nx_input_driver.h a/switch/host/include/rex/input/nx/nx_input_driver.h
-index ae96d79..a4798f0 100644
+index ae96d79..e190544 100644
 --- b/switch/host/include/rex/input/nx/nx_input_driver.h
 +++ a/switch/host/include/rex/input/nx/nx_input_driver.h
 @@ -1,5 +1,6 @@
 -// libnx pad input for the ReXGlue input system: one Xbox 360 gamepad from the console's default pad
 -// (handheld, a Joy-Con pair, or a Pro Controller).
-+// libnx pad input for the ReXGlue input system: two Xbox 360 gamepads from the console's pads 1 and 2
-+// (handheld, a Joy-Con pair, or a Pro Controller each; a single Joy-Con is not accepted, the game
-+// uses every button). The settings menu's CONTROLLERS item opens the console's controller applet.
++// libnx pad input for the ReXGlue input system: two Xbox 360 gamepads for players 1 and 2. A player's
++// controller is the handheld console, a Joy-Con pair or a Pro Controller; a single Joy-Con is not accepted
++// (the game uses every button). The settings menu's CONTROLLERS item opens the console's controller applet.
  #pragma once
  
  #include <switch.h>
-@@ -12,6 +13,8 @@ namespace rex::input::nx {
+@@ -12,6 +13,9 @@ namespace rex::input::nx {
  
  class NXInputDriver final : public InputDriver {
   public:
 +  static constexpr int kPads = 2;
++  static constexpr int kSources = 3;  // the handheld console, wireless controllers 1 and 2
 +
    explicit NXInputDriver(rex::ui::Window* window, size_t window_z_order);
    ~NXInputDriver() override;
  
-@@ -31,10 +34,14 @@ class NXInputDriver final : public InputDriver {
+@@ -31,10 +35,16 @@ class NXInputDriver final : public InputDriver {
      bool logged;
    };
    void LoadSchedule();
@@ -2121,21 +2137,23 @@ index ae96d79..a4798f0 100644
 -  uint32_t packet_number_ = 0;
 -  uint64_t last_buttons_ = 0;
 +  void ShowControllerApplet();
-+  // Rumble: the two HD rumble devices of each pad's style in use (handheld, Joy-Con pair, Pro Controller).
++  int SourceOf(int pad) const;
++  // Rumble: the two HD rumble devices of each player's controller (handheld, Joy-Con pair, Pro Controller).
 +  HidVibrationDeviceHandle vib_handles_[kPads][2] = {};
-+  uint32_t vib_style_[kPads] = {};  // the style the handles were made for (0 = none yet)
++  uint32_t vib_key_[kPads] = {};  // the source and style the handles were made for (0 = none yet)
 +
-+  PadState pads_[kPads] = {};
++  PadState sources_[kSources] = {};
++  int logged_players_ = 0;
 +  uint32_t packet_number_[kPads] = {};
 +  uint64_t last_buttons_[kPads] = {};
    std::vector<Scheduled> schedule_;
    uint64_t t0_tick_ = 0;
    bool schedule_loaded_ = false;
 diff --git b/switch/host/input/nx_input_driver.cpp a/switch/host/input/nx_input_driver.cpp
-index 378de87..20655a9 100644
+index 378de87..d9e9696 100644
 --- b/switch/host/input/nx_input_driver.cpp
 +++ a/switch/host/input/nx_input_driver.cpp
-@@ -7,11 +7,20 @@
+@@ -7,11 +7,88 @@
  #include <rex/input/flags.h>
  #include <rex/logging.h>
  
@@ -2147,7 +2165,75 @@ index 378de87..20655a9 100644
  
 -constexpr DeviceId kPad = static_cast<DeviceId>(0x4E580000);  // "NX"
 +constexpr DeviceId kPad = static_cast<DeviceId>(0x4E580000);  // "NX": pad 1; kPad + 1 = pad 2
-+constexpr HidNpadIdType kPadIds[NXInputDriver::kPads] = {HidNpadIdType_No1, HidNpadIdType_No2};
++// The controllers a player can hold (sources_): the handheld console, wireless controllers 1 and 2.
++constexpr HidNpadIdType kSourceIds[NXInputDriver::kSources] = {HidNpadIdType_Handheld, HidNpadIdType_No1, HidNpadIdType_No2};
++constexpr const char* kSourceNames[NXInputDriver::kSources] = {"the handheld console", "controller 1", "controller 2"};
++
++// One run of the console's controller applet: 1 or 2 players, full pads (a Joy-Con pair counts). It is libnx's
++// hidLaShowControllerSupport opened up for the log: libnx folds a bad applet exit and the applet's own error into
++// one code (0x5D59 on firmware 23.0.1 with build 0.300: the screen flashed and no applet came). `system` = the
++// variant the HOME menu uses (it always shows its screen). False = it ended at once with an error, so no screen
++// was shown.
++bool RunControllerApplet(bool system) {
++  HidLaControllerSupportArg arg;
++  hidLaCreateControllerSupportArg(&arg);
++  arg.hdr.player_count_min = 1;
++  arg.hdr.player_count_max = NXInputDriver::kPads;
++  const char* name = system ? "system variant" : "application variant";
++  if (hosversionBefore(8, 0, 0)) {  // the older argument layout: libnx converts it
++    HidLaControllerSupportResultInfo info = {};
++    const Result rc = system ? hidLaShowControllerSupportForSystem(&info, &arg, true) : hidLaShowControllerSupport(&info, &arg);
++    std::printf("[nx] pad: controller applet (%s): rc 0x%X, %d player(s)\n", name, rc, int(info.player_count));
++    std::fflush(stdout);
++    return true;
++  }
++  HidLaControllerSupportArgPrivate priv = {};
++  priv.private_size = sizeof(priv);
++  priv.arg_size = sizeof(arg);
++  priv.flag0 = system;
++  priv.flag1 = system;
++  priv.mode = HidLaControllerSupportMode_ShowControllerSupport;
++  u32 styles = 0;
++  HidNpadJoyHoldType hold = HidNpadJoyHoldType_Vertical;
++  hidGetSupportedNpadStyleSet(&styles);
++  hidGetNpadJoyHoldType(&hold);
++  priv.npad_style_set = styles;
++  priv.npad_joy_hold_type = hold;
++  AppletHolder holder;
++  Result rc = appletCreateLibraryApplet(&holder, AppletId_LibraryAppletController, LibAppletMode_AllForeground);
++  if (R_FAILED(rc)) {
++    std::printf("[nx] pad: controller applet (%s): not created, rc 0x%X\n", name, rc);
++    std::fflush(stdout);
++    return false;
++  }
++  LibAppletArgs common;
++  libappletArgsCreate(&common, hosversionAtLeast(11, 0, 0) ? 0x8 : 0x7);
++  libappletArgsSetPlayStartupSound(&common, system);
++  rc = libappletArgsPush(&common, &holder);
++  if (R_SUCCEEDED(rc)) rc = libappletPushInData(&holder, &priv, sizeof(priv));
++  if (R_SUCCEEDED(rc)) rc = libappletPushInData(&holder, &arg, sizeof(arg));
++  const uint64_t t0 = armGetSystemTick();
++  if (R_SUCCEEDED(rc)) rc = appletHolderStart(&holder);
++  int reason = -1;
++  HidLaControllerSupportResultInfoInternal out = {};
++  size_t got = 0;
++  Result pop = 0;
++  if (R_SUCCEEDED(rc)) {
++    appletHolderJoin(&holder);
++    reason = int(appletHolderGetExitReason(&holder));
++    pop = libappletPopOutData(&holder, &out, sizeof(out), &got);
++  }
++  appletHolderClose(&holder);
++  const uint32_t ms = uint32_t(armTicksToNs(armGetSystemTick() - t0) / 1000000ull);
++  const bool ok = R_SUCCEEDED(rc) && reason == LibAppletExitReason_Normal && R_SUCCEEDED(pop) && out.res == 0;
++  std::printf("[nx] pad: controller applet (%s): %s after %u ms; styles 0x%X, hold %d, start rc 0x%X, exit reason %d (0 normal, "
++              "1 cancelled, 2 abnormal, 10 unexpected), reply %zu bytes rc 0x%X, result %u (0 ok, 2 style not supported, "
++              "other cancelled), %d player(s), selected id %u\n",
++              name, ok ? "ok" : "failed", ms, styles, int(hold), rc, reason, got, pop, out.res, int(out.info.player_count),
++              out.info.selected_id);
++  std::fflush(stdout);
++  return ok || ms >= 1500;  // a failure after that long is the player's own cancel
++}
 +
 +// The pad index of a device id, or -1.
 +int PadIndex(DeviceId id) {
@@ -2157,22 +2243,30 @@ index 378de87..20655a9 100644
  
  // Positional mapping: the Switch's B/A/Y/X sit where the 360's A/B/X/Y sit.
  struct ButtonMap {
-@@ -49,23 +58,31 @@ NXInputDriver::NXInputDriver(rex::ui::Window* window, size_t window_z_order)
+@@ -49,23 +126,39 @@ NXInputDriver::NXInputDriver(rex::ui::Window* window, size_t window_z_order)
  NXInputDriver::~NXInputDriver() = default;
  
  X_STATUS NXInputDriver::Setup() {
 -  padConfigureInput(1, HidNpadStyleSet_NpadStandard);
 -  padInitializeDefault(&pad_);
 -  REXLOG_INFO("[nx] input: libnx pad (handheld / Joy-Con pair / Pro Controller) as gamepad 0");
-+  // Two players, full pads only (NpadStandard = Pro Controller, Joy-Con pair, handheld): the game uses every
-+  // button, so a single Joy-Con is not offered. Pad 1 is also the handheld console.
-+  padConfigureInput(kPads, HidNpadStyleSet_NpadStandard);
-+  padInitializeDefault(&pads_[0]);
-+  padInitialize(&pads_[1], HidNpadIdType_No2);
-+  REXLOG_INFO("[nx] input: libnx pads 1 and 2 (handheld / Joy-Con pair / Pro Controller) as gamepads 0 and 1");
++  // Two players, full pads only (NpadFullCtrl = Pro Controller, Joy-Con pair, handheld): the game uses every
++  // button, so a single Joy-Con is not offered (NpadStandard, used up to build 0.300, also let single Joy-Cons in).
++  padConfigureInput(kPads, HidNpadStyleSet_NpadFullCtrl);
++  for (int i = 0; i < kSources; i++) padInitialize(&sources_[i], kSourceIds[i]);
++  REXLOG_INFO("[nx] input: the handheld console and controllers 1 and 2 (Joy-Con pair / Pro Controller) as gamepads 0 and 1");
    return X_STATUS_SUCCESS;
  }
  
++// The source that is player `pad`'s controller now. The handheld console is player 1 and the first wireless
++// controller is then player 2 (up to build 0.300 one pad read both, so a Pro Controller beside the handheld console
++// was a copy of player 1). Without the handheld console (docked, Joy-Cons detached), or with two wireless
++// controllers, the players are controllers 1 and 2.
++int NXInputDriver::SourceOf(int pad) const {
++  const bool handheld = padIsConnected(&sources_[0]) && !(padIsConnected(&sources_[1]) && padIsConnected(&sources_[2]));
++  return pad + (handheld ? 0 : 1);
++}
++
 +// Both pads, pad 1 first: the input system numbers them in this order, and SlotAssignment gives pad n to user n.
  void NXInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
 -  DeviceInfo info;
@@ -2194,26 +2288,18 @@ index 378de87..20655a9 100644
 -  if (id != kPad) {
 +  const int pad = PadIndex(id);
 +  // Pad 2 is a device only while a controller holds it (the last GetDeviceState poll), as on the console.
-+  if (pad < 0 || (pad == 1 && !padIsConnected(&pads_[pad]))) {
++  if (pad < 0 || (pad == 1 && !padIsConnected(&sources_[SourceOf(pad)]))) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
    if (out_caps) {
-@@ -136,16 +153,40 @@ void NXInputDriver::LoadSchedule() {
+@@ -136,16 +229,43 @@ void NXInputDriver::LoadSchedule() {
    std::fflush(stdout);
  }
  
-+// The console's controller applet: 1 or 2 players, full pads (a Joy-Con pair counts), handheld not allowed, so
-+// a second player can pair and take pad 2. Opened from the settings menu (CONTROLLERS) on the next pad poll.
++// The console's controller applet, opened from the settings menu (CONTROLLERS) on the next pad poll: a second
++// player can pair a controller there. The application variant first; the system variant when that ends at once.
 +void NXInputDriver::ShowControllerApplet() {
-+  HidLaControllerSupportArg arg;
-+  hidLaCreateControllerSupportArg(&arg);
-+  arg.hdr.player_count_min = 1;
-+  arg.hdr.player_count_max = kPads;
-+  HidLaControllerSupportResultInfo info = {};
-+  const Result rc = hidLaShowControllerSupport(&info, &arg);
-+  std::printf("[nx] pad: controller applet rc 0x%X, %d player(s), selected id %u\n", rc, int(info.player_count),
-+              info.selected_id);
-+  std::fflush(stdout);
++  if (!RunControllerApplet(false)) RunControllerApplet(true);
 +}
 +
  X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
@@ -2222,15 +2308,27 @@ index 378de87..20655a9 100644
 +  if (pad < 0) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
    }
-+  PadState& pad_ = pads_[pad];
 +  uint32_t& packet_number_ = this->packet_number_[pad];
 +  uint64_t& last_buttons_ = this->last_buttons_[pad];
    if (!schedule_loaded_) LoadSchedule();
+-  padUpdate(&pad_);
 +  if (pad == 0 && hcu_settings.pad_applet) {
 +    hcu_settings.pad_applet = 0;
 +    ShowControllerApplet();
 +  }
-   padUpdate(&pad_);
++  for (PadState& source : sources_) padUpdate(&source);
++  const int src = SourceOf(pad);
++  PadState& pad_ = sources_[src];
++  if (pad == 0) {  // the log: who holds which player, at each change
++    const int now = 1 + src + (padIsConnected(&sources_[SourceOf(1)]) ? 8 : 0);
++    if (now != logged_players_) {
++      logged_players_ = now;
++      std::printf("[nx] pad: connected: handheld %d, controller 1 %d, controller 2 %d; player 1 = %s, player 2 = %s\n",
++                  int(padIsConnected(&sources_[0])), int(padIsConnected(&sources_[1])), int(padIsConnected(&sources_[2])),
++                  kSourceNames[src], (now & 8) ? kSourceNames[SourceOf(1)] : "nobody");
++      std::fflush(stdout);
++    }
++  }
 +  // Pad 2 only while a controller holds it: the game then sees player 2's pad as disconnected, as on the console.
 +  if (pad == 1 && !padIsConnected(&pad_)) return X_ERROR_DEVICE_NOT_CONNECTED;
    uint64_t held = padGetButtons(&pad_);
@@ -2241,7 +2339,7 @@ index 378de87..20655a9 100644
      const uint64_t now = armGetSystemTick();
      for (Scheduled& s : schedule_) {
        if (now >= s.start_tick && now < s.end_tick) {
-@@ -162,6 +203,35 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -162,6 +282,35 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
      }
      if (scheduled || scheduled_lt || scheduled_rt) held ^= 0x8000000000000000ull;  // a change: a new packet
    }
@@ -2277,7 +2375,7 @@ index 378de87..20655a9 100644
    const HidAnalogStickState left = padGetStickPos(&pad_, 0);
    const HidAnalogStickState right = padGetStickPos(&pad_, 1);
    if (out_state) {
-@@ -186,15 +256,61 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+@@ -186,15 +335,66 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
    return X_ERROR_SUCCESS;
  }
  
@@ -2289,13 +2387,14 @@ index 378de87..20655a9 100644
 +  const int pad = PadIndex(id);
 +  if (pad < 0) return X_ERROR_DEVICE_NOT_CONNECTED;
 +  if (!vibration) return X_ERROR_SUCCESS;
-+  PadState& pad_ = pads_[pad];
++  const int src = SourceOf(pad);
++  PadState& pad_ = sources_[src];
 +  HidVibrationDeviceHandle* vib_handles_ = this->vib_handles_[pad];
-+  uint32_t& vib_style_ = this->vib_style_[pad];
++  uint32_t& vib_key_ = this->vib_key_[pad];
 +  X_INPUT_VIBRATION zero{};
 +  if (!hcu_settings.rumble) vibration = &zero;  // also stops a rumble that was on when it was turned off
 +  const uint32_t styles = padGetStyleSet(&pad_);
-+  const bool handheld = pad == 0 && padIsHandheld(&pad_);
++  const bool handheld = src == 0 && padIsHandheld(&pad_);
 +  const uint32_t style = handheld                              ? HidNpadStyleTag_NpadHandheld
 +                         : (styles & HidNpadStyleTag_NpadFullKey) ? HidNpadStyleTag_NpadFullKey
 +                         : (styles & HidNpadStyleTag_NpadJoyDual) ? HidNpadStyleTag_NpadJoyDual
@@ -2311,13 +2410,17 @@ index 378de87..20655a9 100644
 +                styles, int(handheld));
 +  }
 +  if (!style) return X_ERROR_SUCCESS;
-+  if (style != vib_style_) {
-+    const Result rc = hidInitializeVibrationDevices(vib_handles_, 2, handheld ? HidNpadIdType_Handheld : kPadIds[pad],
-+                                                    static_cast<HidNpadStyleTag>(style));
-+    std::printf("[nx] rumble: pad %d vibration devices for style 0x%X (%s): rc 0x%X\n", pad + 1, style,
-+                handheld ? "handheld" : "No1/No2", rc);
++  const uint32_t key = style | uint32_t(src + 1) << 28;  // the player's controller changed: new devices
++  if (key != vib_key_) {
++    if (vib_key_) {  // stop the controller the player held before
++      HidVibrationValue stop[2] = {{0.0f, 160.0f, 0.0f, 320.0f}, {0.0f, 160.0f, 0.0f, 320.0f}};
++      hidSendVibrationValues(vib_handles_, stop, 2);
++      vib_key_ = 0;
++    }
++    const Result rc = hidInitializeVibrationDevices(vib_handles_, 2, kSourceIds[src], static_cast<HidNpadStyleTag>(style));
++    std::printf("[nx] rumble: player %d vibration devices for style 0x%X (%s): rc 0x%X\n", pad + 1, style, kSourceNames[src], rc);
 +    if (R_FAILED(rc)) return X_ERROR_SUCCESS;
-+    vib_style_ = style;
++    vib_key_ = key;
 +  }
 +  HidVibrationValue v[2];
 +  for (HidVibrationValue& x : v) {
