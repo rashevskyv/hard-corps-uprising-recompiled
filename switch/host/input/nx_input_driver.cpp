@@ -14,7 +14,75 @@ namespace rex::input::nx {
 namespace {
 
 constexpr DeviceId kPad = static_cast<DeviceId>(0x4E580000);  // "NX": pad 1; kPad + 1 = pad 2
-constexpr HidNpadIdType kPadIds[NXInputDriver::kPads] = {HidNpadIdType_No1, HidNpadIdType_No2};
+// The controllers a player can hold (sources_): the handheld console, wireless controllers 1 and 2.
+constexpr HidNpadIdType kSourceIds[NXInputDriver::kSources] = {HidNpadIdType_Handheld, HidNpadIdType_No1, HidNpadIdType_No2};
+constexpr const char* kSourceNames[NXInputDriver::kSources] = {"the handheld console", "controller 1", "controller 2"};
+
+// One run of the console's controller applet: 1 or 2 players, full pads (a Joy-Con pair counts). It is libnx's
+// hidLaShowControllerSupport opened up for the log: libnx folds a bad applet exit and the applet's own error into
+// one code (0x5D59 on firmware 23.0.1 with build 0.300: the screen flashed and no applet came). `system` = the
+// variant the HOME menu uses (it always shows its screen). False = it ended at once with an error, so no screen
+// was shown.
+bool RunControllerApplet(bool system) {
+  HidLaControllerSupportArg arg;
+  hidLaCreateControllerSupportArg(&arg);
+  arg.hdr.player_count_min = 1;
+  arg.hdr.player_count_max = NXInputDriver::kPads;
+  const char* name = system ? "system variant" : "application variant";
+  if (hosversionBefore(8, 0, 0)) {  // the older argument layout: libnx converts it
+    HidLaControllerSupportResultInfo info = {};
+    const Result rc = system ? hidLaShowControllerSupportForSystem(&info, &arg, true) : hidLaShowControllerSupport(&info, &arg);
+    std::printf("[nx] pad: controller applet (%s): rc 0x%X, %d player(s)\n", name, rc, int(info.player_count));
+    std::fflush(stdout);
+    return true;
+  }
+  HidLaControllerSupportArgPrivate priv = {};
+  priv.private_size = sizeof(priv);
+  priv.arg_size = sizeof(arg);
+  priv.flag0 = system;
+  priv.flag1 = system;
+  priv.mode = HidLaControllerSupportMode_ShowControllerSupport;
+  u32 styles = 0;
+  HidNpadJoyHoldType hold = HidNpadJoyHoldType_Vertical;
+  hidGetSupportedNpadStyleSet(&styles);
+  hidGetNpadJoyHoldType(&hold);
+  priv.npad_style_set = styles;
+  priv.npad_joy_hold_type = hold;
+  AppletHolder holder;
+  Result rc = appletCreateLibraryApplet(&holder, AppletId_LibraryAppletController, LibAppletMode_AllForeground);
+  if (R_FAILED(rc)) {
+    std::printf("[nx] pad: controller applet (%s): not created, rc 0x%X\n", name, rc);
+    std::fflush(stdout);
+    return false;
+  }
+  LibAppletArgs common;
+  libappletArgsCreate(&common, hosversionAtLeast(11, 0, 0) ? 0x8 : 0x7);
+  libappletArgsSetPlayStartupSound(&common, system);
+  rc = libappletArgsPush(&common, &holder);
+  if (R_SUCCEEDED(rc)) rc = libappletPushInData(&holder, &priv, sizeof(priv));
+  if (R_SUCCEEDED(rc)) rc = libappletPushInData(&holder, &arg, sizeof(arg));
+  const uint64_t t0 = armGetSystemTick();
+  if (R_SUCCEEDED(rc)) rc = appletHolderStart(&holder);
+  int reason = -1;
+  HidLaControllerSupportResultInfoInternal out = {};
+  size_t got = 0;
+  Result pop = 0;
+  if (R_SUCCEEDED(rc)) {
+    appletHolderJoin(&holder);
+    reason = int(appletHolderGetExitReason(&holder));
+    pop = libappletPopOutData(&holder, &out, sizeof(out), &got);
+  }
+  appletHolderClose(&holder);
+  const uint32_t ms = uint32_t(armTicksToNs(armGetSystemTick() - t0) / 1000000ull);
+  const bool ok = R_SUCCEEDED(rc) && reason == LibAppletExitReason_Normal && R_SUCCEEDED(pop) && out.res == 0;
+  std::printf("[nx] pad: controller applet (%s): %s after %u ms; styles 0x%X, hold %d, start rc 0x%X, exit reason %d (0 normal, "
+              "1 cancelled, 2 abnormal, 10 unexpected), reply %zu bytes rc 0x%X, result %u (0 ok, 2 style not supported, "
+              "other cancelled), %d player(s), selected id %u\n",
+              name, ok ? "ok" : "failed", ms, styles, int(hold), rc, reason, got, pop, out.res, int(out.info.player_count),
+              out.info.selected_id);
+  std::fflush(stdout);
+  return ok || ms >= 1500;  // a failure after that long is the player's own cancel
+}
 
 // The pad index of a device id, or -1.
 int PadIndex(DeviceId id) {
@@ -58,13 +126,21 @@ NXInputDriver::NXInputDriver(rex::ui::Window* window, size_t window_z_order)
 NXInputDriver::~NXInputDriver() = default;
 
 X_STATUS NXInputDriver::Setup() {
-  // Two players, full pads only (NpadStandard = Pro Controller, Joy-Con pair, handheld): the game uses every
-  // button, so a single Joy-Con is not offered. Pad 1 is also the handheld console.
-  padConfigureInput(kPads, HidNpadStyleSet_NpadStandard);
-  padInitializeDefault(&pads_[0]);
-  padInitialize(&pads_[1], HidNpadIdType_No2);
-  REXLOG_INFO("[nx] input: libnx pads 1 and 2 (handheld / Joy-Con pair / Pro Controller) as gamepads 0 and 1");
+  // Two players, full pads only (NpadFullCtrl = Pro Controller, Joy-Con pair, handheld): the game uses every
+  // button, so a single Joy-Con is not offered (NpadStandard, used up to build 0.300, also let single Joy-Cons in).
+  padConfigureInput(kPads, HidNpadStyleSet_NpadFullCtrl);
+  for (int i = 0; i < kSources; i++) padInitialize(&sources_[i], kSourceIds[i]);
+  REXLOG_INFO("[nx] input: the handheld console and controllers 1 and 2 (Joy-Con pair / Pro Controller) as gamepads 0 and 1");
   return X_STATUS_SUCCESS;
+}
+
+// The source that is player `pad`'s controller now. The handheld console is player 1 and the first wireless
+// controller is then player 2 (up to build 0.300 one pad read both, so a Pro Controller beside the handheld console
+// was a copy of player 1). Without the handheld console (docked, Joy-Cons detached), or with two wireless
+// controllers, the players are controllers 1 and 2.
+int NXInputDriver::SourceOf(int pad) const {
+  const bool handheld = padIsConnected(&sources_[0]) && !(padIsConnected(&sources_[1]) && padIsConnected(&sources_[2]));
+  return pad + (handheld ? 0 : 1);
 }
 
 // Both pads, pad 1 first: the input system numbers them in this order, and SlotAssignment gives pad n to user n.
@@ -82,7 +158,7 @@ X_RESULT NXInputDriver::GetDeviceCapabilities(DeviceId id, uint32_t flags, X_INP
   (void)flags;
   const int pad = PadIndex(id);
   // Pad 2 is a device only while a controller holds it (the last GetDeviceState poll), as on the console.
-  if (pad < 0 || (pad == 1 && !padIsConnected(&pads_[pad]))) {
+  if (pad < 0 || (pad == 1 && !padIsConnected(&sources_[SourceOf(pad)]))) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
   if (out_caps) {
@@ -153,18 +229,10 @@ void NXInputDriver::LoadSchedule() {
   std::fflush(stdout);
 }
 
-// The console's controller applet: 1 or 2 players, full pads (a Joy-Con pair counts), handheld not allowed, so
-// a second player can pair and take pad 2. Opened from the settings menu (CONTROLLERS) on the next pad poll.
+// The console's controller applet, opened from the settings menu (CONTROLLERS) on the next pad poll: a second
+// player can pair a controller there. The application variant first; the system variant when that ends at once.
 void NXInputDriver::ShowControllerApplet() {
-  HidLaControllerSupportArg arg;
-  hidLaCreateControllerSupportArg(&arg);
-  arg.hdr.player_count_min = 1;
-  arg.hdr.player_count_max = kPads;
-  HidLaControllerSupportResultInfo info = {};
-  const Result rc = hidLaShowControllerSupport(&info, &arg);
-  std::printf("[nx] pad: controller applet rc 0x%X, %d player(s), selected id %u\n", rc, int(info.player_count),
-              info.selected_id);
-  std::fflush(stdout);
+  if (!RunControllerApplet(false)) RunControllerApplet(true);
 }
 
 X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
@@ -172,7 +240,6 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
   if (pad < 0) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
-  PadState& pad_ = pads_[pad];
   uint32_t& packet_number_ = this->packet_number_[pad];
   uint64_t& last_buttons_ = this->last_buttons_[pad];
   if (!schedule_loaded_) LoadSchedule();
@@ -180,7 +247,19 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     hcu_settings.pad_applet = 0;
     ShowControllerApplet();
   }
-  padUpdate(&pad_);
+  for (PadState& source : sources_) padUpdate(&source);
+  const int src = SourceOf(pad);
+  PadState& pad_ = sources_[src];
+  if (pad == 0) {  // the log: who holds which player, at each change
+    const int now = 1 + src + (padIsConnected(&sources_[SourceOf(1)]) ? 8 : 0);
+    if (now != logged_players_) {
+      logged_players_ = now;
+      std::printf("[nx] pad: connected: handheld %d, controller 1 %d, controller 2 %d; player 1 = %s, player 2 = %s\n",
+                  int(padIsConnected(&sources_[0])), int(padIsConnected(&sources_[1])), int(padIsConnected(&sources_[2])),
+                  kSourceNames[src], (now & 8) ? kSourceNames[SourceOf(1)] : "nobody");
+      std::fflush(stdout);
+    }
+  }
   // Pad 2 only while a controller holds it: the game then sees player 2's pad as disconnected, as on the console.
   if (pad == 1 && !padIsConnected(&pad_)) return X_ERROR_DEVICE_NOT_CONNECTED;
   uint64_t held = padGetButtons(&pad_);
@@ -262,13 +341,14 @@ X_RESULT NXInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibra
   const int pad = PadIndex(id);
   if (pad < 0) return X_ERROR_DEVICE_NOT_CONNECTED;
   if (!vibration) return X_ERROR_SUCCESS;
-  PadState& pad_ = pads_[pad];
+  const int src = SourceOf(pad);
+  PadState& pad_ = sources_[src];
   HidVibrationDeviceHandle* vib_handles_ = this->vib_handles_[pad];
-  uint32_t& vib_style_ = this->vib_style_[pad];
+  uint32_t& vib_key_ = this->vib_key_[pad];
   X_INPUT_VIBRATION zero{};
   if (!hcu_settings.rumble) vibration = &zero;  // also stops a rumble that was on when it was turned off
   const uint32_t styles = padGetStyleSet(&pad_);
-  const bool handheld = pad == 0 && padIsHandheld(&pad_);
+  const bool handheld = src == 0 && padIsHandheld(&pad_);
   const uint32_t style = handheld                              ? HidNpadStyleTag_NpadHandheld
                          : (styles & HidNpadStyleTag_NpadFullKey) ? HidNpadStyleTag_NpadFullKey
                          : (styles & HidNpadStyleTag_NpadJoyDual) ? HidNpadStyleTag_NpadJoyDual
@@ -284,13 +364,17 @@ X_RESULT NXInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibra
                 styles, int(handheld));
   }
   if (!style) return X_ERROR_SUCCESS;
-  if (style != vib_style_) {
-    const Result rc = hidInitializeVibrationDevices(vib_handles_, 2, handheld ? HidNpadIdType_Handheld : kPadIds[pad],
-                                                    static_cast<HidNpadStyleTag>(style));
-    std::printf("[nx] rumble: pad %d vibration devices for style 0x%X (%s): rc 0x%X\n", pad + 1, style,
-                handheld ? "handheld" : "No1/No2", rc);
+  const uint32_t key = style | uint32_t(src + 1) << 28;  // the player's controller changed: new devices
+  if (key != vib_key_) {
+    if (vib_key_) {  // stop the controller the player held before
+      HidVibrationValue stop[2] = {{0.0f, 160.0f, 0.0f, 320.0f}, {0.0f, 160.0f, 0.0f, 320.0f}};
+      hidSendVibrationValues(vib_handles_, stop, 2);
+      vib_key_ = 0;
+    }
+    const Result rc = hidInitializeVibrationDevices(vib_handles_, 2, kSourceIds[src], static_cast<HidNpadStyleTag>(style));
+    std::printf("[nx] rumble: player %d vibration devices for style 0x%X (%s): rc 0x%X\n", pad + 1, style, kSourceNames[src], rc);
     if (R_FAILED(rc)) return X_ERROR_SUCCESS;
-    vib_style_ = style;
+    vib_key_ = key;
   }
   HidVibrationValue v[2];
   for (HidVibrationValue& x : v) {

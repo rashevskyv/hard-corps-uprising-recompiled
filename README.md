@@ -43,13 +43,15 @@ Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, 
 | --- | --- |
 | FRAME RATE | 30 (default), 60 SKIP WHEN BUSY, 60, 30 HALF SPEED |
 | OVERLAY | the version and performance line at the bottom of the screen: ON (default), OFF |
-| FPS COUNTER | the frame rate in that line: ON (default), OFF |
+| FPS COUNTER | the frame rate at the bottom of the screen: ON (default), OFF. It does not depend on OVERLAY: with OVERLAY off the frame rate is shown alone. |
 | RUMBLE | ON (default), OFF |
 | CONTROLLERS | press **A**: the console's controller applet (1 or 2 players). Pair the second controller there for local 2-player. |
 
 ### Local 2-player
 
-Open the settings menu, pick **CONTROLLERS** and press **A**. The console's controller applet opens; connect the second controller there (a Pro Controller or a Joy-Con pair). Pad 1 is player 1 and the handheld console, pad 2 is player 2. The game sees pad 2 as connected while a controller holds it.
+Connect a second controller (a Pro Controller or a Joy-Con pair). In handheld mode the console is player 1 and the wireless controller is player 2. Docked, or with the Joy-Cons detached, wireless controller 1 is player 1 and wireless controller 2 is player 2. The game sees player 2's controller as connected while a controller holds it.
+
+To pair or reorder controllers without leaving the game, open the settings menu, pick **CONTROLLERS** and press **A**: the console's controller applet opens.
 
 ### DLC characters
 

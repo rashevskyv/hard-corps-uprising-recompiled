@@ -10,8 +10,8 @@ extern "C" {
 
 struct HcuSettings {
   int fps_mode;       // 0 = 30skip, 1 = 60skip, 2 = 60 (every frame), 3 = 30 cap (the game at half speed)
-  int strip;          // OVERLAY: the version / fps / meter strip
-  int fps_counter;    // FPS COUNTER: the fps in the strip
+  int strip;          // OVERLAY: the version / meter strip
+  int fps_counter;    // FPS COUNTER: the fps, with the strip or alone (independent of OVERLAY)
   int rumble;
   float shadow_bias;  // shadow-pass depth bias: units, slope (0, 0 = off)
   float shadow_slope;

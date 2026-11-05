@@ -1289,9 +1289,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
       trace_vf_.clear();
     }
 #endif
-    // The on-screen strip (gh-recomp): the version and the fps, uploaded into this frame's image before the present pass.
-    HostImage* overlay = nullptr;
-    if (overlay_on_) {
+    // The on-screen strip (gh-recomp), uploaded into this frame's image before the present pass. Two independent
+    // settings: OVERLAY = the version and the meter, FPS COUNTER = the fps. Each shows its own part; the fps alone is a
+    // short strip (overlay_w).
+    {
       const uint64_t now = armGetSystemTick();
       if (!fps_tick_) fps_tick_ = now;
       fps_frames_++;
@@ -1300,13 +1301,23 @@ class Deko3dCommandProcessor : public CommandProcessor {
         fps_tick_ = now;
         fps_frames_ = 0;
       }
+    }
+    HostImage* overlay = nullptr;
+    uint32_t overlay_w = kOverlayW;
+    const bool strip_on = hcu_settings.strip != 0, fps_on = hcu_settings.fps_counter != 0;
+    if (strip_on || fps_on) {
       if (!overlay_[frame_]) overlay_[frame_] = CreateImage(kOverlayW, kOverlayH, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
       overlay = overlay_[frame_];
       if (overlay) {
         char text[96];
         char fps[24] = "";
-        if (hcu_settings.fps_counter) std::snprintf(fps, sizeof(fps), "%u.%u fps  ", fps_x10_ / 10, fps_x10_ % 10);
-        std::snprintf(text, sizeof(text), "HCU %s  %s%s", rex_nx_version(), fps, rex_nx_meter_text);
+        if (fps_on) std::snprintf(fps, sizeof(fps), "%u.%u fps", fps_x10_ / 10, fps_x10_ % 10);
+        if (strip_on) {
+          std::snprintf(text, sizeof(text), "HCU %s  %s%s%s", rex_nx_version(), fps, fps_on ? "  " : "", rex_nx_meter_text);
+        } else {
+          std::snprintf(text, sizeof(text), "%s", fps);
+          overlay_w = 4 + uint32_t(std::strlen(text)) * 6 * kOverlayScale + 2;  // DrawText: from x = 4, 6 columns a glyph
+        }
         if (std::strcmp(text, overlay_text_) != 0) {
           RenderOverlayText(overlay_px_.data(), text);
           std::memcpy(overlay_text_, text, sizeof(overlay_text_));
@@ -1326,11 +1337,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
         }
       }
     }
-    // The settings menu, while it is open: drawn over the picture in the middle of the screen.
+    // The settings menu, while it is open: drawn over the picture in the middle of the screen, as large as its lines
+    // (menu_w x menu_h of the kMenuW x kMenuH image).
     HostImage* menu = nullptr;
+    uint32_t menu_w = kMenuW, menu_h = kMenuH;
     {
       char lines[kMenuLines][48];
       const int n = hcu_menu_lines(lines, kMenuLines);
+      size_t longest = 0;
+      for (int i = 0; i < n; i++) longest = std::max(longest, std::strlen(lines[i]));
+      menu_w = std::min(kMenuW, 24 + uint32_t(longest) * 6 * kOverlayScale);  // DrawText: from x = 12, 6 columns a glyph
+      menu_h = std::min(kMenuH, 14 + uint32_t(n) * 18);                       // from y = 8, 18 rows a line
       if (n && !menu_[frame_]) menu_[frame_] = CreateImage(kMenuW, kMenuH, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
       if (n && menu_[frame_]) {
         for (uint32_t& p : menu_px_) p = 0xFF202020u;
@@ -1426,7 +1443,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
           const uint32_t ox = 8, oy = kPresentHeight - kOverlayH - 8;
           DkViewport ovp{float(ox), float(oy), float(kOverlayW), float(kOverlayH), 0.0f, 1.0f};
           dkCmdBufSetViewports(cmd, 0, &ovp, 1);
-          DkScissor osc{ox, oy, kOverlayW, kOverlayH};
+          DkScissor osc{ox, oy, overlay_w, kOverlayH};  // the viewport stays the whole image: 1:1 pixels
           dkCmdBufSetScissors(cmd, 0, &osc, 1);
           DkResHandle oh = dkMakeTextureHandle(oslot, 0);  // nearest, clamp
           dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &oh, 1);
@@ -1436,10 +1453,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (menu) {
         const uint32_t mslot = DescriptorFor(f, menu, 0);
         if (mslot != UINT32_MAX) {
-          const uint32_t mx = (kPresentWidth - kMenuW) / 2, my = (kPresentHeight - kMenuH) / 2;
-          DkViewport mvp{float(mx), float(my), float(kMenuW), float(kMenuH), 0.0f, 1.0f};
+          const uint32_t mx = (kPresentWidth - menu_w) / 2, my = (kPresentHeight - menu_h) / 2;
+          DkViewport mvp{float(mx), float(my), float(kMenuW), float(kMenuH), 0.0f, 1.0f};  // the whole image: 1:1 pixels
           dkCmdBufSetViewports(cmd, 0, &mvp, 1);
-          DkScissor msc{mx, my, kMenuW, kMenuH};
+          DkScissor msc{mx, my, menu_w, menu_h};
           dkCmdBufSetScissors(cmd, 0, &msc, 1);
           DkResHandle mh = dkMakeTextureHandle(mslot, 0);
           dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &mh, 1);
@@ -1599,7 +1616,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (unlink((debug_dir_ + "dump_now").c_str()) == 0) hcu_settings.dump = 1;
     }
     // The settings menu's live values (src/settings_menu.cpp; the fps file sets the start value).
-    overlay_on_ = hcu_settings.strip != 0;
     shadow_bias_ = hcu_settings.shadow_bias;
     shadow_slope_ = hcu_settings.shadow_slope;
     z_bias_ = hcu_settings.colour_bias;
@@ -2633,7 +2649,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
   float z_bias_ = -16.f;
   float shadow_bias_ = 32.f, shadow_slope_ = 1.5f;  // shadow-pass depth bias (file zfix)
   bool no_precise_ = false;  // zfix "noprecise"
-  bool overlay_on_ = true;
   HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
   HostImage* menu_[kFrames] = {};     // the settings menu, the same way
   std::vector<uint32_t> menu_px_ = std::vector<uint32_t>(kMenuW * kMenuH);
