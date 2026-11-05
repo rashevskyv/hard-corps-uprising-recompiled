@@ -1,5 +1,6 @@
-// libnx pad input for the ReXGlue input system: one Xbox 360 gamepad from the console's default pad
-// (handheld, a Joy-Con pair, or a Pro Controller).
+// libnx pad input for the ReXGlue input system: two Xbox 360 gamepads from the console's pads 1 and 2
+// (handheld, a Joy-Con pair, or a Pro Controller each; a single Joy-Con is not accepted, the game
+// uses every button). The settings menu's CONTROLLERS item opens the console's controller applet.
 #pragma once
 
 #include <switch.h>
@@ -12,6 +13,8 @@ namespace rex::input::nx {
 
 class NXInputDriver final : public InputDriver {
  public:
+  static constexpr int kPads = 2;
+
   explicit NXInputDriver(rex::ui::Window* window, size_t window_z_order);
   ~NXInputDriver() override;
 
@@ -31,13 +34,14 @@ class NXInputDriver final : public InputDriver {
     bool logged;
   };
   void LoadSchedule();
-  // Rumble: the two HD rumble devices of the pad style in use (handheld, Joy-Con pair, Pro Controller).
-  HidVibrationDeviceHandle vib_handles_[2] = {};
-  uint32_t vib_style_ = 0;  // the style the handles were made for (0 = none yet)
+  void ShowControllerApplet();
+  // Rumble: the two HD rumble devices of each pad's style in use (handheld, Joy-Con pair, Pro Controller).
+  HidVibrationDeviceHandle vib_handles_[kPads][2] = {};
+  uint32_t vib_style_[kPads] = {};  // the style the handles were made for (0 = none yet)
 
-  PadState pad_{};
-  uint32_t packet_number_ = 0;
-  uint64_t last_buttons_ = 0;
+  PadState pads_[kPads] = {};
+  uint32_t packet_number_[kPads] = {};
+  uint64_t last_buttons_[kPads] = {};
   std::vector<Scheduled> schedule_;
   uint64_t t0_tick_ = 0;
   bool schedule_loaded_ = false;

@@ -20,7 +20,8 @@ The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled g
 
 > **Read this first.**
 > - **Very little testing**: a few hours of single player on one console. Graphical glitches, crashes and freezes are possible, and save data may be lost.
-> - **One controller.** Local 2-player and the Xbox LIVE features are not available. The DLC characters are not supported.
+> - **Local 2-player needs two full controllers** (Pro Controller or a Joy-Con pair each; a single Joy-Con is not accepted, the game uses every button). The Xbox LIVE features are not available.
+> - **The DLC characters** (Harley Daniels, Sayuri, Leviathan) work from your own marketplace packages: see "DLC characters" below.
 > - **30 fps by default.** The game runs at full speed and every second frame is drawn. The 60 fps modes can slow the game down in busy scenes.
 > - No launcher, cheats, achievements or display options: those are PC features.
 
@@ -44,6 +45,20 @@ Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, 
 | OVERLAY | the version and performance line at the bottom of the screen: ON (default), OFF |
 | FPS COUNTER | the frame rate in that line: ON (default), OFF |
 | RUMBLE | ON (default), OFF |
+| CONTROLLERS | press **A**: the console's controller applet (1 or 2 players). Pair the second controller there for local 2-player. |
+
+### Local 2-player
+
+Open the settings menu, pick **CONTROLLERS** and press **A**. The console's controller applet opens; connect the second controller there (a Pro Controller or a Joy-Con pair). Pad 1 is player 1 and the handheld console, pad 2 is player 2. The game sees pad 2 as connected while a controller holds it.
+
+### DLC characters
+
+The Switch build reads DLC from `sdmc:/switch/hcu/user/`, in the same layout as the PC port's user data folder. You need your own Xbox Live Arcade marketplace packages of the DLC (content type `00000002` of title `58410A18`). Two ways to install them:
+
+- **With the PC port**: install the DLC in the PC launcher (**Install from package...** with each DLC package). Copy the folder `user_data/0000000000000000/58410A18` (next to the PC executable) to `sdmc:/switch/hcu/user/0000000000000000/58410A18`.
+- **With the script**: `python tools/stfs_extract.py --dlc <package> <SD>/switch/hcu/user` for each package, where `<SD>` is the SD card root (or any folder you copy to the card afterwards).
+
+Both end with `sdmc:/switch/hcu/user/0000000000000000/58410A18/00000002/<content id>/` (the DLC files) and `.../58410A18/Headers/00000002/<content id>.header`. The Switch build treats every installed DLC as licensed.
 
 ### Building the Switch NRO yourself
 

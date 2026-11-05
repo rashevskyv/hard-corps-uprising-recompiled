@@ -38,6 +38,7 @@ struct HcuSettings {
   int tex_view;       // TEXTURE VIEW (live, not saved; Sys alpha.w of every pixel shader): 1 = every texture fetch
                       // returns white, 2/3 = the colour is fract(first fetch coordinate x 16 / x 256): the console's
                       // hatching is in the texels (gone at 1, stripes smooth) or in the interpolated UV (stripes jagged)
+  int pad_applet;     // CONTROLLERS: 1 = the pad driver opens the console's controller applet on its next poll, then sets 0
 };
 
 extern HcuSettings hcu_settings;

@@ -13,7 +13,14 @@ namespace rex::input::nx {
 
 namespace {
 
-constexpr DeviceId kPad = static_cast<DeviceId>(0x4E580000);  // "NX"
+constexpr DeviceId kPad = static_cast<DeviceId>(0x4E580000);  // "NX": pad 1; kPad + 1 = pad 2
+constexpr HidNpadIdType kPadIds[NXInputDriver::kPads] = {HidNpadIdType_No1, HidNpadIdType_No2};
+
+// The pad index of a device id, or -1.
+int PadIndex(DeviceId id) {
+  const uint64_t n = static_cast<uint64_t>(id) - static_cast<uint64_t>(kPad);
+  return n < uint64_t(NXInputDriver::kPads) ? int(n) : -1;
+}
 
 // Positional mapping: the Switch's B/A/Y/X sit where the 360's A/B/X/Y sit.
 struct ButtonMap {
@@ -51,23 +58,31 @@ NXInputDriver::NXInputDriver(rex::ui::Window* window, size_t window_z_order)
 NXInputDriver::~NXInputDriver() = default;
 
 X_STATUS NXInputDriver::Setup() {
-  padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-  padInitializeDefault(&pad_);
-  REXLOG_INFO("[nx] input: libnx pad (handheld / Joy-Con pair / Pro Controller) as gamepad 0");
+  // Two players, full pads only (NpadStandard = Pro Controller, Joy-Con pair, handheld): the game uses every
+  // button, so a single Joy-Con is not offered. Pad 1 is also the handheld console.
+  padConfigureInput(kPads, HidNpadStyleSet_NpadStandard);
+  padInitializeDefault(&pads_[0]);
+  padInitialize(&pads_[1], HidNpadIdType_No2);
+  REXLOG_INFO("[nx] input: libnx pads 1 and 2 (handheld / Joy-Con pair / Pro Controller) as gamepads 0 and 1");
   return X_STATUS_SUCCESS;
 }
 
+// Both pads, pad 1 first: the input system numbers them in this order, and SlotAssignment gives pad n to user n.
 void NXInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
-  DeviceInfo info;
-  info.id = kPad;
-  info.name = "Switch pad";
-  info.synthetic = false;
-  out.push_back(info);
+  for (int i = 0; i < kPads; i++) {
+    DeviceInfo info;
+    info.id = static_cast<DeviceId>(static_cast<uint64_t>(kPad) + i);
+    info.name = i == 0 ? "Switch pad 1" : "Switch pad 2";
+    info.synthetic = false;
+    out.push_back(info);
+  }
 }
 
 X_RESULT NXInputDriver::GetDeviceCapabilities(DeviceId id, uint32_t flags, X_INPUT_CAPABILITIES* out_caps) {
   (void)flags;
-  if (id != kPad) {
+  const int pad = PadIndex(id);
+  // Pad 2 is a device only while a controller holds it (the last GetDeviceState poll), as on the console.
+  if (pad < 0 || (pad == 1 && !padIsConnected(&pads_[pad]))) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
   if (out_caps) {
@@ -138,16 +153,40 @@ void NXInputDriver::LoadSchedule() {
   std::fflush(stdout);
 }
 
+// The console's controller applet: 1 or 2 players, full pads (a Joy-Con pair counts), handheld not allowed, so
+// a second player can pair and take pad 2. Opened from the settings menu (CONTROLLERS) on the next pad poll.
+void NXInputDriver::ShowControllerApplet() {
+  HidLaControllerSupportArg arg;
+  hidLaCreateControllerSupportArg(&arg);
+  arg.hdr.player_count_min = 1;
+  arg.hdr.player_count_max = kPads;
+  HidLaControllerSupportResultInfo info = {};
+  const Result rc = hidLaShowControllerSupport(&info, &arg);
+  std::printf("[nx] pad: controller applet rc 0x%X, %d player(s), selected id %u\n", rc, int(info.player_count),
+              info.selected_id);
+  std::fflush(stdout);
+}
+
 X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
-  if (id != kPad) {
+  const int pad = PadIndex(id);
+  if (pad < 0) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
+  PadState& pad_ = pads_[pad];
+  uint32_t& packet_number_ = this->packet_number_[pad];
+  uint64_t& last_buttons_ = this->last_buttons_[pad];
   if (!schedule_loaded_) LoadSchedule();
+  if (pad == 0 && hcu_settings.pad_applet) {
+    hcu_settings.pad_applet = 0;
+    ShowControllerApplet();
+  }
   padUpdate(&pad_);
+  // Pad 2 only while a controller holds it: the game then sees player 2's pad as disconnected, as on the console.
+  if (pad == 1 && !padIsConnected(&pad_)) return X_ERROR_DEVICE_NOT_CONNECTED;
   uint64_t held = padGetButtons(&pad_);
   uint16_t scheduled = 0;
   bool scheduled_lt = false, scheduled_rt = false;
-  if (!schedule_.empty()) {
+  if (pad == 0 && !schedule_.empty()) {
     const uint64_t now = armGetSystemTick();
     for (Scheduled& s : schedule_) {
       if (now >= s.start_tick && now < s.end_tick) {
@@ -164,8 +203,8 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     }
     if (scheduled || scheduled_lt || scheduled_rt) held ^= 0x8000000000000000ull;  // a change: a new packet
   }
-  // The settings menu (src/settings_menu.cpp) takes the pad while it is open: the game sees nothing held.
-  {
+  // The settings menu (src/settings_menu.cpp) takes pad 1 while it is open: the game sees nothing held on it.
+  if (pad == 0) {
     uint32_t menu = 0;
     if (held & HidNpadButton_AnyUp) menu |= HCU_MENU_UP;
     if (held & HidNpadButton_AnyDown) menu |= HCU_MENU_DOWN;
@@ -220,12 +259,16 @@ X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
 // The 360's two motors on HD rumble: the left (heavy) one as the low band, the right (light) one as the high band, on
 // both sides of the pad. The settings menu's RUMBLE (or the file sdmc:/switch/hcu/norumble) turns it off.
 X_RESULT NXInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) {
-  if (id != kPad) return X_ERROR_DEVICE_NOT_CONNECTED;
+  const int pad = PadIndex(id);
+  if (pad < 0) return X_ERROR_DEVICE_NOT_CONNECTED;
   if (!vibration) return X_ERROR_SUCCESS;
+  PadState& pad_ = pads_[pad];
+  HidVibrationDeviceHandle* vib_handles_ = this->vib_handles_[pad];
+  uint32_t& vib_style_ = this->vib_style_[pad];
   X_INPUT_VIBRATION zero{};
   if (!hcu_settings.rumble) vibration = &zero;  // also stops a rumble that was on when it was turned off
   const uint32_t styles = padGetStyleSet(&pad_);
-  const bool handheld = padIsHandheld(&pad_);
+  const bool handheld = pad == 0 && padIsHandheld(&pad_);
   const uint32_t style = handheld                              ? HidNpadStyleTag_NpadHandheld
                          : (styles & HidNpadStyleTag_NpadFullKey) ? HidNpadStyleTag_NpadFullKey
                          : (styles & HidNpadStyleTag_NpadJoyDual) ? HidNpadStyleTag_NpadJoyDual
@@ -242,9 +285,10 @@ X_RESULT NXInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibra
   }
   if (!style) return X_ERROR_SUCCESS;
   if (style != vib_style_) {
-    const Result rc = hidInitializeVibrationDevices(vib_handles_, 2, handheld ? HidNpadIdType_Handheld : HidNpadIdType_No1,
+    const Result rc = hidInitializeVibrationDevices(vib_handles_, 2, handheld ? HidNpadIdType_Handheld : kPadIds[pad],
                                                     static_cast<HidNpadStyleTag>(style));
-    std::printf("[nx] rumble: vibration devices for style 0x%X (%s): rc 0x%X\n", style, handheld ? "handheld" : "No1", rc);
+    std::printf("[nx] rumble: pad %d vibration devices for style 0x%X (%s): rc 0x%X\n", pad + 1, style,
+                handheld ? "handheld" : "No1/No2", rc);
     if (R_FAILED(rc)) return X_ERROR_SUCCESS;
     vib_style_ = style;
   }
@@ -266,7 +310,7 @@ X_RESULT NXInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibra
 X_RESULT NXInputDriver::GetDeviceKeystroke(DeviceId id, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke) {
   (void)flags;
   (void)out_keystroke;
-  return id == kPad ? X_ERROR_EMPTY : X_ERROR_DEVICE_NOT_CONNECTED;
+  return PadIndex(id) >= 0 ? X_ERROR_EMPTY : X_ERROR_DEVICE_NOT_CONNECTED;
 }
 
 }  // namespace rex::input::nx

@@ -2,6 +2,11 @@
 """Extract files from an Xbox 360 STFS package (LIVE/PIRS/CON) into a folder.
 
     python3 -I tools/stfs_extract.py <package> <out_dir> [--list]
+    python3 -I tools/stfs_extract.py --dlc <package> <user data root>
+
+--dlc installs a marketplace package (DLC, content type 00000002) the way the PC port's launcher does, under the
+user data root the ReXGlue content manager reads (<root>/0000000000000000/<title id>/00000002/<content id>/ and
+Headers/00000002/<content id>.header): for the Switch build the root is sdmc:/switch/hcu/user on the SD card.
 
 Layout per Free60 "STFS" (volume descriptor at 0x379: size, reserved, block separation, file table block count (2), file table start block (3)),
 the data blocks named by the descriptor, L0 hash tables before every 0xAA data blocks.
@@ -94,9 +99,74 @@ class Stfs:
         return bytes(data[:e['size']])
 
 
+# The STFS header fields of a marketplace package (same offsets as the PC launcher's src/stfs.cpp).
+CONTENT_ID_OFFSET, LICENSE_OFFSET, LICENSE_ENTRIES, DISPLAY_NAME_OFFSET, DISPLAY_NAME_BYTES = 0x32C, 0x22C, 16, 0x411, 0x100
+DLC_CONTENT_TYPE = 2
+# The .header the content manager reads: XCONTENT_AGGREGATE_DATA (0x148 bytes, big-endian), then the licence mask (LE32).
+HEADER_BYTES, DISPLAY_NAME_AT, FILE_NAME_AT, FILE_NAME_BYTES, TITLE_AT, HDD_DEVICE_ID = 0x148, 8, 264, 42, 0x140, 1
+
+
+def content_header(content_id, display_name, title_id, license_mask):
+    h = bytearray(HEADER_BYTES)
+    h[0:4] = HDD_DEVICE_ID.to_bytes(4, 'big')
+    h[4:8] = DLC_CONTENT_TYPE.to_bytes(4, 'big')
+    name = display_name[:127].encode('utf-16-be')
+    h[DISPLAY_NAME_AT:DISPLAY_NAME_AT + len(name)] = name
+    fname = content_id.encode('ascii')[:FILE_NAME_BYTES]
+    h[FILE_NAME_AT:FILE_NAME_AT + len(fname)] = fname
+    h[TITLE_AT:TITLE_AT + 4] = title_id.to_bytes(4, 'big')
+    if license_mask:
+        h += license_mask.to_bytes(4, 'little')
+    return bytes(h)
+
+
+def install_dlc(pkg, root):
+    s = Stfs(pkg)
+    if s.content_type != DLC_CONTENT_TYPE:
+        raise SystemExit(f'not a marketplace (DLC) package: content type {s.content_type:08X}')
+    s.f.seek(CONTENT_ID_OFFSET)
+    content_id = s.f.read(20).hex().upper()
+    s.f.seek(DISPLAY_NAME_OFFSET)
+    display_name = s.f.read(DISPLAY_NAME_BYTES).decode('utf-16-be', 'replace').split(chr(0))[0]
+    s.f.seek(LICENSE_OFFSET)
+    lic = s.f.read(LICENSE_ENTRIES * 16)
+    license_mask = 0
+    for i in range(LICENSE_ENTRIES):
+        e = lic[i * 16:(i + 1) * 16]
+        if int.from_bytes(e[12:16], 'big'):
+            license_mask |= int.from_bytes(e[8:12], 'big')
+    title = f'{s.title_id:08X}'
+    out = os.path.join(root, '0000000000000000', title, f'{DLC_CONTENT_TYPE:08X}', content_id)
+    header = os.path.join(root, '0000000000000000', title, 'Headers', f'{DLC_CONTENT_TYPE:08X}', content_id + '.header')
+    print(f'{display_name!r} title {title} content id {content_id} licence mask {license_mask:08X} -> {out}')
+    entries = s.entries()
+    n = 0
+    for i, e in enumerate(entries):
+        path = s.path_of(entries, i)
+        if '..' in path.split('/'):
+            raise SystemExit(f'bad entry name: {path}')
+        dst = os.path.join(out, path)
+        if e['dir']:
+            os.makedirs(dst, exist_ok=True)
+            continue
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, 'wb') as w:
+            w.write(s.read_file(e))
+        n += 1
+    os.makedirs(os.path.dirname(header), exist_ok=True)
+    with open(header, 'wb') as w:
+        w.write(content_header(content_id, display_name, s.title_id, license_mask))
+    print(f'{n} files, header {header}')
+
+
 def main():
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
+    if sys.argv[1] == '--dlc':
+        if len(sys.argv) != 4:
+            raise SystemExit(__doc__)
+        install_dlc(sys.argv[2], sys.argv[3])
+        return
     pkg, out = sys.argv[1], sys.argv[2]
     s = Stfs(pkg)
     print(f'{s.magic.decode()} title {s.title_id:08X} type {s.content_type:X} version '

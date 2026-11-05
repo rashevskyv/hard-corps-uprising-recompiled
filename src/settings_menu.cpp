@@ -13,7 +13,7 @@
 HcuSettings hcu_settings = {.fps_mode = 0, .strip = 1, .fps_counter = 1, .rumble = 1, .shadow_bias = 0.f, .shadow_slope = 0.f,
                             .colour_bias = 0.f, .precise = 0, .filter = 0, .lod_bias = 0.f, .aniso = 1.f, .shadow_map = 1,
                             .view = 0, .view_step = 0, .dump = 0, .record = 0, .dxt_cpu = 1, .depth32 = 0, .gamma = 0,
-                            .rt16 = 1, .prepass = 0, .upload_strips = 0, .tex_view = 0};
+                            .rt16 = 1, .prepass = 0, .upload_strips = 0, .tex_view = 0, .pad_applet = 0};
 
 namespace {
 
@@ -38,6 +38,8 @@ const Item kItems[] = {
     {"OVERLAY", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
     {"FPS COUNTER", {"OFF", "ON"}, 2, false, [] { return hcu_settings.fps_counter; }, [](int i) { hcu_settings.fps_counter = i; }},
     {"RUMBLE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.rumble; }, [](int i) { hcu_settings.rumble = i; }},
+    // An action, not a value: the console's controller applet (1 or 2 players, full pads), for local 2-player.
+    {"CONTROLLERS", {"PRESS A"}, 1, false, [] { return 0; }, [](int) { hcu_settings.pad_applet = 1; }},
     // The diagnostic items (biases, shadow map, prepass, gamma, 16F targets, views, dumps, precise, strips, DXT, depth
     // 32, texture view) left the menu for the release (git history before 2026-11-03); settings.txt still sets them.
 };
