@@ -1,11 +1,16 @@
-Hard Corps: Uprising (Xbox 360 XBLA, 2011) on Nintendo Switch, by static recompilation with the ReXGlue SDK. Built from commit `fdae3aa`.
+Hard Corps: Uprising (Xbox 360 XBLA, 2011) on Nintendo Switch, by static recompilation with the ReXGlue SDK. Built from commit `c728c58`. This release has the Switch build only: the PC code did not change since 0.303 (see "Windows and Linux" below).
 
-## New since 0.297
+## New since 0.303
 
-- **Local 2-player** on the Switch, with two full controllers.
-- **DLC characters** (Harley Daniels, Sayuri, Leviathan) on the Switch, from your own DLC packages.
-- **OVERLAY and FPS COUNTER are independent** in the port menu: each one is shown or hidden alone.
-- The port menu is smaller, and it has a new **CONTROLLERS** item (the console's controller screen).
+- **Boss and enemy graphics**: 12 shaders that were missing on the console are now translated (34 files in `shaders/`). Without them some objects were not drawn, for example the cart enemy and parts of a boss cannon on stage 1.
+- **Switch button icons** in the game's prompts: our own drawings of the Switch buttons (A, B, X, Y, L, R, ZL, ZR, +, -, the d-pad, the sticks, HOME) replace the Xbox icons. No Nintendo files are used.
+- New port menu item **BUTTON ICONS**: SWITCH (default) or XBOX (the game's Xbox icons with the A/B and X/Y pictures swapped, as in 0.303). It applies at the next start. In `settings.txt`: `button_glyphs=switch` or `button_glyphs=xbox`.
+- The log `hcu_log.txt` names each shader pair that has no translated shader (one line per pair), so a missing object can be reported with its shader numbers.
+
+## Known gaps
+
+- The boss and cart fix is checked on stage 1 only.
+- Not replaced yet: the controller picture on the How to play screen, the Guide button ring, and the texts "Press START" and "Xbox 360 controller" that are part of the game's images.
 
 ## Read this first: experimental
 
@@ -19,16 +24,14 @@ Hard Corps: Uprising (Xbox 360 XBLA, 2011) on Nintendo Switch, by static recompi
 
 | File | What |
 |---|---|
-| `hcu-0.303.fdae3aa-switch.zip` | Switch (Atmosphère + hbmenu). Unzip to the SD root |
-| `hcu-0.303.fdae3aa-windows-x64.zip` | Windows 10/11 x64, Direct3D 12 (see below) |
-| `hcu-0.303.fdae3aa-linux-x86_64.AppImage` | Linux x86_64, Vulkan, glibc 2.38 or newer (see below) |
+| `hcu-0.310.c728c58-switch.zip` | Switch (Atmosphère + hbmenu). Unzip to the SD root. To update 0.303, unzip over it: your `settings.txt`, game files and saves stay |
 | `SHA1SUMS`, `SHA256SUMS` | checksums |
 
-Switch NRO SHA-1: `655986f8f651647d9bf16cf0d37391ce08a6349f` (build `0.303.fdae3aa`).
+Switch NRO SHA-1: `9d7ba08ed2ae11218f313128fb2e6d8e25942336` (build `0.310.c728c58`).
 
 ## You need your own copy of the game
 
-Extract the XBLA package (`tools/stfs_extract.py`, or the PC port's launcher) and put the extracted files (`default.xex` and the data folders) into `sdmc:/switch/hcu/game/`. Start the game from hbmenu with title takeover (hold R while starting any installed game). Install details, controls and the settings menu (L3 + R3: FRAME RATE, OVERLAY, FPS COUNTER, RUMBLE, CONTROLLERS): see the README's Switch section.
+Extract the XBLA package (`tools/stfs_extract.py`, or the PC port's launcher) and put the extracted files (`default.xex` and the data folders) into `sdmc:/switch/hcu/game/`. Start the game from hbmenu with title takeover (hold R while starting any installed game). Install details, controls and the settings menu (L3 + R3: FRAME RATE, OVERLAY, FPS COUNTER, RUMBLE, BUTTON ICONS, CONTROLLERS): see the README's Switch section.
 
 ## Local 2-player (Switch)
 
@@ -48,24 +51,7 @@ Both ways end with `sdmc:/switch/hcu/user/0000000000000000/58410A18/00000002/<co
 
 ## Windows and Linux
 
-Builds of this branch for PC. They are the upstream PC port (launcher, cheats, achievements, display options; the About page shows the upstream version 0.6.1) with one change: the recompiled code is generated with this branch's ReXGlue codegen fix (`switch/sdk-edits-hcu.py`: the vector registers stay in the context with `non_volatile_as_local`), which the intro movie needs. The PC source did not change since 0.297 (only the Switch code changed), so the program files inside both packages are byte-identical to the 0.297 ones. Tested only to the title screen: Windows on one PC, Linux in a software Vulkan driver (llvmpipe).
-
-- `hcu-0.303.fdae3aa-windows-x64.zip`: unzip, run `hard_corps_uprising.exe`, install your package from the launcher. SHA-1 `1adf712b7c55b36727a9329a923217af33acf0c0`.
-- `hcu-0.303.fdae3aa-linux-x86_64.AppImage`: mark it executable and run it. Built on Ubuntu 24.04, so it needs glibc 2.38 or newer (upstream's own builds need 2.31). SHA-1 `a0f17b1ab97ea1f8d67584395134bac0062fa97e`.
-
-### Requirements
-
-**Windows**
-- Windows 10 or 11, 64-bit.
-- A GPU with Direct3D 12 support.
-- Microsoft Visual C++ Redistributable 2015–2022 (x64). It is not in the zip. Download: https://aka.ms/vs/17/release/vc_redist.x64.exe
-
-**Linux**
-- x86_64 with glibc 2.38 or newer (for example Ubuntu 24.04, Fedora 39, Debian 13 or newer).
-- A GPU with a Vulkan driver.
-- FUSE 2 for the AppImage (`libfuse2` / `libfuse2t64`). Without FUSE, run it with `--appimage-extract-and-run`.
-
-Build notes: the Windows build used Visual Studio 2022 Build Tools with MSYS2's clang and the DirectX headers package (`HCU_VS_ROOT`, `HCU_LLVM_BIN`, `HCU_DX_HEADERS` in `tools/build.ps1`); the Linux AppImage was made with `tools/package-linux.sh` (`HCU_MAX_GLIBC=2.38`). Upstream's PC releases: [saulob/hard-corps-uprising-recompiled](https://github.com/saulob/hard-corps-uprising-recompiled/releases).
+Not in this release. Use the 0.303 PC builds: [switch-0.303.fdae3aa](https://github.com/rashevskyv/hard-corps-uprising-recompiled/releases/tag/switch-0.303.fdae3aa) (Windows x64 zip, Linux x86_64 AppImage, requirements there). Everything new in 0.310 is Switch code, so a PC build of 0.310 would be the same program.
 
 ## Legal note
 

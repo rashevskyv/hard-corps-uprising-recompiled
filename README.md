@@ -35,7 +35,7 @@ Logs: `sdmc:/switch/hcu/hcu_log.txt` and `hcu_rex_log.txt`. Settings: `sdmc:/swi
 
 ### Controls and the settings menu
 
-Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, **Y** = X, **X** = Y; **+** = START, **-** = BACK. The button prompts show the Switch letters.
+Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, **Y** = X, **X** = Y; **+** = START, **-** = BACK. The button prompts show Switch button icons (BUTTON ICONS below).
 
 **L3 + R3** (press both sticks) opens the port's settings menu. Up and down pick a line, left, right or **A** change it, **B** closes it and saves `settings.txt`. The game keeps running under the menu, so open it from the pause screen.
 
@@ -45,6 +45,7 @@ Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, 
 | OVERLAY | the version and performance line at the bottom of the screen: ON (default), OFF |
 | FPS COUNTER | the frame rate at the bottom of the screen: ON (default), OFF. It does not depend on OVERLAY: with OVERLAY off the frame rate is shown alone. |
 | RUMBLE | ON (default), OFF |
+| BUTTON ICONS | the button pictures in the game's prompts: SWITCH (default, our own Switch button icons), XBOX (the game's Xbox icons, with the A/B and X/Y pictures swapped so that each one shows the Switch letter of that button, as in 0.303). Applies at the next start. In `settings.txt`: `button_glyphs=switch` or `button_glyphs=xbox`. |
 | CONTROLLERS | press **A**: the console's controller applet (1 or 2 players). Pair the second controller there for local 2-player. |
 
 ### Local 2-player
