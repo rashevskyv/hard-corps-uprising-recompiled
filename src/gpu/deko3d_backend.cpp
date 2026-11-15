@@ -782,10 +782,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
       missing_draws_++;
       frame_missing_++;
       // Once per pair: the draw has no picture (an object can vanish). LoadShader logged and dumped the shader.
-      char key[48];
-      std::snprintf(key, sizeof(key), "drop %016llX %016llX", (unsigned long long)vs->ucode_data_hash(), (unsigned long long)ps->ucode_data_hash());
-      LogOnce(key, "draw dropped: no DKSH for VS %016llX (%s) PS %016llX (%s)", (unsigned long long)vs->ucode_data_hash(),
-              vs->loaded ? "ok" : "missing", (unsigned long long)ps->ucode_data_hash(), ps->loaded ? "ok" : "missing");
+      if (First(~(vs->ucode_data_hash() * 0x9E3779B97F4A7C15ull ^ ps->ucode_data_hash())))
+        Log("draw dropped: no DKSH for VS %016llX (%s) PS %016llX (%s)", (unsigned long long)vs->ucode_data_hash(),
+            vs->loaded ? "ok" : "missing", (unsigned long long)ps->ucode_data_hash(), ps->loaded ? "ok" : "missing");
       return true;
     }
     DkPrimitive prim;
