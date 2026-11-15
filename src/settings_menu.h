@@ -39,6 +39,8 @@ struct HcuSettings {
                       // returns white, 2/3 = the colour is fract(first fetch coordinate x 16 / x 256): the console's
                       // hatching is in the texels (gone at 1, stripes smooth) or in the interpolated UV (stripes jagged)
   int pad_applet;     // CONTROLLERS: 1 = the pad driver opens the console's controller applet on its next poll, then sets 0
+  int button_glyphs;  // BUTTON ICONS: 1 = Switch icons (our art, src/button_glyphs.cpp), 0 = the game's Xbox icons with
+                      // A<->B and X<->Y swapped (read when the game opens a screen's images)
 };
 
 extern HcuSettings hcu_settings;

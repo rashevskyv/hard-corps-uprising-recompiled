@@ -47,6 +47,7 @@ add_executable(hcu
     src/frame_meter.cpp
     src/gpu_fence_wait.cpp
     src/settings_menu.cpp
+    src/button_glyphs.cpp
     src/frame_recorder.cpp
 )
 rexglue_setup_target(hcu GPU_PLUGINS xenos)

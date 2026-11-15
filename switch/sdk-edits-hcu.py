@@ -282,15 +282,31 @@ edit('src/graphics/command_processor.cpp', [
 ])
 # The button prompts on the Switch: the pad maps by position (Xbox A = the bottom button = Switch B,
 # switch/host/input/nx_input_driver.cpp), so a prompt must show the Switch label of the button in that
-# place. The game's prompt images Gui/Img/guidebutton_A/B/X/Y.bin are served swapped (A<->B, X<->Y). The
-# game opens them relative to the Gui\Img directory handle, so the swap is in OpenFile, not ResolvePath.
+# place. button_glyphs=switch (src/button_glyphs.cpp): HostPathFile::ReadSync serves our Switch icon in
+# place of the bytes of Gui/Img/guidebutton_<NAME>.bin (same 5152-byte file, so nothing else changes).
+# button_glyphs=xbox: the game's Xbox icons, A/B/X/Y.bin served swapped (A<->B, X<->Y). The game opens them
+# relative to the Gui\Img directory handle, so the swap is in OpenFile, not ResolvePath.
+edit('src/filesystem/devices/host_path_file.cpp', [
+    ('#include <rex/filesystem/devices/host_path_file.h>' + NL,
+     '#include <rex/filesystem/devices/host_path_file.h>' + NL + '#include <rex/platform.h>' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL +
+     'extern "C" void rex_hcu_glyph_read(const char* name, uint64_t offset, uint8_t* dst, size_t len);  // hcu src/button_glyphs.cpp' + NL +
+     '#endif' + NL),
+    ('  if (file_handle_->Read(byte_offset, buffer.data(), buffer.size(), out_bytes_read)) {' + NL + '    return X_STATUS_SUCCESS;' + NL,
+     '  if (file_handle_->Read(byte_offset, buffer.data(), buffer.size(), out_bytes_read)) {' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL +
+     '    rex_hcu_glyph_read(entry()->name().c_str(), byte_offset, buffer.data(), *out_bytes_read);' + NL +
+     '#endif' + NL +
+     '    return X_STATUS_SUCCESS;' + NL),
+])
 edit('src/filesystem/virtual_file_system.cpp', [
-    ('#include <rex/string.h>' + NL, '#include <rex/string.h>' + NL + '#include <cctype>' + NL + '#include <cstdio>' + NL + '#include <cstring>' + NL),
+    ('#include <rex/string.h>' + NL, '#include <rex/string.h>' + NL + '#include <cctype>' + NL + '#include <cstdio>' + NL + '#include <cstring>' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL + 'extern "C" int rex_hcu_button_glyphs(void);  // hcu src/button_glyphs.cpp: 1 = Switch icons' + NL + '#endif' + NL),
     ('  std::string_view path = path_in;' + NL,
      '  std::string_view path = path_in;' + NL +
      '#if REX_PLATFORM_SWITCH' + NL +
      '  std::string nx_path;  // hcu: Switch labels on the button prompts (switch/sdk-edits-hcu.py)' + NL +
-     '  {' + NL +
+     '  if (!rex_hcu_button_glyphs()) {' + NL +
      '    static const char kSwap[] = "ABYX";  // A<->B, X<->Y' + NL +
      '    std::string low(path);' + NL +
      '    for (char& ch : low) ch = char(std::tolower(static_cast<unsigned char>(ch)));' + NL +

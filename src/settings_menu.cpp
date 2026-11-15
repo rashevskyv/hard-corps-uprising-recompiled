@@ -13,7 +13,7 @@
 HcuSettings hcu_settings = {.fps_mode = 0, .strip = 1, .fps_counter = 1, .rumble = 1, .shadow_bias = 0.f, .shadow_slope = 0.f,
                             .colour_bias = 0.f, .precise = 0, .filter = 0, .lod_bias = 0.f, .aniso = 1.f, .shadow_map = 1,
                             .view = 0, .view_step = 0, .dump = 0, .record = 0, .dxt_cpu = 1, .depth32 = 0, .gamma = 0,
-                            .rt16 = 1, .prepass = 0, .upload_strips = 0, .tex_view = 0, .pad_applet = 0};
+                            .rt16 = 1, .prepass = 0, .upload_strips = 0, .tex_view = 0, .pad_applet = 0, .button_glyphs = 1};
 
 namespace {
 
@@ -38,6 +38,7 @@ const Item kItems[] = {
     {"OVERLAY", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
     {"FPS COUNTER", {"OFF", "ON"}, 2, false, [] { return hcu_settings.fps_counter; }, [](int i) { hcu_settings.fps_counter = i; }},
     {"RUMBLE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.rumble; }, [](int i) { hcu_settings.rumble = i; }},
+    {"BUTTON ICONS", {"XBOX", "SWITCH"}, 2, true, [] { return hcu_settings.button_glyphs; }, [](int i) { hcu_settings.button_glyphs = i; }},
     // An action, not a value: the console's controller applet (1 or 2 players, full pads), for local 2-player.
     {"CONTROLLERS", {"PRESS A"}, 1, false, [] { return 0; }, [](int) { hcu_settings.pad_applet = 1; }},
     // The diagnostic items (biases, shadow map, prepass, gamma, 16F targets, views, dumps, precise, strips, DXT, depth
@@ -49,8 +50,8 @@ void Save() {
   if (g_dir.empty()) return;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
-    std::fprintf(f, "fps_mode=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass=%d\ngamma=%d\nrt16=%d\n",
-                 s.fps_mode, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass, s.gamma, s.rt16);
+    std::fprintf(f, "fps_mode=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%d\n",
+                 s.fps_mode, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass, s.gamma, s.rt16, s.button_glyphs);
     std::fclose(f);
   }
 }
@@ -83,6 +84,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "prepass")) s.prepass = int(v);
       else if (!std::strcmp(key, "gamma")) s.gamma = int(v);
       else if (!std::strcmp(key, "rt16")) s.rt16 = int(v);
+      else if (!std::strcmp(key, "button_glyphs")) s.button_glyphs = int(v);
       else if (!std::strcmp(key, "tex_view")) s.tex_view = int(v);  // read only (the Linux host has no pad)
     }
     std::fclose(f);

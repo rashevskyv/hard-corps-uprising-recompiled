@@ -85,10 +85,15 @@ X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screensho
 
 ## Player features (0.243 on)
 
-- **Button prompts with Switch letters.** The pad maps by position (`switch/host/input/nx_input_driver.cpp`:
-  Switch B = Xbox A at the bottom). The game opens its prompt images `Gui/Img/guidebutton_A/B/X/Y.bin` by name
-  relative to the `Gui\Img` directory; `switch/sdk-edits-hcu.py` swaps A<->B and X<->Y in the SDK's
-  `VirtualFileSystem::OpenFile` (Switch only), so the prompt for "OK" shows B, the button in that place.
+- **Switch button icons (BUTTON ICONS, `button_glyphs` in `settings.txt`, default SWITCH).** The pad maps by
+  position (`switch/host/input/nx_input_driver.cpp`: Switch B = Xbox A at the bottom). The game's 19 prompt images
+  `Gui/Img/guidebutton_<NAME>.bin` (32x32, 8-bit paletted, Xenos tiled) are replaced by our own icons: the solid
+  style of the switch-glyphs set (`tools/make_glyphs.py` -> `src/button_glyphs.h`, no Nintendo file). The SDK's
+  `HostPathFile::ReadSync` calls `src/button_glyphs.cpp`, which writes the icon over the file's bytes (same size).
+  By position: A -> B, B -> A, X -> Y, Y -> X, LB/RB -> L/R, LT/RT -> ZL/ZR, START/BACK -> +/-, the d-pad and
+  stick icons -> the Switch ones. XBOX keeps the game's icons with A<->B and X<->Y swapped in the SDK's
+  `VirtualFileSystem::OpenFile`. Not replaced: the How to play controller drawing (`htp_cntrl_00.bin`), the Guide
+  ring of the player name window (`gmtg_cntrl_*.bin`) and the baked "Press START" / "Xbox 360 controller" texts.
 - **Rumble.** `SetDeviceVibration` sends the 360's two motors to HD rumble (left = 160 Hz band, right = 320 Hz
   band) on handheld, a Joy-Con pair or a Pro Controller.
 - **Settings menu.** Both stick clicks (L3 + R3) open and close it (`src/settings_menu.cpp`, drawn by the
