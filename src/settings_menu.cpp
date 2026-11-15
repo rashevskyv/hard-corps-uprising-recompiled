@@ -50,8 +50,8 @@ void Save() {
   if (g_dir.empty()) return;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
-    std::fprintf(f, "fps_mode=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%d\n",
-                 s.fps_mode, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass, s.gamma, s.rt16, s.button_glyphs);
+    std::fprintf(f, "fps_mode=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%s\n",
+                 s.fps_mode, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass, s.gamma, s.rt16, s.button_glyphs ? "switch" : "xbox");
     std::fclose(f);
   }
 }
@@ -66,8 +66,12 @@ void hcu_settings_load(const char* dir) {
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "r")) {
     char line[64];
     while (std::fgets(line, sizeof(line), f)) {
-      char key[32];
+      char key[32], word[16];
       float v;
+      if (std::sscanf(line, "button_glyphs=%15s", word) == 1 && (!std::strcmp(word, "switch") || !std::strcmp(word, "xbox"))) {
+        s.button_glyphs = word[0] == 's';
+        continue;
+      }
       if (std::sscanf(line, "%31[^=]=%f", key, &v) != 2) continue;
       if (!std::strcmp(key, "fps_mode")) s.fps_mode = int(v);
       else if (!std::strcmp(key, "strip")) s.strip = int(v);
