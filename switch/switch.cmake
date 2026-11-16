@@ -74,6 +74,24 @@ target_link_options(hcu PRIVATE
 # (page fault address, bad method, timeout) to the backend's debug callback; the release libdeko3d drops the text.
 option(HCU_DEKO3D_DEBUG "link the debug deko3d (argument checks, fault text in the log)" OFF)
 target_link_libraries(hcu PRIVATE "${NVK_SDK}/lib/libvulkan.a" $<IF:$<BOOL:${HCU_DEKO3D_DEBUG}>,deko3dd,deko3d> zstd lz4 expat z nx m stdc++)
+# HCU_SWITCH_LTO: GCC link-time optimisation (renut-nx docs/pgo-lto.md, renut_nx_ultimate_base docs/building.md). The
+# game code, the app, the GPU plugin (the deko3d renderer), the SDK runtime with its OBJECT libraries and FFmpeg are
+# compiled to GIMPLE and optimised as one program at the link; the toolchain's archiver is gcc-ar, which indexes LTO
+# objects. The link repeats the SDK's -ffp-contract=off and -fno-strict-aliasing (the reference's link flags), so the
+# game code, compiled without them, links with them too. XXH_FORCE_MEMORY_ACCESS=0: xxHash's default access is a
+# strict-aliasing violation once inlined (garbage keys in nfsmw-nx's LTO build). Out of LTO: switch_nx.cpp defines
+# --wrap's __wrap___syscall_thread_create (the link must see an ordinary definition), fiber_nx.cpp has top-level asm.
+# The PC's ThinLTO (CMakeLists.txt, clang) is separate. OFF: the plain link (much faster for daily builds).
+option(HCU_SWITCH_LTO "link-time optimisation of the game code, the app and the SDK (Switch)" ON)
+if(HCU_SWITCH_LTO)
+    foreach(_t hcu hcu_recomp rexruntime rexgpu-xenos rexaudio rexcore rexfilesystem rexinput rexui libavcodec libavutil)
+        target_compile_options(${_t} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-flto;-fno-fat-lto-objects>")
+        target_compile_definitions(${_t} PRIVATE XXH_FORCE_MEMORY_ACCESS=0)
+    endforeach()
+    target_link_options(hcu PRIVATE -flto=8 -flto-partition=balanced -ffp-contract=off -fno-strict-aliasing)
+    set_property(SOURCE ${HCU_SWITCH_HOST}/switch_nx.cpp APPEND PROPERTY COMPILE_OPTIONS -fno-lto)
+    set_property(SOURCE ${HCU_SWITCH_HOST}/fiber_nx.cpp TARGET_DIRECTORY rexcore APPEND PROPERTY COMPILE_OPTIONS -fno-lto)
+endif()
 # nx_create_nro ignores NAME/AUTHOR/VERSION: the NACP is generated here and handed to it.
 nx_generate_nacp(hcu.nacp NAME "Hard Corps: Uprising" AUTHOR "hcu-switch" VERSION "${HCU_VERSION}")
 # The hbmenu icon: the title image from the game's own package, kept local (gitignored, game material); without it
