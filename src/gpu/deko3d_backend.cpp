@@ -89,6 +89,7 @@ namespace rex::graphics::deko {
 namespace {
 
 constexpr uint32_t kFrames = 2;
+constexpr uint32_t kMaxSteps = 4096;  // GPU timestamp reports of one frame's trail (Step)
 constexpr uint32_t kFrameDataBytes = 24u << 20;  // vertex, index and uniform data of one frame
 constexpr uint32_t kFrameCmdBytes = 4u << 20;
 // One frame's texture uploads. The first stage's backdrop layers are 4320x2432 RGBA8 textures (41 MB each): a
@@ -289,6 +290,7 @@ struct Frame {
   uint32_t next_descriptor = 0;
   std::unordered_map<uint64_t, uint32_t> descriptors;  // image (and swizzle) -> descriptor slot this frame
   uint32_t ts_off = UINT32_MAX;  // two GPU timestamps (16 bytes each) in `timestamps_`: frame start, after the last barrier
+  std::vector<std::string> steps;  // the trail (Step): one text per GPU timestamp report in `steps_`
   bool rec_pending = false;  // RECORD 5 SEC: this frame's front buffer copy waits in rec_ for the fence
   uint32_t rec_swap = 0;
   uint64_t rec_us = 0;
@@ -630,7 +632,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
         !images_.Create(device_, kImagePoolBytes, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image) ||
         !descriptors_.Create(device_, DK_MEMBLOCK_ALIGNMENT * 4 * kFrames + DK_MEMBLOCK_ALIGNMENT * 2 + kSamplerCount * sizeof(DkSamplerDescriptor), DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached) ||
         !cmdmem_.Create(device_, kFrameCmdBytes * kFrames, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached) ||
-        !timestamps_.Create(device_, DK_MEMBLOCK_ALIGNMENT, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)) {
+        !timestamps_.Create(device_, DK_MEMBLOCK_ALIGNMENT, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached) ||
+        !steps_.Create(device_, kMaxSteps * 16 * kFrames, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuUncached)) {
       Log("memory block creation failed");
       return false;
     }
@@ -969,9 +972,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // drawn, so the map keeps its clear and every receiver is lit. Rings that stay then do not come from the shadow test.
     if (!color && dc.z_write_enable && !hcu_settings.shadow_map) { skipped_++; frame_skipped_++; return true; }
     // DEPTH PREPASS SKIP: the game's depth-only draws into a colour target (its depth pre-pass; the colour pass repeats the
-    // mesh with another vertex shader under LEQUAL and writes depth itself, so the picture needs none of them).
-    if (color && !writes_color && dc.z_write_enable && !hcu_settings.prepass) {
-      LogOnce("prepass", "DEPTH PREPASS SKIP: first skipped depth-only draw (VS %016llX, swap #%u)", (unsigned long long)vs->ucode_data_hash(), swaps_);
+    // mesh with another vertex shader under LEQUAL and writes depth itself, so the picture needs none of them). `color` is
+    // null for every draw that writes no colour (above), so the colour target is told by the EDRAM mode: the old test
+    // `color && !writes_color` was never true and the old key prepass=0 skipped nothing (the console's verified picture
+    // has the pre-pass drawn). The key is prepass_skip=1 now, so the prepass=0 that every saved settings.txt holds keeps
+    // that picture.
+    // Not checked: whether the shadow pass also runs in a colour mode with all channels masked (then this skips it too).
+    if (mode != xenos::EdramMode::kDepthOnly && !writes_color && writes_depth && hcu_settings.prepass_skip) {
+      LogOnce("prepass", "DEPTH PREPASS SKIP: first skipped depth-only draw (VS %016llX, depth %ux%u, swap #%u)", (unsigned long long)vs->ucode_data_hash(),
+              depth ? depth->width : 0, depth ? depth->height : 0, swaps_);
       skipped_++;
       frame_skipped_++;
       return true;
@@ -1206,6 +1215,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     } else {
       dkCmdBufDraw(cmd, prim, index_count, 1, 0, 0);
     }
+    Step(f, "draw VS %016llX PS %016llX n=%u target=%ux%u sc=%ux%u", (unsigned long long)vs->ucode_data_hash(),
+         (unsigned long long)ps->ucode_data_hash(), index_count, target_w, target_h, scissor.width, scissor.height);
 #ifdef HCU_DK_GL
     if (TraceFrame() && std::getenv("HCU_DK_TRACE_DUMP") && (color ? color : depth)->width) {
       // One picture per draw (HCU_DK_TRACE_DUMP=<dir>): the colour target after the draw, named by swap and draw number.
@@ -1504,6 +1515,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         }
       }
     }
+    Step(f, "present");
     dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
 #ifdef __SWITCH__
     if (f.ts_off != UINT32_MAX) dkCmdBufReportCounter(cmd, DkCounter_Timestamp, timestamps_.gpu + f.ts_off + 16);
@@ -1724,6 +1736,89 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #endif
 
   // ----- frames ---------------------------------------------------------------------------------
+  // The GPU time of each step (from tmnt-recomp's trail, plan G1): a timestamp report without a barrier after the step's
+  // commands, so a step's time is its report minus the one before.
+  [[gnu::format(printf, 3, 4)]] void Step(Frame& f, const char* fmt, ...) {
+#ifdef __SWITCH__
+    if (!trail_ || f.steps.size() == kMaxSteps) return;
+    char line[256];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    const uint32_t index = uint32_t(f.steps.size());
+    f.steps.emplace_back(line);
+    dkCmdBufReportCounter(f.cmdbuf, DkCounter_Timestamp, steps_.gpu + (uint64_t(&f - frames_) * kMaxSteps + index) * 16);
+#else
+    (void)f, (void)fmt;
+#endif
+  }
+  // dk_gpu_times_<ordinal>.txt next to the shader directory, and the 12 largest groups in the log. Draws group by VS, PS,
+  // target and scissor; other steps by their first word or two. Called after the frame's fence, before its ts_off is reset.
+  void WriteStepTimes(const Frame& f, uint32_t ordinal) {
+    if (f.ts_off == UINT32_MAX || f.steps.empty()) return;
+    const uint64_t* ts = reinterpret_cast<const uint64_t*>(timestamps_.cpu + f.ts_off);
+    const uint64_t* reports = reinterpret_cast<const uint64_t*>(steps_.cpu) + uint64_t(&f - frames_) * kMaxSteps * 2;
+    const uint64_t t0 = ts[1] ? ts[1] : ts[0], t1 = ts[3] ? ts[3] : ts[2];
+    auto ms = [](uint64_t ticks) { return double(ticks) * 625.0 / 384.0 / 1e6; };  // GPU ticks of 625/384 ns
+    struct Group { uint32_t count = 0; uint64_t total = 0, max = 0, indices = 0; };
+    std::unordered_map<std::string, Group> groups;
+    std::vector<uint64_t> step(f.steps.size());
+    uint64_t prev = t0, sum = 0;
+    uint32_t bad = 0;
+    for (size_t i = 0; i < f.steps.size(); i++) {
+      const uint64_t t = reports[i * 2 + 1] ? reports[i * 2 + 1] : reports[i * 2];
+      if (!t || t < prev) bad++;  // the same tick as the step before is a real 0
+      else step[i] = t - prev;
+      prev = std::max(prev, t);
+      sum += step[i];
+      const std::string& text = f.steps[i];
+      std::string key;
+      uint64_t n = 0;
+      if (text.starts_with("draw ")) {
+        key = text;
+        if (size_t p = key.find(" n="); p != std::string::npos) {
+          n = std::strtoull(key.c_str() + p + 3, nullptr, 10);
+          key.erase(p, key.find(' ', p + 1) - p);
+        }
+      } else {
+        size_t end = text.find(' ');
+        const std::string first = text.substr(0, end);
+        if (end != std::string::npos && (first == "depth" || (first == "resolve" && text.compare(end, 7, " clear ") == 0)))
+          end = text.find(' ', end + 1);
+        key = text.substr(0, end);
+      }
+      Group& g = groups[key];
+      g.count++;
+      g.total += step[i];
+      g.max = std::max(g.max, step[i]);
+      g.indices += n;
+    }
+    std::vector<std::pair<std::string, Group>> sorted(groups.begin(), groups.end());
+    std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second.total > b.second.total; });
+    char header[256];
+    std::snprintf(header, sizeof(header), "GPU step times, swap %u: %zu steps, frame top to bottom %.3f ms, steps sum %.3f ms, %u reports missing or out of order",
+                  swaps_, f.steps.size(), t1 > t0 ? ms(t1 - t0) : 0.0, ms(sum), bad);
+    auto group_line = [&](const std::pair<std::string, Group>& e, char* out, size_t size) {
+      std::snprintf(out, size, "%9.3f %5.1f%% %6u %8.3f %10llu  %s", ms(e.second.total), sum ? 100.0 * double(e.second.total) / double(sum) : 0.0,
+                    e.second.count, ms(e.second.max), (unsigned long long)e.second.indices, e.first.c_str());
+    };
+    char line[512];
+    Log("%s", header);
+    for (size_t i = 0; i < sorted.size() && i < 12; i++) { group_line(sorted[i], line, sizeof(line)); Log("  %s", line); }
+    const std::string path = debug_dir_ + "dk_gpu_times_" + std::to_string(ordinal) + ".txt";
+    FILE* out = std::fopen(path.c_str(), "w");
+    if (!out) { Log("GPU step times could not be opened: %s", path.c_str()); return; }
+    std::fprintf(out, "%s\nReports have no barriers: one step's time can leak into its neighbours; trust group totals, not single steps.\n"
+                 " total_ms share%%  count   max_ms    indices  key\n", header);
+    for (const auto& e : sorted) { group_line(e, line, sizeof(line)); std::fprintf(out, "%s\n", line); }
+    std::fprintf(out, "\nindex ms text\n");
+    for (size_t i = 0; i < f.steps.size(); i++) std::fprintf(out, "%zu %.3f %s\n", i, ms(step[i]), f.steps[i].c_str());
+    const bool write_failed = std::ferror(out) != 0;
+    if (std::fclose(out) != 0 || write_failed) { Log("GPU step times could not be written completely: %s", path.c_str()); return; }
+    Log("GPU step times written to %s", path.c_str());
+  }
+
   void BeginFrame() {
     Frame& f = frames_[frame_];
     if (f.fenced) {
@@ -1752,7 +1847,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (t[1] && t[3] > t[1]) rex_nx_meter_gpu_frame(double(t[3] - t[1]) * 625.0 / 384.0 / 1e6);
       }
 #endif
+      // ponytail: the trail costs a formatted line and a GPU report per step, so it ends after 100 frames of 150+ draws
+      // (the console's menus draw 97 or fewer, a level 235-438; the first swap has 132 clears and 76 resolves, so draws count).
+      // Frames 20 and 60 write their step times; the fps before and after the "GPU trail off" line gives the trail's own
+      // cost. A trail later in the level needs a switch for it.
+      if (trail_ && std::count_if(f.steps.begin(), f.steps.end(), [](const std::string& s) { return s.starts_with("draw "); }) >= 150) {
+        ++trail_frames_;
+        if (r == DkResult_Success && (trail_frames_ == 20 || trail_frames_ == 60)) WriteStepTimes(f, trail_frames_ == 20 ? 0 : 1);
+        if (trail_frames_ == 100) {
+          trail_ = false;
+          Log("GPU trail off: 100 frames of 150+ draws finished");
+        }
+      }
     }
+    f.steps.clear();
     f.ts_off = UINT32_MAX;
     f.data.Reset();
     vtx_copies_.clear();
@@ -1770,6 +1878,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     f.ts_off = frame_ * 32;
     std::memset(timestamps_.cpu + f.ts_off, 0, 32);
     dkCmdBufReportCounter(f.cmdbuf, DkCounter_Timestamp, timestamps_.gpu + f.ts_off);
+    if (trail_) std::memset(steps_.cpu + frame_ * kMaxSteps * 16, 0, kMaxSteps * 16);
 #endif
     bound_color_ = nullptr;
     bound_depth_ = nullptr;
@@ -2227,6 +2336,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
       uploads_++;
       upload_bytes_ += rgba;
+      Step(f, "upload %08X %ux%u (DXT on CPU)", info.memory.base_address, width, height);
       LogOnce("dxtcpu", "DXT ON CPU: DXT textures are decoded to RGBA8 on the CPU (first: %s %ux%u at %08X)", fi->name, width, height,
               info.memory.base_address);
       return true;
@@ -2271,6 +2381,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
     uploads_++;
     upload_bytes_ += bytes;
+    Step(f, "upload %08X %ux%u", info.memory.base_address, width, height);
     if (uploads_ <= 8) Log("texture %s %ux%u %s endian %u at %08X: %u KB uploaded", fi->name, width, height,
                            info.is_tiled ? "tiled" : "linear", uint32_t(endian), info.memory.base_address, bytes >> 10);
     return true;
@@ -2498,6 +2609,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (TraceFrame()) Log("T clear %s%s EDRAM %u/%u pitch %u rect %u,%u %ux%u color %g %g %g %g z %g", color_img ? "color" : "", depth_img ? " depth" : "",
                             color_info.color_base, depth_info.depth_base, pitch, sc.x, sc.y, sc.width, sc.height, color[0], color[1], color[2], color[3], z);
 #endif
+      Step(f, "clear EDRAM color=%u depth=%u rect %u,%u %ux%u", color_img ? uint32_t(color_info.color_base) : 0u,
+           depth_img ? uint32_t(depth_info.depth_base) : 0u, sc.x, sc.y, sc.width, sc.height);
       clears_++;
       frame_clears_++;
     }
@@ -2526,6 +2639,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         dkCmdBufSetScissors(cmd, 0, &sc, 1);
         float z = float(info.rb_depth_clear >> 8) / float(0xFFFFFF);
         dkCmdBufClearDepthStencil(cmd, true, z, 0xFF, info.rb_depth_clear & 0xFF);
+        Step(f, "depth clear EDRAM %u rect %u,%u %ux%u", info.depth_original_base, cx, cy, cw, ch);
         char key[64];
         std::snprintf(key, sizeof(key), "dclear %u %u %u %u %u %u", info.depth_original_base, dpitch, cx, cy, cw, ch);
         LogOnce(key, "resolve clears depth at EDRAM %u pitch %u: rect %u,%u %ux%u to %g, stencil %u", info.depth_original_base, dpitch, cx,
@@ -2565,6 +2679,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
         dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
         dkCmdBufCopyImage(cmd, &sv, &sr, &dv, &dr, 0);
         dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+        Step(f, "depth resolve EDRAM %u %ux%u rect %u,%u %ux%u -> %08X", info.depth_original_base, dsrc->width, dsrc->height, x, y, w, h,
+             info.copy_dest_base);
       }
       char key[96];
       std::snprintf(key, sizeof(key), "depthcopy %u %u %u %u %u %u %08X", info.depth_original_base, dpitch, x, y, w, h, info.copy_dest_base);
@@ -2608,6 +2724,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
       dkCmdBufCopyImage(cmd, &sv, &sr, &dv, &dr, 0);
       dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+      Step(f, "resolve EDRAM %u %ux%u rect %u,%u %ux%u -> %08X", info.color_edram_info.base_tiles, src->width, src->height, x, y, w, h,
+           info.copy_dest_base);
     }
     if (info.IsClearingColor()) {
       BindTargets(cmd, src, nullptr);
@@ -2616,6 +2734,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       uint32_t c = info.rb_color_clear;
       float color[4] = {((c >> 16) & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, (c & 0xFF) / 255.0f, ((c >> 24) & 0xFF) / 255.0f};
       dkCmdBufClearColor(cmd, 0, DkColorMask_RGBA, color);
+      Step(f, "resolve clear EDRAM %u rect %u,%u %ux%u", info.color_edram_info.base_tiles, x, y, w, h);
     }
     {
       // Every distinct resolve (source rect, destination and offset) once: the frame structure.
@@ -2746,6 +2865,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
   DkSwapchain swapchain_ = nullptr;
   MemBlock code_, images_, descriptors_, cmdmem_;
   MemBlock timestamps_;  // Frame::ts_off: 32 bytes per frame (two GPU timestamps)
+  MemBlock steps_;       // Frame::steps: kMaxSteps reports of 16 bytes per frame
+#ifdef __SWITCH__
+  bool trail_ = true;  // Step: a GPU timestamp after each draw, clear, resolve and upload of the first level frames
+#else
+  bool trail_ = false;
+#endif
+  uint32_t trail_frames_ = 0;
   uint32_t sampler_desc_offset_ = 0;
   Frame frames_[kFrames];
   uint32_t frame_ = 0;

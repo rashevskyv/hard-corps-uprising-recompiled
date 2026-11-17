@@ -26,6 +26,12 @@ add_compile_definitions(VULKAN_HPP_ENABLE_DYNAMIC_LOADER_TOOL=0)
 add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-include>"
                     "$<$<COMPILE_LANGUAGE:C,CXX>:${REXGLUE_SWITCH_INCLUDE_DIR}/switch_compat.h>")
 include_directories(${REXGLUE_SWITCH_INCLUDE_DIR})
+# -mearly-ra=none (renut_nx_ultimate_base app/CMakeLists.txt, from peggle2-nx): devkitA64 GCC 16.1's AArch64 early
+# register allocation pass (on at -O2 and above) dropped table lookups of the NEON vperm helper and overwrote a constant's
+# register in Peggle 2's console build: large textures were garbage on the console only. Here, before the SDK is added,
+# so the SDK, FFmpeg and the LTO link get it too.
+add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-mearly-ra=none>")
+add_link_options(-mearly-ra=none)
 # generated/rexglue.cmake runs the rexglue CLI as a build step: the cross build takes the host-built one.
 set(REXGLUE_HOST_CLI "${REXSDK_DIR}/out/linux-amd64/Release/rexglue" CACHE FILEPATH "Host rexglue CLI")
 add_executable(rex::rexglue IMPORTED GLOBAL)

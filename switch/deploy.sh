@@ -5,7 +5,7 @@
 #       out/build/switch/hcu.nro: each file goes up as <name>.part, is downloaded again, its SHA-1 compared
 #       with the local file, then renamed (the console has gone offline mid-upload). The game data
 #       goes once, by hand: game/extracted/ -> sdmc:/switch/hcu/game/ (default.xex, DataXENON/, ArcadeInfo.xml, nxeart).
-# logs: hcu_log.txt and hcu_rex_log.txt -> switch/logs/ (git-ignored).
+# logs: hcu_log_<build id>.txt and hcu_rex_log.txt -> switch/logs/ (git-ignored).
 set -e
 cd "$(dirname "$0")/.."
 IP=$1
@@ -59,7 +59,9 @@ case "$ACTION" in
         ;;
     logs)
         mkdir -p switch/logs
-        for log in hcu_log.txt hcu_rex_log.txt; do
+        # The game's log is hcu_log_<build id>.txt (switch_nx.cpp open_log): the id of the local build.
+        ID=$(grep -o 'HCU_BUILD_ID "[^"]*"' "${SWITCH_BUILD_DIR:-out/build/switch}/hcu_version.h" 2>/dev/null | cut -d'"' -f2)
+        for log in "hcu_log${ID:+_$ID}.txt" hcu_rex_log.txt; do
             curl -sS -o "switch/logs/$log" "$URL/$log" && echo "switch/logs/$log" || true
         done
         ;;

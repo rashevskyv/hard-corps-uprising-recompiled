@@ -55,13 +55,20 @@ if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.
     echo "$CG_STAMP" > "$SRC/generated/.hcu-codegen-stamp"
 fi
 
-COUNT=$(git -c safe.directory="*" -C "$GIT_DIR" rev-list --count HEAD 2>/dev/null || echo 0)
-SHA=$(git -c safe.directory="*" -C "$GIT_DIR" rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
-DIRTY=$(git -c safe.directory="*" -c core.autocrlf=true -C "$GIT_DIR" status --porcelain --untracked-files=no 2>/dev/null | grep -q . && echo "+" || true)
+# A git worktree made on Windows has "gitdir: D:/..." in its .git file, which WSL's git can not open (the version
+# was 0.0.unknown): the path is handed over as /mnt/d/....
+WIN_GITDIR=$(sed -n 's|^gitdir: \([A-Za-z]\):/|/mnt/\L\1\E/|p' "$GIT_DIR/.git" 2>/dev/null || true)
+git_src() { git -c safe.directory="*" -C "$GIT_DIR" ${WIN_GITDIR:+--git-dir="$WIN_GITDIR" --work-tree="$GIT_DIR"} "$@"; }
+COUNT=$(git_src rev-list --count HEAD 2>/dev/null || echo 0)
+SHA=$(git_src rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+DIRTY=$(git_src -c core.autocrlf=true status --porcelain --untracked-files=no 2>/dev/null | grep -q . && echo "+" || true)
 VERSION="0.$COUNT.$SHA$DIRTY"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
+# The build id names the log (hcu_log_<id>.txt): two builds of one commit (hcu-clk and hcu-clk-cg13, both
+# 0.328.40da12f) wrote over each other's hcu_log.txt.
+BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
-printf '#define HCU_VERSION "%s"\n#define HCU_BUILD_UTC "%s"\n' "$VERSION" "$STAMP" > "$BUILD/hcu_version.h.new"
+printf '#define HCU_VERSION "%s"\n#define HCU_BUILD_UTC "%s"\n#define HCU_BUILD_ID "%s"\n' "$VERSION" "$STAMP" "$BUILD_ID" > "$BUILD/hcu_version.h.new"
 if ! cmp -s "$BUILD/hcu_version.h.new" "$BUILD/hcu_version.h" 2>/dev/null; then
     mv "$BUILD/hcu_version.h.new" "$BUILD/hcu_version.h"
 else

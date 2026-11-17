@@ -32,8 +32,9 @@ struct HcuSettings {
   int depth32;        // DEPTH 32 BIT (at start): every depth target and depth texture is ZF32_X24S8 instead of Z24S8
   int gamma;          // GAMMA RAMP: 1 = the game's display gamma ramp in the present pass, 0 = identity (live)
   int rt16;           // SCENE RT 16F (at start): the game's 8_8_8_8 colour targets are RGBA16_Float images instead of RGBA8_Unorm
-  int prepass;        // DEPTH PREPASS: 0 = the game's depth-only draws of the colour pass are skipped (A/B of the console's
-                      // brick hatching: the colour pass repeats them with another vertex shader under LEQUAL)
+  int prepass_skip;   // DEPTH PREPASS (prepass_skip=1 in settings.txt): the game's depth-only draws of the colour pass are
+                      // skipped (A/B of the console's brick hatching and GPU time: the colour pass repeats them with another
+                      // vertex shader under LEQUAL). 0 = drawn, the verified picture.
   int upload_strips;  // 1 = textures go up in strips of 64 block rows (A/B of the console hatching; at start)
   int tex_view;       // TEXTURE VIEW (live, not saved; Sys alpha.w of every pixel shader): 1 = every texture fetch
                       // returns white, 2/3 = the colour is fract(first fetch coordinate x 16 / x 256): the console's

@@ -16,7 +16,12 @@ $dumps = '/root/hcu/shaders_trace'
 $version = wsl -u root -e bash -lc "set -e; rm -rf $sd/shaders; cp -r $stage/shaders $sd/shaders; cp $stage/hcu.nro $sd/hcu.nro; touch $sd/deko3d; mkdir -p $sd/shaders/missing; grep -o '0[.][0-9]*[.][0-9a-f+]*' /root/hcu/src/out/build/switch/hcu_version.h | head -1"
 $version = ($version | Select-Object -Last 1).Trim()
 if (-not $version) { throw 'staging failed (no version)' }
-Remove-Item "$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log\eden_log.txt' -ErrorAction SilentlyContinue
+# The game's log is hcu_log_<build id>.txt (switch_nx.cpp open_log).
+$id = wsl -u root -e sed -n 's/.*HCU_BUILD_ID .\(.*\)./\1/p' /root/hcu/src/out/build/switch/hcu_version.h
+$id = ($id | Select-Object -Last 1).Trim()
+if (-not $id) { throw 'no HCU_BUILD_ID in hcu_version.h' }
+$log = "$dir\hcu_log_$id.txt"
+Remove-Item $log, "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log\eden_log.txt' -ErrorAction SilentlyContinue
 $out = "E:\conker-data\eden-runs\hcu-$version-deko3d"
 if ($Tag) { $out += "-$Tag" }
 Write-Output "Eden deko3d: hcu $version for $Seconds s, screenshots every $Every s, keys '$Keys' -> $out"
@@ -24,12 +29,12 @@ Remove-Item "$dir\pad.txt" -ErrorAction SilentlyContinue
 if ($Keys) { ($Keys -split ',' | ForEach-Object { $_.Trim() }) -join "`n" | Set-Content -Path "$dir\pad.txt" -Encoding ascii }
 & powershell -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\eden-shot.ps1" -Nro "$dir\hcu.nro" -Out $out -Seconds $Seconds -Every $Every
 New-Item -ItemType Directory -Force $out | Out-Null
-foreach ($f in @("$dir\hcu_log.txt", "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log\eden_log.txt')) {
+foreach ($f in @($log, "$dir\hcu_rex_log.txt", 'E:\Switch\Eden\user\log\eden_log.txt')) {
     if (Test-Path $f) { Copy-Item $f $out -Force }
 }
-if (Test-Path "$dir\hcu_log.txt") {
+if (Test-Path $log) {
     Write-Output '--- backend lines (last 40)'
-    Select-String -Path "$dir\hcu_log.txt" -Pattern '\[dk\]|gpu: swap|\[nx\] fps|crash|exception' | Select-Object -Last 40 | ForEach-Object { $_.Line }
+    Select-String -Path $log -Pattern '\[dk\]|gpu: swap|\[nx\] fps|crash|exception' | Select-Object -Last 40 | ForEach-Object { $_.Line }
     $missing = Get-ChildItem "$dir\shaders\missing" -Filter 'shader_*.ucode.*' -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '\.bin\.' }
     if ($missing) {
         Write-Output ("missing shaders dumped: " + ($missing.Name -join ' '))

@@ -590,7 +590,9 @@ void open_log() {
     mkdir("sdmc:/switch", 0777);
     mkdir(kDataDir, 0777);
     char path[256];
-    std::snprintf(path, sizeof(path), "%s/hcu_log.txt", kDataDir);
+    // One log per build (HCU_BUILD_ID = version + build time, switch/build.sh): two builds of one commit do not
+    // write over each other's log.
+    std::snprintf(path, sizeof(path), "%s/hcu_log_" HCU_BUILD_ID ".txt", kDataDir);
     if (std::freopen(path, "w", stdout) == nullptr) {
         return;
     }

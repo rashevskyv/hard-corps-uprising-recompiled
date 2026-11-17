@@ -1,7 +1,7 @@
 # Runs the Switch build in Eden (no-GPU mode: the null GPU backend) and reports whether it passed.
 #   powershell -File switch/eden-run.ps1 [-Minutes 3]
 # Stages out/build/switch/hcu.nro (WSL) into Eden's sdmc, starts eden.exe -g <nro>, watches
-# hcu_log.txt, closes Eden politely (CloseMainWindow, force only after 15 s), backs the logs up to
+# hcu_log_<build id>.txt, closes Eden politely (CloseMainWindow, force only after 15 s), backs the logs up to
 # E:\conker-data\eden-runs\hcu-<version>\. Pass = "[nx] gpu: swap #N" lines with N growing.
 # Never start a second Eden while one runs (CLAUDE.md "Eden before the console").
 param([int]$Minutes = 3)
@@ -9,12 +9,16 @@ $ErrorActionPreference = 'Stop'
 $eden = 'E:\Switch\Eden\eden.exe'
 $dir = 'E:\Switch\Eden\user\sdmc\switch\hcu'
 $nro = "$dir\hcu.nro"
-$log = "$dir\hcu_log.txt"
 
 # Another port's Eden may run from another folder (conker-lr-xbox); only this Eden must be idle.
 if (Get-Process eden -ErrorAction SilentlyContinue | Where-Object Path -eq $eden) { throw "Eden ($eden) is already running: not starting a second one" }
 wsl -u root -e bash -lc "cp /root/hcu/src/out/build/switch/hcu.nro /mnt/e/Switch/Eden/user/sdmc/switch/hcu/hcu.nro && grep -o '0\.[0-9]*\.[0-9a-f+]*' /root/hcu/src/out/build/switch/hcu_version.h | head -1" | Tee-Object -Variable version | Out-Null
 $version = ($version | Select-Object -Last 1).Trim()
+# The game's log is hcu_log_<build id>.txt (switch_nx.cpp open_log).
+$id = wsl -u root -e sed -n 's/.*HCU_BUILD_ID .\(.*\)./\1/p' /root/hcu/src/out/build/switch/hcu_version.h
+$id = ($id | Select-Object -Last 1).Trim()
+if (-not $id) { throw 'no HCU_BUILD_ID in hcu_version.h' }
+$log = "$dir\hcu_log_$id.txt"
 if (-not (Test-Path "$dir\nogpu")) { Set-Content "$dir\nogpu" 'nogpu' -Encoding ascii }
 Remove-Item $log, "$dir\hcu_rex_log.txt" -ErrorAction SilentlyContinue
 $edenLog = 'E:\Switch\Eden\user\log\eden_log.txt'
