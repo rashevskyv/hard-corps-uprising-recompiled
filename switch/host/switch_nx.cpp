@@ -1,6 +1,7 @@
 // Nintendo Switch (libnx) start-up for the hcu port: the log on the SD card, the clocks, the exit
 // path and the crash report. Everything lives in sdmc:/switch/hcu/. Adapted from the N64 port's
 // host/switch/switch_nx.cpp (rashevskyv/CBFD-Recompiled, branch switch).
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -74,6 +75,27 @@ Clock clocks[] = {
 };
 bool clkrst_up = false;
 
+// The CPU clock as the core really runs it, whatever clkrst says: 8 dependent adds per iteration (1 cycle each on
+// the A57), timed with the 19.2 MHz system tick; the fastest of three runs (a preempted run reads slow). All four
+// cores share one clock. 250k iterations = 2M cycles, 1.1 ms at 1785 MHz. The calibration line in raise_clocks
+// checks the 8 cycles: at clkrst's 1020 the loop must read ~1020 too.
+u32 busy_loop_mhz() {
+    u64 best = ~0ull;
+    for (int run = 0; run < 3; run++) {
+        u64 n = 250000, x = 0;
+        const u64 t0 = armGetSystemTick();
+        asm volatile(
+            "1:\n"
+            "add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n"
+            "add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n"
+            "subs %1, %1, #1\n b.ne 1b\n"
+            : "+r"(x), "+r"(n)::"cc");
+        const u64 ticks = armGetSystemTick() - t0;
+        if (ticks < best) best = ticks;
+    }
+    return best ? (u32)(250000ull * 8 * 19200000 / best / 1000000) : 0;
+}
+
 // Is another process serving this name? (sys-clk's own check.)
 bool service_running(const char* name) {
     Handle handle;
@@ -104,6 +126,7 @@ void raise_clocks() {
         }
         clock.open = true;
         clkrstGetClockRate(&clock.session, &clock.old);
+        const u32 loop_before = &clock == &clocks[0] ? busy_loop_mhz() : 0;
         // Never lower a rate (docked memory, or someone else's overclock).
         const Result rc = clock.old < clock.wanted ? clkrstSetClockRate(&clock.session, clock.wanted) : 0;
         u32 now = 0;
@@ -111,6 +134,10 @@ void raise_clocks() {
         clock.set = now;
         std::printf("[clock] %s %u -> %u MHz%s\n", clock.name, clock.old / 1000000, now / 1000000,
                     R_FAILED(rc) ? " (refused)" : "");
+        if (loop_before) {
+            std::printf("[clock] calibration: busy-loop equals %u MHz before the raise, %u MHz after it\n",
+                        loop_before, busy_loop_mhz());
+        }
     }
 }
 
@@ -173,6 +200,68 @@ void register_thread(Thread* thread, const char* name) {
         }
     }
     mutexUnlock(&nx_threads_lock);
+}
+
+// The clock meter: how long the CPU really stays at the raised clock between keep_clocks' re-sets (every 2 s; the
+// 0.323 log: 86 of 87 checks found it put back to 1020). clkrst is read every 100 ms (read only, its own session),
+// and the busy loop runs once a second, free in phase against the 2-s re-set. One line of each per 10 s. Core 2,
+// below audio, above the guest's threads: ~5 ms of core 2 per second.
+Thread clock_meter_thread;
+volatile bool clock_meter_running = false;
+
+void clock_meter_loop(void*) {
+    ClkrstSession session;
+    const bool api = hosversionAtLeast(8, 0, 0) && R_SUCCEEDED(clkrstInitialize());
+    const bool open = api && R_SUCCEEDED(clkrstOpenSession(&session, PcvModuleId_CpuBus, 3));
+    if (!open) std::printf("[clock] meter: no clkrst, the busy loop only\n");
+    u32 rate[4] = {}, count[4] = {}, other = 0, samples = 0, resets = 0, last = 0;
+    u32 loop[10], loop_api[10], loops = 0;
+    while (clock_meter_running) {
+        svcSleepThread(100'000'000LL);
+        u32 hz = 0;
+        if (open && R_SUCCEEDED(clkrstGetClockRate(&session, &hz))) {
+            const u32 mhz = hz / 1000000;
+            if (last && mhz < last) resets++;
+            last = mhz;
+            int i = 0;
+            while (i < 4 && rate[i] && rate[i] != mhz) i++;
+            if (i < 4) { rate[i] = mhz; count[i]++; } else other++;
+            samples++;
+        }
+        if (++loops % 10 == 0) {
+            loop[loops / 10 - 1] = busy_loop_mhz();
+            loop_api[loops / 10 - 1] = hz / 1000000;
+        }
+        if (loops < 100) continue;
+        char line[256];
+        int n = 0;
+        for (int i = 0; i < 4 && rate[i] && samples; i++)
+            n += std::snprintf(line + n, sizeof(line) - n, "%s %u MHz %u%%", i ? "," : "", rate[i], count[i] * 100 / samples);
+        if (other && samples) n += std::snprintf(line + n, sizeof(line) - n, ", other %u%%", other * 100 / samples);
+        if (samples) std::printf("[clock] cpu%s over 10 s (%u resets, %u samples)\n", line, resets, samples);
+        n = 0;
+        u32 sorted[10];
+        std::memcpy(sorted, loop, sizeof(sorted));
+        std::sort(sorted, sorted + 10);
+        for (int i = 0; i < 10; i++) n += std::snprintf(line + n, sizeof(line) - n, " %u/%u", loop[i], loop_api[i]);
+        std::printf("[clock] busy-loop equals %u MHz (median of 10, 1 per s; min %u, max %u; loop/clkrst:%s)\n",
+                    sorted[4], sorted[0], sorted[9], line);
+        std::memset(rate, 0, sizeof(rate));
+        std::memset(count, 0, sizeof(count));
+        other = samples = resets = loops = 0;
+    }
+    if (open) clkrstCloseSession(&session);
+    if (api) clkrstExit();
+}
+
+void start_clock_meter() {
+    clock_meter_running = true;
+    if (R_SUCCEEDED(threadCreate(&clock_meter_thread, clock_meter_loop, nullptr, nullptr, 0x4000, 0x2C, 2))) {
+        register_thread(&clock_meter_thread, "Clock meter");
+        threadStart(&clock_meter_thread);
+    } else {
+        clock_meter_running = false;
+    }
 }
 
 // One line per 2 s: percent of one core per thread over the period (threads under 1% left out).
@@ -568,6 +657,7 @@ extern "C" void userAppInit(void) {
     rex_nx_reserve_pool();
     appletSetAutoSleepDisabled(true);
     raise_clocks();
+    start_clock_meter();
     envSetExitFuncPtr(end_process);
     register_thread(threadGetSelf(), "main");
     pinning = access("sdmc:/switch/hcu/nopin", F_OK) != 0;
@@ -633,6 +723,11 @@ extern "C" void userAppExit(void) {
     sampler_running = false;
     threadWaitForExit(&sampler_thread);
     threadClose(&sampler_thread);
+    if (clock_meter_running) {
+        clock_meter_running = false;
+        threadWaitForExit(&clock_meter_thread);
+        threadClose(&clock_meter_thread);
+    }
     log_flush_running = false;
     threadWaitForExit(&log_flush_thread);
     threadClose(&log_flush_thread);
