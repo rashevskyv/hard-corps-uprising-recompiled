@@ -142,17 +142,19 @@ print('changed (hcu fold):', *changed, sep=NL + '  ')
 
 # Call counters of the hooked guest functions and kernel exports (REX_HOOK is the one wrapper they all
 # go through): the Switch host prints the top ones with the 30 s profile (`[hooks]` lines), to see which
-# kernel calls the main thread makes per second.
+# kernel calls the main thread makes per second. Each waiting export also sums the main thread's time in it
+# (src/frame_meter.cpp prints the top three every 30 s: `[nx] main waits top`).
 write('include/rex/nx_hook_counter.h',
       '#pragma once' + NL + '#include <cstdint>' + NL + '#include <cstring>' + NL +
       '// The CPU-work meter (hcu src/frame_meter.cpp): time in waiting exports, and VdSwap as the frame mark.' + NL +
       '// Weak defaults for binaries without the meter (the SDK tool rexglue); frame_meter.cpp defines the real ones.' + NL +
       '#ifndef REX_NX_METER_IMPL' + NL +
       'extern "C" __attribute__((weak)) uint64_t rex_nx_meter_enter() { return 0; }' + NL +
-      'extern "C" __attribute__((weak)) void rex_nx_meter_leave(uint64_t, int) {}' + NL +
+      'extern "C" __attribute__((weak)) void rex_nx_meter_leave(uint64_t, int, uint64_t*) {}' + NL +
       '#else' + NL +
       'extern "C" uint64_t rex_nx_meter_enter();' + NL +
-      'extern "C" void rex_nx_meter_leave(uint64_t t0, int kind);' + NL +
+      '// main_wait: the export\'s HookCounter::main_wait (the main thread\'s time in it) or null.' + NL +
+      'extern "C" void rex_nx_meter_leave(uint64_t t0, int kind, uint64_t* main_wait);' + NL +
       '#endif' + NL +
       'namespace rex_nx {' + NL +
       'inline int HookKind(const char* s) {' + NL +
@@ -167,6 +169,7 @@ write('include/rex/nx_hook_counter.h',
       '  const char* name;' + NL +
       '  uint32_t n = 0;' + NL +
       '  int kind;  // 0 plain, 1 a waiting export, 2 VdSwap' + NL +
+      '  uint64_t main_wait = 0;  // host ticks the main thread waited in it (written and reset by that thread only)' + NL +
       '  HookCounter* next;' + NL +
       '  static HookCounter*& head() { static HookCounter* h = nullptr; return h; }' + NL +
       '  explicit HookCounter(const char* s) : name(s), kind(HookKind(s)), next(head()) { head() = this; }' + NL +
@@ -187,7 +190,8 @@ edit('include/rex/hook.h', [
      '    }                                                            \\' + NL +
      '    const uint64_t rex_nx_t0 = rex_nx_meter_enter();             \\' + NL +
      '    rex::ppc::HostToGuestFunction<function>(ctx, base);          \\' + NL +
-     '    rex_nx_meter_leave(rex_nx_t0, rex_nx_hc_##subroutine.kind);  \\' + NL + '  }' + NL +
+     '    rex_nx_meter_leave(rex_nx_t0, rex_nx_hc_##subroutine.kind,   \\' + NL +
+     '                       &rex_nx_hc_##subroutine.main_wait);       \\' + NL + '  }' + NL +
      '#else' + NL + '#define REX_HOOK(subroutine, function)                  \\' + NL +
      '  extern "C" REX_FUNC(subroutine) {                     \\' + NL +
      '    rex::ppc::HostToGuestFunction<function>(ctx, base); \\' + NL + '  }' + NL),

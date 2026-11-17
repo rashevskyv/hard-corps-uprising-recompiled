@@ -6,12 +6,14 @@
 //   GPU commands swap to swap, minus its idle waits and WAIT_REG_MEM polls (rex_nx_cp_wait_ticks, set by the
 //                SDK edit in switch/sdk-edits-hcu.py) and the backend's fence wait and acquire;
 //   audio        the audio client callbacks per frame (switch/audio_client_threads.inc, Switch only).
-// One line every 30 s ([nx] cpu per frame ... p50/p95/p99 ms) and rex_nx_meter_text for the on-screen strip.
+// One line every 30 s ([nx] cpu per frame ... p50/p95/p99 ms), the main thread's three longest waits by export
+// ([nx] main waits top: <export> <ms>, ... per frame) and rex_nx_meter_text for the on-screen strip.
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
 #define REX_NX_METER_IMPL  // the real meter entry points, not the header's weak defaults
 #include <rex/chrono/clock.h>
@@ -48,6 +50,8 @@ double ToMs(uint64_t ticks) { return double(ticks) * 1000.0 / double(rex::chrono
 thread_local int t_depth = 0;
 thread_local uint64_t t_wait_ticks = 0;
 thread_local uint64_t t_ring_ticks = 0;  // the part of t_wait_ticks in the guest ring wait
+thread_local bool t_main = false;        // this thread calls VdSwap (the main thread)
+uint64_t g_ring_main_wait = 0;           // the main thread's ticks in the ring wait (a row of the waits top)
 
 Hist g_main_work, g_main_wait, g_main_ring, g_cp_work, g_gpu_frame, g_shown;
 uint64_t g_main_last = 0, g_main_last_wait = 0, g_main_last_ring = 0, g_report_tick = 0;
@@ -70,6 +74,23 @@ void Report(uint64_t now) {
   std::printf("[nx] cpu per frame (30 s, %u frames): main work p50 %.1f p95 %.1f p99 %.1f ms (waits p50 %.1f, of it ring wait p50 %.1f); %s; audio %.2f ms%s\n",
               g_main_work.n, g_main_work.Pct(0.5), g_main_work.Pct(0.95), g_main_work.Pct(0.99), g_main_wait.Pct(0.5), g_main_ring.Pct(0.5), cp,
               audio_ms, gpu);
+  // The main thread's waits by export (HookCounter::main_wait, outermost calls only, as in "waits" above): the top three.
+  struct Row { const char* name; uint64_t ticks; } top[3] = {};
+  auto offer = [&](const char* name, uint64_t& ticks) {
+    Row r{name, ticks};
+    ticks = 0;
+    for (Row& t : top) if (r.ticks > t.ticks) std::swap(r, t);
+  };
+  for (rex_nx::HookCounter* h = rex_nx::HookCounter::head(); h; h = h->next) if (h->kind == 1) offer(h->name, h->main_wait);
+  offer("sub_82556728 (ring wait)", g_ring_main_wait);
+  char waits[160] = "none";
+  int len = 0;
+  for (const Row& t : top) {
+    if (!t.ticks || !g_frames) break;
+    len += std::snprintf(waits + len, sizeof(waits) - len, "%s%s %.2f", len ? ", " : "", t.name, ToMs(t.ticks) / g_frames);
+    if (len >= int(sizeof(waits))) break;
+  }
+  std::printf("[nx] main waits top: %s ms per frame\n", waits);
   // Game speed: the guest's frames (VdSwap) per second against 60 (the game is frame-locked); shown frames: the interval
   // between presents (30skip draws every second frame: 33.3 ms when even).
   const double secs = ToMs(now - g_report_tick) / 1000.0;
@@ -106,13 +127,16 @@ uint64_t rex_nx_meter_enter() {
 }
 
 // kind: 1 = a waiting export, 2 = VdSwap (the main thread's frame mark), 3 = the guest ring wait.
-void rex_nx_meter_leave(uint64_t t0, int kind) {
+// main_wait: the export's main-thread wait sum (HookCounter::main_wait), null for none.
+void rex_nx_meter_leave(uint64_t t0, int kind, uint64_t* main_wait) {
   const uint64_t now = Now();
   if (--t_depth == 0 && (kind == 1 || kind == 3)) {
     t_wait_ticks += now - t0;
     if (kind == 3) t_ring_ticks += now - t0;
+    if (t_main && main_wait) *main_wait += now - t0;
   }
   if (kind != 2) return;
+  t_main = true;
   if (g_main_last) {
     const uint64_t wall = now - g_main_last, wait = t_wait_ticks - g_main_last_wait;
     g_main_work.Add(ToMs(wall > wait ? wall - wait : 0));
@@ -157,5 +181,5 @@ REX_EXTERN(__imp__sub_82556728);
 REX_HOOK_RAW(sub_82556728) {
   const uint64_t t0 = rex_nx_meter_enter();
   __imp__sub_82556728(ctx, base);
-  rex_nx_meter_leave(t0, 3);
+  rex_nx_meter_leave(t0, 3, &g_ring_main_wait);
 }
