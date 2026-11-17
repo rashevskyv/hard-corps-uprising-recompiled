@@ -329,3 +329,166 @@ edit('src/filesystem/virtual_file_system.cpp', [
      '#endif' + NL),
 ])
 print('changed (hcu cpu meter):', *changed, sep=NL + '  ')
+
+# The FPCR switch counter (Switch only): each guest context counts its calls to enable/disableFlushMode (both forms)
+# and the `msr fpcr` writes they make; src/frame_meter.cpp prints the rates every 30 s (`[nx] fpcr ...`). The slot
+# pointer is in the context (FPSCRRegister), not in TLS: devkitA64 builds with -mtp=soft, so a TLS access is a call.
+# One writer per slot (the context's thread): a relaxed load and store, no locked read-modify-write.
+FPSCR_OLD = '''struct FPSCRRegister {
+  uint32_t csr;
+
+  static constexpr size_t HostToGuest[] = {kRoundNearest, kRoundDown, kRoundUp, kRoundTowardZero};
+
+  using Platform = platform::FPSCRPlatform;
+  static constexpr size_t RoundShift = Platform::RoundShift;
+  static constexpr size_t RoundMaskVal = Platform::RoundMaskVal;
+  static constexpr size_t FlushMask = Platform::FlushMask;
+
+  // Bits the guest owns; the rest is host policy seeded by InitHost.
+  static constexpr uint32_t GuestMask = uint32_t(RoundMaskVal) | uint32_t(FlushMask);
+
+  inline uint32_t getcsr() noexcept { return Platform::getcsr(); }
+  inline void setcsr(uint32_t csr) noexcept { Platform::setcsr(csr); }
+
+  // Restoring the whole word would unmask every FP exception when csr is 0.
+  inline void restoreGuestBits(uint32_t saved) noexcept {
+    csr = (getcsr() & ~GuestMask) | (saved & GuestMask);
+    setcsr(csr);
+  }
+
+  inline uint32_t loadFromHost() noexcept {
+    csr = getcsr();
+    return HostToGuest[(csr & RoundMaskVal) >> RoundShift];
+  }
+
+  inline void storeFromGuest(uint32_t value) noexcept {
+    csr &= ~RoundMaskVal;
+    csr |= Platform::GuestToHost[value & kRoundMask];
+    setcsr(csr);
+  }
+
+  inline void enableFlushModeUnconditional() noexcept {
+    csr |= FlushMask;
+    setcsr(csr);
+  }
+
+  inline void disableFlushModeUnconditional() noexcept {
+    csr &= ~FlushMask;
+    setcsr(csr);
+  }
+
+  inline void enableFlushMode() noexcept {
+    if ((csr & FlushMask) != FlushMask) [[unlikely]] {
+      csr |= FlushMask;
+      setcsr(csr);
+    }
+  }
+
+  inline void disableFlushMode() noexcept {
+    if ((csr & FlushMask) != 0) [[unlikely]] {
+      csr &= ~FlushMask;
+      setcsr(csr);
+    }
+  }
+
+  inline void InitHost() noexcept {
+    csr = getcsr();
+    Platform::InitHostExceptions(csr);
+    setcsr(csr);
+  }
+};
+'''
+FPSCR_NEW = '''// hcu (switch/sdk-edits-hcu.py): the FPCR switch counter. Each guest context counts its enable/disableFlushMode calls
+// (both forms) and the FPCR writes they make; src/frame_meter.cpp prints the rates every 30 s ("[nx] fpcr").
+#if defined(__SWITCH__)
+struct RexNxFpcrCount {
+  uint64_t enable, disable, writes, owner;
+};
+extern "C" __attribute__((cold)) RexNxFpcrCount* rex_nx_fpcr_count_new();
+#define REX_NX_FPCR_COUNT(field)                                                                   \\
+  do {                                                                                             \\
+    RexNxFpcrCount* c_ = nx_count;                                                                 \\
+    if (!c_) [[unlikely]] c_ = nx_count = rex_nx_fpcr_count_new();                                 \\
+    __atomic_store_n(&c_->field, __atomic_load_n(&c_->field, __ATOMIC_RELAXED) + 1, __ATOMIC_RELAXED); \\
+  } while (0)
+#else
+#define REX_NX_FPCR_COUNT(field) ((void)0)
+#endif
+
+struct FPSCRRegister {
+  uint32_t csr;
+#if defined(__SWITCH__)
+  RexNxFpcrCount* nx_count = nullptr;  // hcu: this context's counter slot (above), set on its first switch
+#endif
+
+  static constexpr size_t HostToGuest[] = {kRoundNearest, kRoundDown, kRoundUp, kRoundTowardZero};
+
+  using Platform = platform::FPSCRPlatform;
+  static constexpr size_t RoundShift = Platform::RoundShift;
+  static constexpr size_t RoundMaskVal = Platform::RoundMaskVal;
+  static constexpr size_t FlushMask = Platform::FlushMask;
+
+  // Bits the guest owns; the rest is host policy seeded by InitHost.
+  static constexpr uint32_t GuestMask = uint32_t(RoundMaskVal) | uint32_t(FlushMask);
+
+  inline uint32_t getcsr() noexcept { return Platform::getcsr(); }
+  inline void setcsr(uint32_t csr) noexcept { Platform::setcsr(csr); }
+
+  // Restoring the whole word would unmask every FP exception when csr is 0.
+  inline void restoreGuestBits(uint32_t saved) noexcept {
+    csr = (getcsr() & ~GuestMask) | (saved & GuestMask);
+    setcsr(csr);
+  }
+
+  inline uint32_t loadFromHost() noexcept {
+    csr = getcsr();
+    return HostToGuest[(csr & RoundMaskVal) >> RoundShift];
+  }
+
+  inline void storeFromGuest(uint32_t value) noexcept {
+    csr &= ~RoundMaskVal;
+    csr |= Platform::GuestToHost[value & kRoundMask];
+    setcsr(csr);
+  }
+
+  inline void enableFlushModeUnconditional() noexcept {
+    REX_NX_FPCR_COUNT(enable);
+    REX_NX_FPCR_COUNT(writes);
+    csr |= FlushMask;
+    setcsr(csr);
+  }
+
+  inline void disableFlushModeUnconditional() noexcept {
+    REX_NX_FPCR_COUNT(disable);
+    REX_NX_FPCR_COUNT(writes);
+    csr &= ~FlushMask;
+    setcsr(csr);
+  }
+
+  inline void enableFlushMode() noexcept {
+    REX_NX_FPCR_COUNT(enable);
+    if ((csr & FlushMask) != FlushMask) [[unlikely]] {
+      REX_NX_FPCR_COUNT(writes);
+      csr |= FlushMask;
+      setcsr(csr);
+    }
+  }
+
+  inline void disableFlushMode() noexcept {
+    REX_NX_FPCR_COUNT(disable);
+    if ((csr & FlushMask) != 0) [[unlikely]] {
+      REX_NX_FPCR_COUNT(writes);
+      csr &= ~FlushMask;
+      setcsr(csr);
+    }
+  }
+
+  inline void InitHost() noexcept {
+    csr = getcsr();
+    Platform::InitHostExceptions(csr);
+    setcsr(csr);
+  }
+};
+'''
+edit('include/rex/ppc/context.h', [(FPSCR_OLD, FPSCR_NEW)])
+print('changed (hcu fpcr counter):', *changed, sep=NL + '  ')

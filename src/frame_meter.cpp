@@ -8,11 +8,15 @@
 //   audio        the audio client callbacks per frame (switch/audio_client_threads.inc, Switch only).
 // One line every 30 s ([nx] cpu per frame ... p50/p95/p99 ms), the main thread's three longest waits by export
 // ([nx] main waits top: <export> <ms>, ... per frame) and rex_nx_meter_text for the on-screen strip.
+// Switch: the FPCR switches per second, all guest contexts and the four busiest ([nx] fpcr ..., the SDK counter of
+// switch/sdk-edits-hcu.py in rex/ppc/context.h).
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <thread>
 #include <utility>
 
 #define REX_NX_METER_IMPL  // the real meter entry points, not the header's weak defaults
@@ -59,6 +63,49 @@ uint64_t g_cp_last = 0, g_cp_last_wait = 0, g_cp_last_block_us = 0, g_shown_last
 uint64_t g_audio_last_us = 0;
 uint32_t g_frames = 0;
 
+uint64_t ThreadKey() { return std::hash<std::thread::id>{}(std::this_thread::get_id()); }
+uint64_t g_main_key = 0;  // ThreadKey of the thread that calls VdSwap
+
+#ifdef __SWITCH__
+constexpr int kFpcrSlots = 64;
+rex::ppc::RexNxFpcrCount g_fpcr[kFpcrSlots];
+int g_fpcr_n = 0;
+
+// Calls and writes per second since the last report, all contexts and the four with the most calls.
+void ReportFpcr(double secs) {
+  static uint64_t last[kFpcrSlots][3];
+  const int n = std::min(__atomic_load_n(&g_fpcr_n, __ATOMIC_RELAXED), kFpcrSlots);
+  struct Row { int i; uint64_t e, d, w; } top[4] = {{-1, 0, 0, 0}, {-1, 0, 0, 0}, {-1, 0, 0, 0}, {-1, 0, 0, 0}};
+  uint64_t te = 0, td = 0, tw = 0;
+  for (int i = 0; i < n; i++) {
+    const uint64_t v[3] = {__atomic_load_n(&g_fpcr[i].enable, __ATOMIC_RELAXED), __atomic_load_n(&g_fpcr[i].disable, __ATOMIC_RELAXED),
+                           __atomic_load_n(&g_fpcr[i].writes, __ATOMIC_RELAXED)};
+    Row r{i, v[0] - last[i][0], v[1] - last[i][1], v[2] - last[i][2]};
+    std::memcpy(last[i], v, sizeof(v));
+    te += r.e;
+    td += r.d;
+    tw += r.w;
+    for (Row& t : top) if (r.e + r.d > t.e + t.d) std::swap(r, t);
+  }
+  if (secs <= 0) return;
+  char busy[256] = "none";
+  int len = 0;
+  for (const Row& t : top) {
+    if (t.i < 0 || !(t.e + t.d)) break;
+    len += std::snprintf(busy + len, sizeof(busy) - len, "%s#%d%s e %.0f d %.0f w %.0f", len ? ", " : "", t.i,
+                         g_fpcr[t.i].owner == g_main_key ? " main" : "", t.e / secs, t.d / secs, t.w / secs);
+    if (len >= int(sizeof(busy))) break;
+  }
+#if defined(REX_FPCR_ONE_MODE)
+  const char* mode = "on";
+#else
+  const char* mode = "off";
+#endif
+  std::printf("[nx] fpcr (30 s, one-mode %s, %d contexts): per s enable %.0f, disable %.0f, writes %.0f; busiest: %s\n", mode, n,
+              te / secs, td / secs, tw / secs, busy);
+}
+#endif
+
 void Report(uint64_t now) {
   const uint64_t audio_us = __atomic_load_n(&rex_nx_audio_cb_us, __ATOMIC_RELAXED);
   const double audio_ms = g_frames ? double(audio_us - g_audio_last_us) / 1000.0 / g_frames : 0.0;
@@ -99,6 +146,9 @@ void Report(uint64_t now) {
   std::printf("[nx] game speed %.1f %% (%.1f guest frames/s); shown %.1f/s, interval p50 %.1f p95 %.1f p99 %.1f ms, %.1f %% <= 34 ms\n",
               secs > 0 ? g_main_work.n / secs / 60.0 * 100.0 : 0.0, secs > 0 ? g_main_work.n / secs : 0.0, secs > 0 ? g_shown.n / secs : 0.0,
               g_shown.Pct(0.5), g_shown.Pct(0.95), g_shown.Pct(0.99), g_shown.n ? le34 * 100.0 / g_shown.n : 0.0);
+#ifdef __SWITCH__
+  ReportFpcr(secs);
+#endif
   std::fflush(stdout);
   // The strip: m = main thread work, c = GPU command thread work, g = GPU frame (p50:p95, ms).
   std::snprintf(rex_nx_meter_text, sizeof(rex_nx_meter_text), "m %.1f:%.1f c %.1f:%.1f g %.1f:%.1f", g_main_work.Pct(0.5),
@@ -136,6 +186,7 @@ void rex_nx_meter_leave(uint64_t t0, int kind, uint64_t* main_wait) {
     if (t_main && main_wait) *main_wait += now - t0;
   }
   if (kind != 2) return;
+  if (!t_main) g_main_key = ThreadKey();
   t_main = true;
   if (g_main_last) {
     const uint64_t wall = now - g_main_last, wait = t_wait_ticks - g_main_last_wait;
@@ -157,6 +208,17 @@ void rex_nx_meter_present() {
   if (g_shown_last) g_shown.Add(ToMs(now - g_shown_last));
   g_shown_last = now;
 }
+
+#ifdef __SWITCH__
+// A guest context's first FPCR switch (rex/ppc/context.h): its counter slot.
+__attribute__((noinline, cold)) rex::ppc::RexNxFpcrCount* rex_nx_fpcr_count_new() {
+  int i = __atomic_fetch_add(&g_fpcr_n, 1, __ATOMIC_RELAXED);
+  // ponytail: past 64 contexts the last slot is shared (its counts lose increments); more slots if the log shows 64.
+  if (i >= kFpcrSlots) i = kFpcrSlots - 1;
+  g_fpcr[i].owner = ThreadKey();
+  return &g_fpcr[i];
+}
+#endif
 
 // The GPU's own time for one frame (deko3d backend, two GPU timestamps; Switch and Eden).
 void rex_nx_meter_gpu_frame(double ms) { g_gpu_frame.Add(ms); }
