@@ -30,18 +30,21 @@ rsync -rlc --delete --exclude /out --exclude /game --exclude /generated --exclud
 # next to the new audio driver, and the game hung after its intro movie). The SDK's HEAD is the
 # commit with patches/rexglue-sdk applied.
 EDITS_STAMP=$(cat "$SRC/switch/sdk-edits.py" "$SRC/switch/sdk-edits-hcu.py" | sha1sum | cut -c1-40)
+# The edits run only on a stamp change: they are not idempotent. sdk-edits-hcu.py rewrites text that
+# sdk-edits.py inserted (command_processor.cpp), so a second run on an edited SDK inserts it again
+# (0.323 rebuilt with the same stamp: "redefinition of struct CpStats").
 if [ "$(cat "$SDK/.hcu-edits-stamp" 2>/dev/null)" != "$EDITS_STAMP" ]; then
     echo "sdk edits changed: resetting $SDK to $(git -C "$SDK" rev-parse --short HEAD)"
     git -C "$SDK" checkout -q -- . && git -C "$SDK" clean -fdq
     git -C "$SDK" submodule foreach -q 'git checkout -q -- . && git clean -fdq'
     rm -f "$SDK/.hcu-edits-stamp"
+    python3 "$SRC/switch/sdk-edits.py" "$SDK"
+    # A second pass: some sdk-edits.py inserts anchor on text an earlier insert of the same run writes.
+    python3 "$SRC/switch/sdk-edits.py" "$SDK" > /dev/null
+    # The HCU edits last: sdk-edits.py rewrites whole files (nop_audio_system.cpp), which would drop them.
+    python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
+    echo "$EDITS_STAMP" > "$SDK/.hcu-edits-stamp"
 fi
-python3 "$SRC/switch/sdk-edits.py" "$SDK"
-# A second pass: some sdk-edits.py inserts anchor on text an earlier insert of the same run writes.
-python3 "$SRC/switch/sdk-edits.py" "$SDK" > /dev/null
-# The HCU edits last: sdk-edits.py rewrites whole files (nop_audio_system.cpp), which would drop them.
-python3 "$SRC/switch/sdk-edits-hcu.py" "$SDK"
-echo "$EDITS_STAMP" > "$SDK/.hcu-edits-stamp"
 # The CLI embeds the codegen templates: a template edit needs `cmake --build ... --target rexglue`.
 # Generated code depends on the manifest, its config includes and the codegen sources (after the SDK edits): regenerate when they change.
 # The CLI embeds the codegen templates (the pch): rebuild it after the SDK edits, and regenerate when the template changed.
