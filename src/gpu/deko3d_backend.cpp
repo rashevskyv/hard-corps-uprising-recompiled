@@ -2305,22 +2305,30 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (off == UINT32_MAX) { LogOnce("ring", "frame data ring full (indices)"); return false; }
     const uint8_t* src = memory_->TranslatePhysical(ib.guest_base);
     uint32_t max_index = 0;
+    // The count and the endian in locals and the 16-bit swap decided once: the loop read both from `ib` at every index
+    // (the stores might alias it) and stored 2 bytes at a time into the uncached ring (0.323 battle: 1.3 ms a drawn frame).
+    const uint32_t count = ib.count;
     if (ib.format == xenos::IndexFormat::kInt32) {
-      const uint32_t* s = reinterpret_cast<const uint32_t*>(src);
-      uint32_t* d = reinterpret_cast<uint32_t*>(f.data.cpu + off);
-      for (uint32_t i = 0; i < ib.count; i++) {
-        uint32_t v = xenos::GpuSwap(s[i], ib.endianness);
+      const uint32_t* __restrict s = reinterpret_cast<const uint32_t*>(src);
+      uint32_t* __restrict d = reinterpret_cast<uint32_t*>(f.data.cpu + off);
+      const auto endian = ib.endianness;
+      for (uint32_t i = 0; i < count; i++) {
+        uint32_t v = xenos::GpuSwap(s[i], endian);
         d[i] = v;
         if (v > max_index) max_index = v;
       }
     } else {
-      const uint16_t* s = reinterpret_cast<const uint16_t*>(src);
-      uint16_t* d = reinterpret_cast<uint16_t*>(f.data.cpu + off);
-      for (uint32_t i = 0; i < ib.count; i++) {
-        uint16_t v = xenos::GpuSwap(s[i], ib.endianness);
+      const uint16_t* __restrict s = reinterpret_cast<const uint16_t*>(src);
+      uint16_t* __restrict d = reinterpret_cast<uint16_t*>(f.data.cpu + off);
+      // GpuSwap of a 16-bit index swaps for k8in16 only.
+      const uint16_t rot = ib.endianness == xenos::Endian::k8in16 ? 8 : 0;
+      uint16_t m = 0;
+      for (uint32_t i = 0; i < count; i++) {
+        const uint16_t v = uint16_t(s[i] << rot | s[i] >> rot);
         d[i] = v;
-        if (v > max_index) max_index = v;
+        m = v > m ? v : m;
       }
+      max_index = m;
     }
     offset_out = off;
     vertex_count_out = max_index + 1;
