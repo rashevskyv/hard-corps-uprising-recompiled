@@ -274,6 +274,7 @@ class DkShaderObj : public Shader {
   // BindUniforms: the float constants last copied for this shader, in the frame (epoch) and at the data ring offset
   // they were copied to, and their values (only the registers the shader reads are kept up to date).
   uint32_t const_epoch = 0, const_off = 0;
+  uint32_t const_bytes = 0;  // the size of that copy and of its binding (0 = not computed yet)
   std::vector<uint32_t> const_shadow;
 };
 
@@ -2364,7 +2365,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
       bool same = s->const_epoch == frame_epoch_;
       if (same) for_runs(m, [&](uint32_t r, uint32_t n) { same = same && !std::memcmp(&s->const_shadow[r * 4], src + r * 4, n * 16); });
       if (same) { frame_uniform_reuses_++; return s->const_off; }
-      const uint32_t off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
+      if (!s->const_bytes) {
+        // Up to the last register the shader reads, not all 256: a sprite shader's copy then shares its 4 KB page with the
+        // next allocations (0.323 battle: ~200 copies a drawn frame, each the first write to its own ring page, and Eden's
+        // cost there goes by the page). The binding has this size: a read past it gets 0 (none is in the map).
+        uint32_t end = 0;
+        for_runs(m, [&](uint32_t r, uint32_t n) { end = std::max(end, r + n); });
+        s->const_bytes = std::max<uint32_t>(DK_UNIFORM_BUF_ALIGNMENT, (end * 16 + DK_UNIFORM_BUF_ALIGNMENT - 1) & ~(DK_UNIFORM_BUF_ALIGNMENT - 1));
+      }
+      const uint32_t off = f.data.Alloc(s->const_bytes, DK_UNIFORM_BUF_ALIGNMENT);
       if (off == UINT32_MAX) return off;
       if (s->const_shadow.empty()) s->const_shadow.resize(1024);
       for_runs(m, [&](uint32_t r, uint32_t n) {
@@ -2407,8 +2416,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     frame_uniform_sets_++;
     if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
-    DkBufExtents vs_bufs[2] = {{f.data.gpu + vs_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
-    DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
+    DkBufExtents vs_bufs[2] = {{f.data.gpu + vs_off, vs->const_bytes}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
+    DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, ps->const_bytes}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
     dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
     dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, ps_bufs, 2);
     return true;
