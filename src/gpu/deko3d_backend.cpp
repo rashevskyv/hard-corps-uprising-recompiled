@@ -1539,7 +1539,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     swaps_++;
     if (swaps_ % 60 == 0) ReadSwapInterval();
     LogSkips();
-    if (swaps_ <= 3 || swaps_ % 60 == 0) {
+    // Every 60 drawn frames, not every 60 swaps: 30skip draws only odd swaps, so swaps_ % 60 never printed there.
+    if (swaps_ <= 3 || ++summary_frames_ == 60) {
+      summary_frames_ = 0;
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
       Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %u shadow-biased, %llu dirty pages; data %u KB (vertices %u KB) staging %u KB; images %u (%u MB), %u image flips so far",
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
@@ -1547,15 +1549,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
           f.data.used >> 10, frame_vtx_bytes_ >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
       // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
       // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
-      uint32_t n = swaps_ <= 3 ? 1 : 60;
+      uint32_t n = swaps_ <= 3 ? 1 : 60;  // drawn frames since the last line
       Log("swap #%u: per frame %.2f ms draws, %.2f ms resolves, %.2f ms fence wait, %.2f ms acquire, %.2f ms submit", swaps_, us_draw_ / 1000.0 / n,
           us_copy_ / 1000.0 / n, us_fence_ / 1000.0 / n, us_acquire_ / 1000.0 / n, us_submit_ / 1000.0 / n);
       us_draw_ = us_copy_ = us_fence_ = us_acquire_ = us_submit_ = 0;
-      if (swaps_ % 60 == 0 || swaps_ <= 3) {
-        const auto* ramp = gamma_ramp_256_entry_table();
-        Log("swap #%u: display gamma ramp (10 bit red, of 255 in/out): in 32 -> %u, 64 -> %u, 128 -> %u, 192 -> %u, 255 -> %u", swaps_, uint32_t(ramp[32].color_10_red),
-            uint32_t(ramp[64].color_10_red), uint32_t(ramp[128].color_10_red), uint32_t(ramp[192].color_10_red), uint32_t(ramp[255].color_10_red));
-      }
+      const auto* ramp = gamma_ramp_256_entry_table();
+      Log("swap #%u: display gamma ramp (10 bit red, of 255 in/out): in 32 -> %u, 64 -> %u, 128 -> %u, 192 -> %u, 255 -> %u", swaps_, uint32_t(ramp[32].color_10_red),
+          uint32_t(ramp[64].color_10_red), uint32_t(ramp[128].color_10_red), uint32_t(ramp[192].color_10_red), uint32_t(ramp[255].color_10_red));
     }
     dirty_pages_at_swap_ = dirty_pages_;
     last_drawn_swap_ = swaps_;
@@ -2736,6 +2736,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
   bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
   uint32_t drawn_frames_ = 0, busy_skips_ = 0, busy_in_a_row_ = 0;
+  uint32_t summary_frames_ = 0;  // drawn frames since the last "gpu: swap #N" line (drawn_frames_ is reset by LogSkips)
   uint32_t last_drawn_swap_ = 0, last_drawn_draws_ = 0;  // the frame a GPU fault is in (the error-state log line)
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
