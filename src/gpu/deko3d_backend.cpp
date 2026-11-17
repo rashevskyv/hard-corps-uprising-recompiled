@@ -1212,6 +1212,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width, uint32_t frontbuffer_height) override {
+    {
+      // The guest's swap interval, for 30skip (NextFrame): a 30 Hz scene (the movies) swaps every ~33 ms.
+      const uint64_t now = armGetSystemTick();
+      const bool long_swap = swap_tick_ && now - swap_tick_ > armGetSystemTickFreq() * kLongSwapMs / 1000;
+      long_swaps_ = long_swap ? long_swaps_ + 1 : 0;
+      swap_tick_ = now;
+    }
     if (Skipping()) {
       swaps_++;  // nothing was recorded: the frame is just counted
       view_image_ = nullptr;
@@ -1592,7 +1599,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // in the log from libdeko3dd) and signals every fence. Console 0.273: a fault under 60skip was 300 busy polls of 0
     // in a row (the picture frozen), found only by the first wait with a timeout.
     const int64_t poll_ns = busy_in_a_row_ && busy_in_a_row_ % 30 == 0 ? 1000000ll : 0;
-    if (skip_odd_frames_ && drawn) {
+    // A 30 Hz scene (two guest swaps in a row over kLongSwapMs apart: the movies) is not halved again to 15 frames a
+    // second: the frame after a drawn one is drawn too. One long interval is not enough (a drawn frame's acquire can
+    // delay one swap of a 60 Hz scene).
+    if (skip_odd_frames_ && drawn && long_swaps_ < 2) {
       skip_frame_ = true;
     } else if ((skip_odd_frames_ || skip_busy_) && frames_[frame_].fenced &&
                dkFenceWait(&frames_[frame_].fence, poll_ns) != DkResult_Success) {
@@ -2737,6 +2747,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
   uint32_t drawn_frames_ = 0, busy_skips_ = 0, busy_in_a_row_ = 0;
   uint32_t summary_frames_ = 0;  // drawn frames since the last "gpu: swap #N" line (drawn_frames_ is reset by LogSkips)
+  static constexpr uint64_t kLongSwapMs = 25;  // 30skip: a guest swap interval over this is a 30 Hz scene's
+  uint64_t swap_tick_ = 0;                     // the last IssueSwap (armGetSystemTick)
+  uint32_t long_swaps_ = 0;                    // guest swap intervals over kLongSwapMs in a row
   uint32_t last_drawn_swap_ = 0, last_drawn_draws_ = 0;  // the frame a GPU fault is in (the error-state log line)
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
