@@ -287,7 +287,7 @@ struct Frame {
   bool fenced = false;
   uint32_t next_descriptor = 0;
   std::unordered_map<uint64_t, uint32_t> descriptors;  // image (and swizzle) -> descriptor slot this frame
-  uint32_t ts_off = UINT32_MAX;  // two GPU timestamps (16 bytes each) in `data`: frame start, after the last barrier
+  uint32_t ts_off = UINT32_MAX;  // two GPU timestamps (16 bytes each) in `timestamps_`: frame start, after the last barrier
   bool rec_pending = false;  // RECORD 5 SEC: this frame's front buffer copy waits in rec_ for the fence
   uint32_t rec_swap = 0;
   uint64_t rec_us = 0;
@@ -628,7 +628,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (!code_.Create(device_, kCodePoolBytes, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code) ||
         !images_.Create(device_, kImagePoolBytes, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image) ||
         !descriptors_.Create(device_, DK_MEMBLOCK_ALIGNMENT * 4 * kFrames + DK_MEMBLOCK_ALIGNMENT * 2 + kSamplerCount * sizeof(DkSamplerDescriptor), DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached) ||
-        !cmdmem_.Create(device_, kFrameCmdBytes * kFrames, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)) {
+        !cmdmem_.Create(device_, kFrameCmdBytes * kFrames, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached) ||
+        !timestamps_.Create(device_, DK_MEMBLOCK_ALIGNMENT, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)) {
       Log("memory block creation failed");
       return false;
     }
@@ -1504,7 +1505,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
 #ifdef __SWITCH__
-    if (f.ts_off != UINT32_MAX) dkCmdBufReportCounter(cmd, DkCounter_Timestamp, f.data.gpu + f.ts_off + 16);
+    if (f.ts_off != UINT32_MAX) dkCmdBufReportCounter(cmd, DkCounter_Timestamp, timestamps_.gpu + f.ts_off + 16);
 #endif
     DkCmdList list = dkCmdBufFinishList(cmd);
     {
@@ -1746,7 +1747,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #ifdef __SWITCH__
       // The GPU's own time for that frame (timestamps in GPU ticks, 625/384 ns each): the CPU-work meter's gpu line.
       if (f.ts_off != UINT32_MAX) {
-        const uint64_t* t = reinterpret_cast<const uint64_t*>(f.data.cpu + f.ts_off);
+        const uint64_t* t = reinterpret_cast<const uint64_t*>(timestamps_.cpu + f.ts_off);
         if (t[1] && t[3] > t[1]) rex_nx_meter_gpu_frame(double(t[3] - t[1]) * 625.0 / 384.0 / 1e6);
       }
 #endif
@@ -1763,11 +1764,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufBindImageDescriptorSet(f.cmdbuf, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
     dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
 #ifdef __SWITCH__
-    f.ts_off = f.data.Alloc(32, 16);
-    if (f.ts_off != UINT32_MAX) {
-      std::memset(f.data.cpu + f.ts_off, 0, 32);
-      dkCmdBufReportCounter(f.cmdbuf, DkCounter_Timestamp, f.data.gpu + f.ts_off);
-    }
+    // In their own block, not in `data`: Eden served the read of the vertex ring after the fence slowly (0.323 battle:
+    // 1.7 ms a drawn frame on those two loads in BeginFrame).
+    f.ts_off = frame_ * 32;
+    std::memset(timestamps_.cpu + f.ts_off, 0, 32);
+    dkCmdBufReportCounter(f.cmdbuf, DkCounter_Timestamp, timestamps_.gpu + f.ts_off);
 #endif
     bound_color_ = nullptr;
     bound_depth_ = nullptr;
@@ -2727,6 +2728,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   DkQueue queue_ = nullptr;
   DkSwapchain swapchain_ = nullptr;
   MemBlock code_, images_, descriptors_, cmdmem_;
+  MemBlock timestamps_;  // Frame::ts_off: 32 bytes per frame (two GPU timestamps)
   uint32_t sampler_desc_offset_ = 0;
   Frame frames_[kFrames];
   uint32_t frame_ = 0;
