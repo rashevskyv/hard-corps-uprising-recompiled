@@ -66,7 +66,10 @@ edit('src/graphics/command_processor.cpp', [
      '          // 100 us, not 1 ms on the event: only vblank sets it, not the guest store the packet waits for,' + NL +
      '          // so the command processor slept ~470 ms a second in 1 ms slices (hcu 0.201 console: about' + NL +
      '          // 1000 sleeping polls per 2 s) while the main thread waited for it in the ring.' + NL +
-     '          rex::thread::Sleep(std::chrono::microseconds(100));' + NL +
+     '          // On the event, not a plain sleep: vblank sets it after its interrupt callback, which completes the' + NL +
+     '          // flips such a wait polls for (patch 0025), so the poll runs again at once (Eden stretched the' + NL +
+     '          // 100 us sleep to ~0.49 ms, hcu 0.317 battle: 2600 polls and 1280 ms slept per 2 s).' + NL +
+     '          rex::thread::WaitMicros(guest_progress_event_.get(), std::chrono::microseconds(100));' + NL +
      '          rex_nx_wait_slept_ticks += rex::chrono::Clock::QueryHostTickCount() - nx_t0;' + NL +
      '#else' + NL +
      '          rex::thread::Wait(guest_progress_event_.get(), false, std::chrono::milliseconds(1));' + NL +
@@ -74,6 +77,27 @@ edit('src/graphics/command_processor.cpp', [
     ('          rex::thread::MaybeYield();' + NL + '          ++unmatched_poll_count;' + NL,
      '#if REX_PLATFORM_SWITCH' + NL + '          rex_nx_wait_yields++;' + NL + '#endif' + NL +
      '          rex::thread::MaybeYield();' + NL + '          ++unmatched_poll_count;' + NL),
+    ('extern "C" volatile uint64_t rex_nx_wait_polls, rex_nx_wait_sleep_ms, rex_nx_wait_yields, rex_nx_wait_slept_ticks;  // switch_nx.cpp' + NL + '#endif' + NL,
+     'extern "C" volatile uint64_t rex_nx_wait_polls, rex_nx_wait_sleep_ms, rex_nx_wait_yields, rex_nx_wait_slept_ticks;  // switch_nx.cpp' + NL +
+     'namespace rex::thread {' + NL +
+     'WaitResult WaitMicros(WaitHandle* wait_handle, std::chrono::microseconds timeout);  // hcu-edits: threading_switch.cpp' + NL +
+     '}' + NL + '#endif' + NL),
+])
+# The wait above in microseconds: the Switch threading file (written by sdk-edits.py from threading_posix.cpp,
+# so these edits are applied again after each rewrite) gets a non-alertable wait that takes microseconds.
+edit('src/core/threading_switch.cpp', [
+    ('  WaitResult Wait(std::chrono::milliseconds timeout) {' + NL + '    bool executed;' + NL,
+     '  template <typename Duration>  // hcu-edits: microseconds too (WaitMicros)' + NL +
+     '  WaitResult Wait(Duration timeout) {' + NL + '    bool executed;' + NL),
+    ('      if (timeout == std::chrono::milliseconds::max()) {' + NL + '        cond_.wait(lock, predicate);' + NL,
+     '      if (timeout == Duration::max()) {' + NL + '        cond_.wait(lock, predicate);' + NL),
+    ('WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {' + NL,
+     '// hcu-edits: a non-alertable wait in microseconds (the WAIT_REG_MEM poll of command_processor.cpp).' + NL +
+     'WaitResult WaitMicros(WaitHandle* wait_handle, std::chrono::microseconds timeout) {' + NL +
+     '  auto posix_wait_handle = dynamic_cast<PosixWaitHandle*>(wait_handle);' + NL +
+     '  return posix_wait_handle ? posix_wait_handle->condition().Wait(timeout) : WaitResult::kFailed;' + NL +
+     '}' + NL + NL +
+     'WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::milliseconds timeout) {' + NL),
 ])
 print('changed (hcu):', *changed, sep=NL + '  ')
 
