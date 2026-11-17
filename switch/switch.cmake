@@ -37,6 +37,16 @@ set(REXGLUE_HOST_TARGET hcu)
 set(REXGPU_XENOS_EXTRA_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/trace_backend.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/deko3d_backend.cpp")
+# HCU_FPCR_ONE_MODE (CG-13, REX_FPCR_ONE_MODE, the FPSCRRegister edit of switch/sdk-edits-hcu.py): the host's flush mode
+# stays on for all guest code, so a switch off writes nothing (no `msr fpcr` at the game code's switch-off sites).
+# Risk: the scalar FPU then flushes denormals to zero as well, which the Xenon's does not; not bit-exact for scalar
+# values below FLT_MIN / DBL_MIN. Host threads without InitHost (the audio client threads) run scalar code unflushed
+# until their first switch on. Defined here, before the SDK and the game code are added, so both see one FPSCRRegister.
+# OFF until an A/B on the console decides.
+option(HCU_FPCR_ONE_MODE "CG-13: one FPU flush mode for all guest code (scalar denormals flushed, not bit-exact)" OFF)
+if(HCU_FPCR_ONE_MODE)
+    add_compile_definitions(REX_FPCR_ONE_MODE)
+endif()
 
 include(generated/rexglue.cmake)
 

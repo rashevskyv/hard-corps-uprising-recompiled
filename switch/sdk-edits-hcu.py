@@ -334,7 +334,12 @@ print('changed (hcu cpu meter):', *changed, sep=NL + '  ')
 # and the `msr fpcr` writes they make; src/frame_meter.cpp prints the rates every 30 s (`[nx] fpcr ...`). The slot
 # pointer is in the context (FPSCRRegister), not in TLS: devkitA64 builds with -mtp=soft, so a TLS access is a call.
 # One writer per slot (the context's thread): a relaxed load and store, no locked read-modify-write.
-FPSCR_OLD = '''struct FPSCRRegister {
+# CG-13 (REX_FPCR_ONE_MODE, CMake HCU_FPCR_ONE_MODE in switch/switch.cmake, after renut_nx_ultimate_base's
+# BLUR_FPCR_ONE_MODE): the flush mode stays on for all guest code. InitHost and restoreGuestBits set it, the first
+# enable of a thread without InitHost writes it once (XHostThread::Execute: the audio client threads), and every
+# switch off returns at once, so the game code has no `msr fpcr` after the first. NOT bit-exact: the scalar FPU
+# flushes denormals to zero, which the Xenon's does not.
+FPSCR_OLD ='''struct FPSCRRegister {
   uint32_t csr;
 
   static constexpr size_t HostToGuest[] = {kRoundNearest, kRoundDown, kRoundUp, kRoundTowardZero};
@@ -437,6 +442,9 @@ struct FPSCRRegister {
   // Restoring the whole word would unmask every FP exception when csr is 0.
   inline void restoreGuestBits(uint32_t saved) noexcept {
     csr = (getcsr() & ~GuestMask) | (saved & GuestMask);
+#if defined(REX_FPCR_ONE_MODE)
+    csr |= FlushMask;  // CG-13
+#endif
     setcsr(csr);
   }
 
@@ -453,6 +461,9 @@ struct FPSCRRegister {
 
   inline void enableFlushModeUnconditional() noexcept {
     REX_NX_FPCR_COUNT(enable);
+#if defined(REX_FPCR_ONE_MODE)
+    if ((csr & FlushMask) == FlushMask) return;  // CG-13: as enableFlushMode
+#endif
     REX_NX_FPCR_COUNT(writes);
     csr |= FlushMask;
     setcsr(csr);
@@ -460,6 +471,9 @@ struct FPSCRRegister {
 
   inline void disableFlushModeUnconditional() noexcept {
     REX_NX_FPCR_COUNT(disable);
+#if defined(REX_FPCR_ONE_MODE)
+    return;  // CG-13: the flush mode stays on
+#endif
     REX_NX_FPCR_COUNT(writes);
     csr &= ~FlushMask;
     setcsr(csr);
@@ -476,6 +490,9 @@ struct FPSCRRegister {
 
   inline void disableFlushMode() noexcept {
     REX_NX_FPCR_COUNT(disable);
+#if defined(REX_FPCR_ONE_MODE)
+    return;  // CG-13: the flush mode stays on
+#endif
     if ((csr & FlushMask) != 0) [[unlikely]] {
       REX_NX_FPCR_COUNT(writes);
       csr &= ~FlushMask;
@@ -486,6 +503,9 @@ struct FPSCRRegister {
   inline void InitHost() noexcept {
     csr = getcsr();
     Platform::InitHostExceptions(csr);
+#if defined(REX_FPCR_ONE_MODE)
+    csr |= FlushMask;  // CG-13: the flush mode on for the thread's whole life
+#endif
     setcsr(csr);
   }
 };
