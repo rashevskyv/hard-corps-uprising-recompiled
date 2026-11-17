@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdarg>
@@ -953,9 +954,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     HostImage* depth = (dc.z_enable || dc.stencil_enable) ? TargetImage(depth_info.depth_base, pitch, g_depth_fmt, true) : nullptr;
     if (depth) {
       const bool d24f = depth_info.depth_format == xenos::DepthRenderTargetFormat::kD24FS8;
-      char key[24];
-      std::snprintf(key, sizeof(key), "depthfmt %u", d24f ? 1u : 0u);
-      LogOnce(key, "guest depth target format %s (RB_DEPTH_INFO) on base %u: host %s", d24f ? "D24FS8 (20e4 float)" : "D24S8 (unorm)",
+      LogOnce(kKeyDepthFmt | uint64_t(d24f), "guest depth target format %s (RB_DEPTH_INFO) on base %u: host %s", d24f ? "D24FS8 (20e4 float)" : "D24S8 (unorm)",
               uint32_t(depth_info.depth_base), g_depth_fmt == DkImageFormat_Z24S8 ? "Z24S8" : "ZF32_X24S8");
     }
     if (!color && !depth) { skipped_++; frame_skipped_++; return true; }
@@ -1000,10 +999,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     rs.fillRectangleEnable = rects && !use_gs;
     if (su.poly_offset_front_enable || su.poly_offset_back_enable || su.poly_offset_para_enable) {
       // Not applied yet: logged to see whether HCU uses it (the shadow pass would).
-      char key[48];
-      std::snprintf(key, sizeof(key), "polyoff %u%u%u", uint32_t(su.poly_offset_front_enable), uint32_t(su.poly_offset_back_enable),
-                    uint32_t(su.poly_offset_para_enable));
-      LogOnce(key, "guest polygon offset: front %u back %u para %u, scale %f offset %f (VS %016llX)", uint32_t(su.poly_offset_front_enable),
+      LogOnce(kKeyPolyOff | uint64_t(su.poly_offset_front_enable) | uint64_t(su.poly_offset_back_enable) << 1 |
+                  uint64_t(su.poly_offset_para_enable) << 2,
+              "guest polygon offset: front %u back %u para %u, scale %f offset %f (VS %016llX)", uint32_t(su.poly_offset_front_enable),
               uint32_t(su.poly_offset_back_enable), uint32_t(su.poly_offset_para_enable), regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE),
               regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET), (unsigned long long)vs->ucode_data_hash());
     }
@@ -1019,24 +1017,19 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // last bits and the ground, rocks and sky show rings and stripes of self-shadowing (Eden and the Linux GL host do not).
       shadow_biased = !color && depth && dc.z_write_enable && (shadow_bias_ != 0.f || shadow_slope_ != 0.f);
       rs.depthBiasEnableMask = (z_biased || shadow_biased) ? DkPolygonFlag_Fill : 0;  // 0.188-0.232 set 1 = DkPolygonFlag_Point: triangles got no bias
-      char key[48];
-      std::snprintf(key, sizeof(key), "clip %u %u", uint32_t(clip.clip_disable), uint32_t(clip.dx_clip_space_def));
-      LogOnce(key, "clip control: clip_disable %u dx_clip_space_def %u (first draw VS %016llX)", uint32_t(clip.clip_disable),
+      LogOnce(kKeyClip | uint64_t(clip.clip_disable) | uint64_t(clip.dx_clip_space_def) << 1, "clip control: clip_disable %u dx_clip_space_def %u (first draw VS %016llX)", uint32_t(clip.clip_disable),
               uint32_t(clip.dx_clip_space_def), (unsigned long long)vs->ucode_data_hash());
     }
     dkCmdBufBindRasterizerState(cmd, &rs);
     if (z_biased) {
       dkCmdBufSetDepthBias(cmd, z_bias_, 0.f, 0.f);
-      char key[32];
-      std::snprintf(key, sizeof(key), "colourbias %g", z_bias_);
-      LogOnce(key, "colour-pass depth bias %g units: first draw (VS %016llX, swap #%u)", z_bias_, (unsigned long long)vs->ucode_data_hash(), swaps_);
+      LogOnce(kKeyColourBias | std::bit_cast<uint32_t>(z_bias_), "colour-pass depth bias %g units: first draw (VS %016llX, swap #%u)", z_bias_, (unsigned long long)vs->ucode_data_hash(), swaps_);
     }
     if (shadow_biased) {
       dkCmdBufSetDepthBias(cmd, shadow_bias_, 0.f, shadow_slope_);
       frame_shadow_biased_++;
-      char key[48];
-      std::snprintf(key, sizeof(key), "shadowbias %u %g %g", depth_info.depth_base, shadow_bias_, shadow_slope_);
-      LogOnce(key, "shadow-pass depth bias %g units, slope %g on depth base %u (VS %016llX)", shadow_bias_, shadow_slope_, depth_info.depth_base,
+      LogOnce(kKeyShadowBias ^ MixKey(uint64_t(std::bit_cast<uint32_t>(shadow_bias_)) << 32 | std::bit_cast<uint32_t>(shadow_slope_), depth_info.depth_base),
+              "shadow-pass depth bias %g units, slope %g on depth base %u (VS %016llX)", shadow_bias_, shadow_slope_, depth_info.depth_base,
               (unsigned long long)vs->ucode_data_hash());
     }
     auto blend = regs.Get<reg::RB_BLENDCONTROL>();
@@ -1062,9 +1055,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
         float bc[4];
         for (int i = 0; i < 4; i++) std::memcpy(&bc[i], &regs.values[XE_GPU_REG_RB_BLEND_RED + i], 4);
         dkCmdBufSetBlendConst(cmd, bc[0], bc[1], bc[2], bc[3]);
-        char key[96];
-        std::snprintf(key, sizeof(key), "blendconst %u %u %g %g", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend), bc[0], bc[3]);
-        LogOnce(key, "constant blend factors %u/%u (alpha %u/%u): constant %g %g %g %g", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend),
+        LogOnce(kKeyBlendConst ^ MixKey(uint64_t(std::bit_cast<uint32_t>(bc[0])) << 32 | std::bit_cast<uint32_t>(bc[3]),
+                                        uint32_t(blend.color_srcblend) | uint32_t(blend.color_destblend) << 8),
+                "constant blend factors %u/%u (alpha %u/%u): constant %g %g %g %g", uint32_t(blend.color_srcblend), uint32_t(blend.color_destblend),
                 uint32_t(blend.alpha_srcblend), uint32_t(blend.alpha_destblend), bc[0], bc[1], bc[2], bc[3]);
       }
     }
@@ -1089,10 +1082,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
       bk.value = regs.values[XE_GPU_REG_RB_STENCILREFMASK_BF];
       dkCmdBufSetStencil(cmd, DkFace_Front, uint8_t(fr.stencilwritemask), uint8_t(fr.stencilref), uint8_t(fr.stencilmask));
       dkCmdBufSetStencil(cmd, DkFace_Back, uint8_t(bk.stencilwritemask), uint8_t(bk.stencilref), uint8_t(bk.stencilmask));
-      char key[96];
-      std::snprintf(key, sizeof(key), "stencil %u %u %u %u %u ref %u", uint32_t(dc.stencilfunc), uint32_t(dc.stencilfail), uint32_t(dc.stencilzpass),
-                    uint32_t(dc.stencilzfail), uint32_t(dc.backface_enable), uint32_t(fr.stencilref));
-      LogOnce(key, "stencil on: func %u fail %u zpass %u zfail %u (back %u: func %u fail %u zpass %u zfail %u), ref %u mask %02X write %02X", uint32_t(dc.stencilfunc),
+      LogOnce(kKeyStencil | uint64_t(dc.stencilfunc) | uint64_t(dc.stencilfail) << 8 | uint64_t(dc.stencilzpass) << 16 |
+                  uint64_t(dc.stencilzfail) << 24 | uint64_t(dc.backface_enable) << 32 | uint64_t(fr.stencilref) << 40,
+              "stencil on: func %u fail %u zpass %u zfail %u (back %u: func %u fail %u zpass %u zfail %u), ref %u mask %02X write %02X", uint32_t(dc.stencilfunc),
               uint32_t(dc.stencilfail), uint32_t(dc.stencilzpass), uint32_t(dc.stencilzfail), uint32_t(dc.backface_enable), uint32_t(dc.stencilfunc_bf),
               uint32_t(dc.stencilfail_bf), uint32_t(dc.stencilzpass_bf), uint32_t(dc.stencilzfail_bf), uint32_t(fr.stencilref), uint32_t(fr.stencilmask),
               uint32_t(fr.stencilwritemask));
@@ -1334,18 +1326,22 @@ class Deko3dCommandProcessor : public CommandProcessor {
           RenderOverlayText(overlay_px_.data(), text);
           std::memcpy(overlay_text_, text, sizeof(overlay_text_));
         }
-        const uint32_t bytes = kOverlayW * kOverlayH * 4;
-        const uint32_t off = f.staging.Alloc(bytes, 0x100);
-        if (off != UINT32_MAX) {
-          std::memcpy(f.staging.cpu + off, overlay_px_.data(), bytes);
-          DkCopyBuf cb{f.staging.gpu + off, 0, 0};
-          DkImageView ov;
-          dkImageViewDefaults(&ov, &overlay->image);
-          DkImageRect rect{0, 0, 0, kOverlayW, kOverlayH, 1};
-          dkCmdBufCopyBufferToImage(cmd, &cb, &ov, &rect, 0);
-          dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
-        } else {
-          overlay = nullptr;
+        // Uploaded only when this frame slot's image holds another text (one image per slot: each gets the new text once).
+        if (std::strcmp(overlay_text_, overlay_slot_text_[frame_]) != 0) {
+          const uint32_t bytes = kOverlayW * kOverlayH * 4;
+          const uint32_t off = f.staging.Alloc(bytes, 0x100);
+          if (off != UINT32_MAX) {
+            std::memcpy(f.staging.cpu + off, overlay_px_.data(), bytes);
+            DkCopyBuf cb{f.staging.gpu + off, 0, 0};
+            DkImageView ov;
+            dkImageViewDefaults(&ov, &overlay->image);
+            DkImageRect rect{0, 0, 0, kOverlayW, kOverlayH, 1};
+            dkCmdBufCopyBufferToImage(cmd, &cb, &ov, &rect, 0);
+            dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+            std::memcpy(overlay_slot_text_[frame_], overlay_text_, sizeof(overlay_text_));
+          } else {
+            overlay = nullptr;
+          }
         }
       }
     }
@@ -1435,15 +1431,22 @@ class Deko3dCommandProcessor : public CommandProcessor {
         // (not done: identity).
         uint32_t ramp_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
         if (ramp_off != UINT32_MAX) {
-          float* r = reinterpret_cast<float*>(f.data.cpu + ramp_off);
           const auto* ramp = gamma_ramp_256_entry_table();
           const bool identity = !hcu_settings.gamma || front->format == DkImageFormat_RGB10A2_Unorm;
-          for (uint32_t i = 0; i < 256; i++) {
-            r[i * 4 + 0] = identity ? i / 255.0f : ramp[i].color_10_red / 1023.0f;
-            r[i * 4 + 1] = identity ? i / 255.0f : ramp[i].color_10_green / 1023.0f;
-            r[i * 4 + 2] = identity ? i / 255.0f : ramp[i].color_10_blue / 1023.0f;
-            r[i * 4 + 3] = 0.0f;
+          // The floats are rebuilt only when the game's table or the identity choice changed.
+          static_assert(sizeof(ramp_seen_) == 256 * sizeof(*ramp), "gamma ramp entry size");
+          if (!ramp_built_ || identity != ramp_identity_ || std::memcmp(ramp_seen_, ramp, sizeof(ramp_seen_)) != 0) {
+            for (uint32_t i = 0; i < 256; i++) {
+              ramp_f_[i * 4 + 0] = identity ? i / 255.0f : ramp[i].color_10_red / 1023.0f;
+              ramp_f_[i * 4 + 1] = identity ? i / 255.0f : ramp[i].color_10_green / 1023.0f;
+              ramp_f_[i * 4 + 2] = identity ? i / 255.0f : ramp[i].color_10_blue / 1023.0f;
+              ramp_f_[i * 4 + 3] = 0.0f;
+            }
+            std::memcpy(ramp_seen_, ramp, sizeof(ramp_seen_));
+            ramp_identity_ = identity;
+            ramp_built_ = true;
           }
+          std::memcpy(f.data.cpu + ramp_off, ramp_f_, sizeof(ramp_f_));
           DkBufExtents ramp_buf{f.data.gpu + ramp_off, 4096};
           dkCmdBufBindUniformBuffers(cmd, DkStage_Fragment, 0, &ramp_buf, 1);
         }
@@ -2630,14 +2633,34 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #endif
   }
 
+  // Once per key. The key is FNV-1a hashed into seen_ (First), so no std::string is made for it.
   void LogOnce(const char* key, const char* fmt, ...) {
-    if (!logged_.insert(key).second) return;
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (const char* c = key; *c; c++) h = (h ^ uint8_t(*c)) * 0x100000001B3ull;
+    if (!First(h)) return;
     va_list ap;
     va_start(ap, fmt);
+    LogV(fmt, ap);
+    va_end(ap);
+  }
+  // The same with an integer key: a kKey* tag in the top byte and the fields the line is once per (the draw path: no
+  // string formatting).
+  void LogOnce(uint64_t key, const char* fmt, ...) {
+    if (!First(key)) return;
+    va_list ap;
+    va_start(ap, fmt);
+    LogV(fmt, ap);
+    va_end(ap);
+  }
+  static constexpr uint64_t kKeyDepthFmt = 0xD1ull << 56, kKeyPolyOff = 0xD2ull << 56, kKeyClip = 0xD3ull << 56,
+                            kKeyColourBias = 0xD4ull << 56, kKeyShadowBias = 0xD5ull << 56, kKeyBlendConst = 0xD6ull << 56,
+                            kKeyStencil = 0xD7ull << 56;
+  // Two words into one key (the fields do not fit in 56 bits).
+  static uint64_t MixKey(uint64_t a, uint64_t b) { return (a * 0x9E3779B97F4A7C15ull ^ b) * 0xC2B2AE3D27D4EB4Full; }
+  void LogV(const char* fmt, va_list ap) {
     std::printf("[dk] ");
     std::vprintf(fmt, ap);
     std::printf("\n");
-    va_end(ap);
 #ifndef __SWITCH__
     std::fflush(stdout);
 #endif
@@ -2668,6 +2691,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
   HostImage* menu_[kFrames] = {};     // the settings menu, the same way
   std::vector<uint32_t> menu_px_ = std::vector<uint32_t>(kMenuW * kMenuH);
   char overlay_text_[96] = {};
+  char overlay_slot_text_[kFrames][96] = {};  // the text each overlay_ image holds (uploaded on a change only)
+  float ramp_f_[256 * 4] = {};                // the present shader's gamma table (4096 bytes), built on a change only
+  uint32_t ramp_seen_[256] = {};              // the game's 256-entry table it was built from
+  bool ramp_identity_ = false, ramp_built_ = false;
   uint64_t fps_tick_ = 0;
   uint32_t fps_frames_ = 0, fps_x10_ = 0;
   std::vector<uint32_t> overlay_px_ = std::vector<uint32_t>(kOverlayW * kOverlayH);
@@ -2759,8 +2786,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   std::unordered_map<uint32_t, HostImage*> guest_images_;  // guest address -> texture / resolve destination
   HostImage* bound_color_ = nullptr;
   HostImage* bound_depth_ = nullptr;
-  std::unordered_set<std::string> logged_;
-  std::unordered_set<uint64_t> seen_;  // integer keys of the per-draw first-time logs (no string formatting in the draw path)
+  std::unordered_set<uint64_t> seen_;  // the keys of the first-time logs (First, LogOnce; no string formatting in the draw path)
   bool First(uint64_t key) { return seen_.insert(key).second; }
   uint32_t swaps_ = 0, draws_ = 0, skipped_ = 0, missing_draws_ = 0, missing_shaders_ = 0, clears_ = 0, resolves_ = 0;
   uint32_t image_count_ = 0, uploads_ = 0, reuploads_ = 0;
