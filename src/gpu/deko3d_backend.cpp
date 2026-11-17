@@ -271,6 +271,10 @@ class DkShaderObj : public Shader {
   bool loaded = false;
   DkShader geom{};           // vertex shaders: the rectangle-list geometry shader
   bool geom_loaded = false;
+  // BindUniforms: the float constants last copied for this shader, in the frame (epoch) and at the data ring offset
+  // they were copied to, and their values (only the registers the shader reads are kept up to date).
+  uint32_t const_epoch = 0, const_off = 0;
+  std::vector<uint32_t> const_shadow;
 };
 
 struct Frame {
@@ -1572,10 +1576,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (swaps_ <= 3 || ++summary_frames_ == 60) {
       summary_frames_ = 0;
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
-      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %u shadow-biased, %llu dirty pages; data %u KB (vertices %u KB copied, %u KB reused) staging %u KB; images %u (%u MB), %u image flips so far",
+      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %u shadow-biased, %llu dirty pages; data %u KB (vertices %u KB copied, %u KB reused; uniform buffers %u of %u reused) staging %u KB; images %u (%u MB), %u image flips so far",
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
           frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, frame_shadow_biased_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
-          f.data.used >> 10, frame_vtx_bytes_ >> 10, frame_vtx_reused_ >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
+          f.data.used >> 10, frame_vtx_bytes_ >> 10, frame_vtx_reused_ >> 10, frame_uniform_reuses_, frame_uniform_sets_, f.staging.used >> 10, image_count_,
+          images_.used >> 20, image_flips_);
       // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
       // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
       uint32_t n = swaps_ <= 3 ? 1 : 60;  // drawn frames since the last line
@@ -1590,7 +1595,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     last_drawn_swap_ = swaps_;
     last_drawn_draws_ = frame_draws_;
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
-    frame_vtx_reused_ = 0;
+    frame_vtx_reused_ = frame_uniform_sets_ = frame_uniform_reuses_ = 0;
     frame_ = (frame_ + 1) % kFrames;
     begun_ = false;
     drawn_frames_++;
@@ -1749,6 +1754,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     f.ts_off = UINT32_MAX;
     f.data.Reset();
     vtx_copies_.clear();
+    frame_epoch_++;
     f.staging.Reset();
     f.next_descriptor = 0;
     f.descriptors.clear();
@@ -2322,31 +2328,47 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
   bool BindUniforms(Frame& f, DkShaderObj* vs, DkShaderObj* ps, const draw_util::ViewportInfo& vi, const RegisterFile& regs, bool scene) {
     DkCmdBuf cmd = f.cmdbuf;
-    uint32_t vs_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
-    uint32_t ps_off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
-    uint32_t sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
-    if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
-    // Only the float constants a shader reads (its register map), in runs: most sprite shaders read six of
-    // 256 and the buffer is write-combined memory. Dynamic addressing (c[N + a0]) copies all of them.
-    auto copy_constants = [](uint8_t* dst, const uint32_t* src, const Shader::ConstantRegisterMap& m) {
+    // Only the float constants a shader reads (its register map), in runs [first, first + count) of 16-byte
+    // registers: most sprite shaders read six of 256 and the buffer is write-combined memory. Dynamic addressing
+    // (c[N + a0]) reads all of them.
+    auto for_runs = [](const Shader::ConstantRegisterMap& m, auto&& fn) {
 #ifdef HCU_DK_GL
       static const bool full = std::getenv("HCU_DK_FULLCONST") != nullptr;  // A/B: every constant, as before the partial copy
-      if (full) { std::memcpy(dst, src, 4096); return; }
+      if (full) { fn(0u, 256u); return; }
 #endif
-      if (m.float_dynamic_addressing) { std::memcpy(dst, src, 4096); return; }
+      if (m.float_dynamic_addressing) { fn(0u, 256u); return; }
       for (uint32_t w = 0; w < 4; w++) {
         uint64_t bits = m.float_bitmap[w];
         while (bits) {
           uint32_t lo = uint32_t(__builtin_ctzll(bits));
           uint64_t run = bits >> lo;
           uint32_t len = ~run == 0 ? 64 - lo : uint32_t(__builtin_ctzll(~run));
-          std::memcpy(dst + (w * 64 + lo) * 16, src + (w * 64 + lo) * 4, len * 16);
+          fn(w * 64 + lo, len);
           bits = len + lo >= 64 ? 0 : bits & ~(((uint64_t(1) << len) - 1) << lo);
         }
       }
     };
-    copy_constants(f.data.cpu + vs_off, &regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X], vs->constant_register_map());
-    copy_constants(f.data.cpu + ps_off, &regs.values[XE_GPU_REG_SHADER_CONSTANT_256_X], ps->constant_register_map());
+    // A shader's constants, or the copy this frame made for it already when the registers it reads still hold the
+    // same values (compared with the shader's shadow in normal memory, never with the ring).
+    auto constants = [&](DkShaderObj* s, const uint32_t* src) -> uint32_t {
+      const auto& m = s->constant_register_map();
+      bool same = s->const_epoch == frame_epoch_;
+      if (same) for_runs(m, [&](uint32_t r, uint32_t n) { same = same && !std::memcmp(&s->const_shadow[r * 4], src + r * 4, n * 16); });
+      if (same) { frame_uniform_reuses_++; return s->const_off; }
+      const uint32_t off = f.data.Alloc(4096, DK_UNIFORM_BUF_ALIGNMENT);
+      if (off == UINT32_MAX) return off;
+      if (s->const_shadow.empty()) s->const_shadow.resize(1024);
+      for_runs(m, [&](uint32_t r, uint32_t n) {
+        std::memcpy(f.data.cpu + off + r * 16, src + r * 4, n * 16);
+        std::memcpy(&s->const_shadow[r * 4], src + r * 4, n * 16);
+      });
+      s->const_epoch = frame_epoch_;
+      s->const_off = off;
+      return off;
+    };
+    const uint32_t vs_off = constants(vs, &regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X]);
+    const uint32_t ps_off = constants(ps, &regs.values[XE_GPU_REG_SHADER_CONSTANT_256_X]);
+    frame_uniform_sets_ += 2;
     SysConstants sys{};
     for (int i = 0; i < 3; i++) {
       sys.ndc_scale[i] = vi.ndc_scale[i];
@@ -2361,7 +2383,21 @@ class Deko3dCommandProcessor : public CommandProcessor {
     sys.alpha[3] = scene ? float(hcu_settings.tex_view) : 0.f;
     std::memcpy(sys.bools, &regs.values[XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031], sizeof(sys.bools));
     std::memcpy(sys.loops, &regs.values[XE_GPU_REG_SHADER_CONSTANT_LOOP_00], sizeof(sys.loops));
-    std::memcpy(f.data.cpu + sys_off, &sys, sizeof(sys));
+    // The system constants: the last draw's copy again when they are the same.
+    uint32_t sys_off = last_sys_off_;
+    if (last_sys_epoch_ != frame_epoch_ || std::memcmp(&sys, &last_sys_, sizeof(sys))) {
+      sys_off = f.data.Alloc(sizeof(SysConstants), DK_UNIFORM_BUF_ALIGNMENT);
+      if (sys_off != UINT32_MAX) {
+        std::memcpy(f.data.cpu + sys_off, &sys, sizeof(sys));
+        last_sys_ = sys;
+        last_sys_off_ = sys_off;
+        last_sys_epoch_ = frame_epoch_;
+      }
+    } else {
+      frame_uniform_reuses_++;
+    }
+    frame_uniform_sets_++;
+    if (vs_off == UINT32_MAX || ps_off == UINT32_MAX || sys_off == UINT32_MAX) { LogOnce("ring", "frame data ring full (uniforms)"); return false; }
     DkBufExtents vs_bufs[2] = {{f.data.gpu + vs_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
     DkBufExtents ps_bufs[2] = {{f.data.gpu + ps_off, 4096}, {f.data.gpu + sys_off, sizeof(SysConstants)}};
     dkCmdBufBindUniformBuffers(cmd, DkStage_Vertex, 0, vs_bufs, 2);
@@ -2815,6 +2851,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint64_t upload_bytes_ = 0;
   uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0, frame_shadow_biased_ = 0;
   uint32_t frame_vtx_reused_ = 0;  // vertex bytes bound from a copy this frame made already (vtx_copies_)
+  // BindUniforms: the frame (incremented in BeginFrame; the shaders' constant copies and the system constants' copy
+  // are valid in that frame's data ring only), the last system constants, and the uniform buffers bound and reused.
+  uint32_t frame_epoch_ = 1;
+  SysConstants last_sys_{};
+  uint32_t last_sys_epoch_ = 0, last_sys_off_ = 0;
+  uint32_t frame_uniform_sets_ = 0, frame_uniform_reuses_ = 0;
   // This frame's byte-swapped vertex ranges (IssueDrawImpl): guest start | endian << 32 -> the copy in the data ring
   // and the draw serial it was taken at. Cleared in BeginFrame (the ring is reset there).
   struct VtxCopy { uint32_t bytes, off, serial; };
