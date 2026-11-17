@@ -487,6 +487,7 @@ DkImageSwizzle SwizzleOf(uint32_t s) {
 // viewport at the bottom-left corner. The file overlay_off next to the shader dir hides it.
 // The CPU-work meter (hcu src/frame_meter.cpp, Switch and Linux): this thread's blocked time per swap, and the strip text.
 extern "C" void rex_nx_meter_cp_swap(uint64_t block_us_total);
+extern "C" void rex_nx_meter_cp_frame(uint64_t block_us_total, int drawn);
 extern "C" void rex_nx_meter_present();
 extern "C" void rex_nx_meter_gpu_frame(double ms);
 extern "C" char rex_nx_meter_text[48];
@@ -1204,6 +1205,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width, uint32_t frontbuffer_height) override {
+    rex_nx_meter_cp_frame(meter_block_us_, !Skipping());
     {
       // The guest's swap interval, for 30skip (NextFrame): a 30 Hz scene (the movies) swaps every ~33 ms.
       const uint64_t now = armGetSystemTick();

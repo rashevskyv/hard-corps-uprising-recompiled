@@ -8,6 +8,8 @@
 //   audio        the audio client callbacks per frame (switch/audio_client_threads.inc, Switch only).
 // One line every 30 s ([nx] cpu per frame ... p50/p95/p99 ms), the main thread's three longest waits by export
 // ([nx] main waits top: <export> <ms>, ... per frame) and rex_nx_meter_text for the on-screen strip.
+// The same split by drawn and skipped frames ([nx] gpu commands per swap ..., [nx] main per frame by its swap ...):
+// which thread makes the 33 ms frames.
 // Switch: the FPCR switches per second, all guest contexts and the four busiest ([nx] fpcr ..., the SDK counter of
 // switch/sdk-edits-hcu.py in rex/ppc/context.h).
 #include <algorithm>
@@ -46,6 +48,11 @@ struct Hist {
     }
     return 100.0;
   }
+  double Over(double ms) const {  // percent of the samples at or over ms
+    uint64_t c = 0;
+    for (int i = int(ms * 10.0); i < kBins; i++) c += bin[i];
+    return n ? c * 100.0 / n : 0.0;
+  }
 };
 
 uint64_t Now() { return rex::chrono::Clock::QueryHostTickCount(); }
@@ -62,6 +69,22 @@ uint64_t g_main_last = 0, g_main_last_wait = 0, g_main_last_ring = 0, g_report_t
 uint64_t g_cp_last = 0, g_cp_last_wait = 0, g_cp_last_block_us = 0, g_shown_last = 0;
 uint64_t g_audio_last_us = 0;
 uint32_t g_frames = 0;
+
+// Drawn and skipped frames apart (30skip draws every second guest frame and skips one the GPU is still busy for):
+// the command processor's swap-to-swap time and work per swap, taken where the SDK's [nx] frame times line takes
+// its time (the swap packet), and the main thread's frames joined to the swaps by number (the Nth VdSwap is the
+// command processor's Nth swap; the join runs in Report, so a swap not processed yet waits for the next one).
+constexpr uint32_t kRing = 4096;
+struct MainRec { uint32_t n; float wall, work; };
+MainRec g_main_rec[kRing];   // main thread: its frame ending at VdSwap n (wall < 0: none, the first one)
+uint32_t g_main_n = 0;       // main thread: VdSwaps so far
+uint64_t g_cp_rec[kRing];    // command processor: n << 1 | drawn
+uint32_t g_cp_n = 0;         // command processor: swaps so far (release store after its record)
+uint32_t g_join_n = 0;       // main thread: swaps joined so far
+// [0] skipped, [1] drawn: command processor frame and work; the main thread's frame and work by its own swap; its
+// frame by the swap before (the one the main thread's ring wait waits for).
+Hist g_cpf[2], g_cpw[2], g_mf[2], g_mw[2], g_mf_prev[2];
+uint64_t g_any_last = 0, g_any_last_wait = 0, g_any_last_block_us = 0;
 
 uint64_t ThreadKey() { return std::hash<std::thread::id>{}(std::this_thread::get_id()); }
 uint64_t g_main_key = 0;  // ThreadKey of the thread that calls VdSwap
@@ -146,6 +169,33 @@ void Report(uint64_t now) {
   std::printf("[nx] game speed %.1f %% (%.1f guest frames/s); shown %.1f/s, interval p50 %.1f p95 %.1f p99 %.1f ms, %.1f %% <= 34 ms\n",
               secs > 0 ? g_main_work.n / secs / 60.0 * 100.0 : 0.0, secs > 0 ? g_main_work.n / secs : 0.0, secs > 0 ? g_shown.n / secs : 0.0,
               g_shown.Pct(0.5), g_shown.Pct(0.95), g_shown.Pct(0.99), g_shown.n ? le34 * 100.0 / g_shown.n : 0.0);
+  {
+    const uint32_t cp_n = __atomic_load_n(&g_cp_n, __ATOMIC_ACQUIRE);
+    const uint32_t end = std::min(cp_n, g_main_n);
+    if (end > kRing && g_join_n < end - kRing) g_join_n = end - kRing;  // older records are overwritten
+    for (; g_join_n < end; g_join_n++) {
+      const uint64_t c = __atomic_load_n(&g_cp_rec[g_join_n % kRing], __ATOMIC_RELAXED);
+      const MainRec& m = g_main_rec[g_join_n % kRing];
+      if (uint32_t(c >> 1) != g_join_n || m.n != g_join_n || m.wall < 0) continue;
+      g_mf[c & 1].Add(m.wall);
+      g_mw[c & 1].Add(m.work);
+      const uint64_t p = g_join_n ? __atomic_load_n(&g_cp_rec[(g_join_n - 1) % kRing], __ATOMIC_RELAXED) : 0;
+      if (g_join_n && uint32_t(p >> 1) == g_join_n - 1) g_mf_prev[p & 1].Add(m.wall);
+    }
+    auto row = [](char* out, size_t size, const char* what, const Hist& f, const Hist& w) {
+      std::snprintf(out, size, "%s %u: frame p50 %.1f p95 %.1f p99 %.1f, %.1f %% >= 25 ms, work p50 %.1f p95 %.1f p99 %.1f", what, f.n,
+                    f.Pct(0.5), f.Pct(0.95), f.Pct(0.99), f.Over(25.0), w.Pct(0.5), w.Pct(0.95), w.Pct(0.99));
+    };
+    char d[160], s[160];
+    row(d, sizeof(d), "drawn", g_cpf[1], g_cpw[1]);
+    row(s, sizeof(s), "skipped", g_cpf[0], g_cpw[0]);
+    std::printf("[nx] gpu commands per swap (30 s): %s; %s\n", d, s);
+    row(d, sizeof(d), "drawn", g_mf[1], g_mw[1]);
+    row(s, sizeof(s), "skipped", g_mf[0], g_mw[0]);
+    std::printf("[nx] main per frame by its swap (30 s, joined to #%u, cp #%u, main #%u): %s; %s; by the swap before: after drawn %u, %.1f %% >= 25 ms, after skipped %u, %.1f %% >= 25 ms\n",
+                g_join_n, cp_n, g_main_n, d, s, g_mf_prev[1].n, g_mf_prev[1].Over(25.0), g_mf_prev[0].n, g_mf_prev[0].Over(25.0));
+    for (Hist* h : {g_cpf, g_cpw, g_mf, g_mw, g_mf_prev}) h[0] = h[1] = Hist{};
+  }
 #ifdef __SWITCH__
   ReportFpcr(secs);
 #endif
@@ -188,12 +238,16 @@ void rex_nx_meter_leave(uint64_t t0, int kind, uint64_t* main_wait) {
   if (kind != 2) return;
   if (!t_main) g_main_key = ThreadKey();
   t_main = true;
+  MainRec& rec = g_main_rec[g_main_n % kRing];
+  rec = {g_main_n++, -1.f, -1.f};
   if (g_main_last) {
     const uint64_t wall = now - g_main_last, wait = t_wait_ticks - g_main_last_wait;
     g_main_work.Add(ToMs(wall > wait ? wall - wait : 0));
     g_main_wait.Add(ToMs(wait));
     g_main_ring.Add(ToMs(t_ring_ticks - g_main_last_ring));
     g_frames++;
+    rec.wall = float(ToMs(wall));
+    rec.work = float(ToMs(wall > wait ? wall - wait : 0));
   }
   g_main_last = now;
   g_main_last_wait = t_wait_ticks;
@@ -235,6 +289,26 @@ void rex_nx_meter_cp_swap(uint64_t block_us_total) {
   g_cp_last = now;
   g_cp_last_wait = wait_total;
   g_cp_last_block_us = block_us_total;
+}
+
+// On the command processor thread at the start of every swap, drawn or skipped (drawn: this frame's draws were
+// recorded): the drawn/skipped split of Report.
+void rex_nx_meter_cp_frame(uint64_t block_us_total, int drawn) {
+  const uint64_t now = Now();
+  const uint64_t wait_total = rex_nx_cp_wait_ticks;
+  const int d = drawn ? 1 : 0;
+  if (g_any_last) {
+    const double wall = ToMs(now - g_any_last);
+    const double wait = ToMs(wait_total - g_any_last_wait) + double(block_us_total - g_any_last_block_us) / 1000.0;
+    g_cpf[d].Add(wall);
+    g_cpw[d].Add(std::max(0.0, wall - wait));
+  }
+  g_any_last = now;
+  g_any_last_wait = wait_total;
+  g_any_last_block_us = block_us_total;
+  const uint32_t n = __atomic_load_n(&g_cp_n, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_cp_rec[n % kRing], uint64_t(n) << 1 | uint64_t(d), __ATOMIC_RELAXED);
+  __atomic_store_n(&g_cp_n, n + 1, __ATOMIC_RELEASE);
 }
 }
 
