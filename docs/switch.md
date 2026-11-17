@@ -29,7 +29,7 @@ host layer of cvhd-recomp (our Castlevania: Harmony of Despair port). The PC bui
    Game data once: `game/extracted/` to `sdmc:/switch/hcu/game/` (lftp mirror with temp files).
 
 On the console: hbmenu entry "Hard Corps: Uprising" by hcu-switch, launched with title takeover (hold R
-while starting any game). Logs: `sdmc:/switch/hcu/hcu_log.txt` (`[nx]` lines: memory, clocks, fps, cpu,
+while starting any game). Logs: `sdmc:/switch/hcu/hcu_log_<build id>.txt`, one per build (`[nx]` lines: memory, clocks, fps, cpu,
 pc sampler, gpu waits) and `hcu_rex_log.txt` (the SDK log). `sdmc:/switch/hcu/nogpu` selects the null GPU
 backend, `nopin` turns thread placement off.
 

@@ -31,7 +31,7 @@ The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled g
 2. Extract your own Xbox Live Arcade package (`python tools/stfs_extract.py <package> <folder>`, or the PC launcher's **Install from package...**) and copy the extracted files (`default.xex` and the data folders) into `sdmc:/switch/hcu/game/`.
 3. Start **Hard Corps: Uprising** from the Homebrew Menu with title takeover: hold **R** while you start any installed game. Applet mode is not tested.
 
-Logs: `sdmc:/switch/hcu/hcu_log.txt` and `hcu_rex_log.txt`. Settings: `sdmc:/switch/hcu/settings.txt`.
+Logs: `sdmc:/switch/hcu/hcu_log_<build id>.txt` (one per build: `<version>-<build time>`) and `hcu_rex_log.txt`. Settings: `sdmc:/switch/hcu/settings.txt`.
 
 ### Controls and the settings menu
 

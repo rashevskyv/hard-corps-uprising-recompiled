@@ -14,13 +14,12 @@ $nro = "$dir\hcu.nro"
 if (Get-Process eden -ErrorAction SilentlyContinue | Where-Object Path -eq $eden) { throw "Eden ($eden) is already running: not starting a second one" }
 wsl -u root -e bash -lc "cp /root/hcu/src/out/build/switch/hcu.nro /mnt/e/Switch/Eden/user/sdmc/switch/hcu/hcu.nro && grep -o '0\.[0-9]*\.[0-9a-f+]*' /root/hcu/src/out/build/switch/hcu_version.h | head -1" | Tee-Object -Variable version | Out-Null
 $version = ($version | Select-Object -Last 1).Trim()
-# The game's log is hcu_log_<build id>.txt (switch_nx.cpp open_log).
-$id = wsl -u root -e sed -n 's/.*HCU_BUILD_ID .\(.*\)./\1/p' /root/hcu/src/out/build/switch/hcu_version.h
-$id = ($id | Select-Object -Last 1).Trim()
-if (-not $id) { throw 'no HCU_BUILD_ID in hcu_version.h' }
-$log = "$dir\hcu_log_$id.txt"
+# The game's log is hcu_log_<build id>.txt (switch_nx.cpp open_log): the newest hcu_log*.txt written since this run
+# started (a log of an earlier build must not count; no build id is needed).
+$start = Get-Date
+function Get-RunLog { Get-ChildItem "$dir\hcu_log*.txt" -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $start | Sort-Object LastWriteTime | Select-Object -Last 1 -ExpandProperty FullName }
 if (-not (Test-Path "$dir\nogpu")) { Set-Content "$dir\nogpu" 'nogpu' -Encoding ascii }
-Remove-Item $log, "$dir\hcu_rex_log.txt" -ErrorAction SilentlyContinue
+Remove-Item "$dir\hcu_rex_log.txt" -ErrorAction SilentlyContinue
 $edenLog = 'E:\Switch\Eden\user\log\eden_log.txt'
 Remove-Item $edenLog -ErrorAction SilentlyContinue
 
@@ -30,7 +29,8 @@ $deadline = (Get-Date).AddMinutes($Minutes)
 $swaps = 0
 while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
     Start-Sleep -Seconds 10
-    if (Test-Path $log) {
+    $log = Get-RunLog
+    if ($log) {
         $m = Select-String -Path $log -Pattern 'gpu: swap #(\d+)' | Select-Object -Last 1
         if ($m) { $swaps = [int]$m.Matches[0].Groups[1].Value }
         $last = Get-Content $log -Tail 1
@@ -45,7 +45,8 @@ if (-not $exited) {
 
 $out = "E:\conker-data\eden-runs\hcu-$version"
 New-Item -ItemType Directory -Force $out | Out-Null
-foreach ($f in @($log, "$dir\hcu_rex_log.txt", $edenLog)) { if (Test-Path $f) { Copy-Item $f $out -Force } }
+$log = Get-RunLog
+foreach ($f in @($log, "$dir\hcu_rex_log.txt", $edenLog)) { if ($f -and (Test-Path $f)) { Copy-Item $f $out -Force } }
 Write-Output "logs: $out"
 if ($exited) { Write-Output "FAIL: Eden exited on its own after $swaps swaps" }
 elseif ($swaps -ge 60) { Write-Output "PASS: $swaps swaps in $Minutes min" }

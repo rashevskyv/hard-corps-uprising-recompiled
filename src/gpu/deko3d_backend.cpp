@@ -723,6 +723,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
   void ShutdownContext() override {
     if (queue_) dkQueueWaitIdle(queue_);
+    SaveStepTimes();  // the step times of a run that quit before the trail went off
     Log("deko3d backend down: %u swaps, %u draws, %u skipped, %u without shaders, %u clears, %u resolves, %u images (%u MB), %u uploads (%u KB, %u re-uploads), %llu dirty pages",
         swaps_, draws_, skipped_, missing_draws_, clears_, resolves_, image_count_, images_.peak >> 20, uploads_,
         uint32_t(upload_bytes_ >> 10), reuploads_, (unsigned long long)dirty_pages_);
@@ -1753,9 +1754,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     (void)f, (void)fmt;
 #endif
   }
-  // dk_gpu_times_<ordinal>.txt next to the shader directory, and the 12 largest groups in the log. Draws group by VS, PS,
-  // target and scissor; other steps by their first word or two. Called after the frame's fence, before its ts_off is reset.
-  void WriteStepTimes(const Frame& f, uint32_t ordinal) {
+  // The text of dk_gpu_times_<ordinal>.txt (next to the shader directory) and the 12 largest groups for the log, kept in
+  // memory for SaveStepTimes. Draws group by VS, PS, target and scissor; other steps by their first word or two. Called
+  // after the frame's fence, before its ts_off is reset.
+  void KeepStepTimes(const Frame& f, uint32_t ordinal) {
     if (f.ts_off == UINT32_MAX || f.steps.empty()) return;
     const uint64_t* ts = reinterpret_cast<const uint64_t*>(timestamps_.cpu + f.ts_off);
     const uint64_t* reports = reinterpret_cast<const uint64_t*>(steps_.cpu) + uint64_t(&f - frames_) * kMaxSteps * 2;
@@ -1804,19 +1806,35 @@ class Deko3dCommandProcessor : public CommandProcessor {
                     e.second.count, ms(e.second.max), (unsigned long long)e.second.indices, e.first.c_str());
     };
     char line[512];
-    Log("%s", header);
-    for (size_t i = 0; i < sorted.size() && i < 12; i++) { group_line(sorted[i], line, sizeof(line)); Log("  %s", line); }
-    const std::string path = debug_dir_ + "dk_gpu_times_" + std::to_string(ordinal) + ".txt";
-    FILE* out = std::fopen(path.c_str(), "w");
-    if (!out) { Log("GPU step times could not be opened: %s", path.c_str()); return; }
-    std::fprintf(out, "%s\nReports have no barriers: one step's time can leak into its neighbours; trust group totals, not single steps.\n"
-                 " total_ms share%%  count   max_ms    indices  key\n", header);
-    for (const auto& e : sorted) { group_line(e, line, sizeof(line)); std::fprintf(out, "%s\n", line); }
-    std::fprintf(out, "\nindex ms text\n");
-    for (size_t i = 0; i < f.steps.size(); i++) std::fprintf(out, "%zu %.3f %s\n", i, ms(step[i]), f.steps[i].c_str());
-    const bool write_failed = std::ferror(out) != 0;
-    if (std::fclose(out) != 0 || write_failed) { Log("GPU step times could not be written completely: %s", path.c_str()); return; }
-    Log("GPU step times written to %s", path.c_str());
+    StepTimes& out = step_times_[ordinal];
+    out.log = std::string("[dk] ") + header + "\n";
+    for (size_t i = 0; i < sorted.size() && i < 12; i++) { group_line(sorted[i], line, sizeof(line)); out.log += std::string("[dk]   ") + line + "\n"; }
+    out.file = std::string(header) + "\nReports have no barriers: one step's time can leak into its neighbours; trust group totals, not single steps.\n"
+               " total_ms share%  count   max_ms    indices  key\n";
+    for (const auto& e : sorted) { group_line(e, line, sizeof(line)); out.file += std::string(line) + "\n"; }
+    out.file += "\nindex ms text\n";
+    for (size_t i = 0; i < f.steps.size(); i++) {
+      std::snprintf(line, sizeof(line), "%zu %.3f %s\n", i, ms(step[i]), f.steps[i].c_str());
+      out.file += line;
+    }
+  }
+  // The kept step times to the log and to dk_gpu_times_<ordinal>.txt, once: when the trail goes off (after the measured
+  // frames, so no card write falls into them) or, before that, when the backend goes down.
+  void SaveStepTimes() {
+    for (uint32_t ordinal = 0; ordinal < 2; ordinal++) {
+      StepTimes& s = step_times_[ordinal];
+      if (s.file.empty()) continue;
+      std::fputs(s.log.c_str(), stdout);
+      const std::string path = debug_dir_ + "dk_gpu_times_" + std::to_string(ordinal) + ".txt";
+      if (FILE* out = std::fopen(path.c_str(), "w")) {
+        const bool written = std::fwrite(s.file.data(), 1, s.file.size(), out) == s.file.size();
+        if (std::fclose(out) == 0 && written) Log("GPU step times written to %s", path.c_str());
+        else Log("GPU step times could not be written completely: %s", path.c_str());
+      } else {
+        Log("GPU step times could not be opened: %s", path.c_str());
+      }
+      s = {};
+    }
   }
 
   void BeginFrame() {
@@ -1840,23 +1858,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #endif
       if (swaps_ < 6) Log("frame %u: fence done", frame_);
       f.fenced = false;
+      // The fence wait succeeded and the frame's bottom timestamp is there (TMNT: a fence done without it is a GPU
+      // fault): only then may KeepStepTimes read the frame's reports.
+      bool finished = false;
 #ifdef __SWITCH__
       // The GPU's own time for that frame (timestamps in GPU ticks, 625/384 ns each): the CPU-work meter's gpu line.
       if (f.ts_off != UINT32_MAX) {
         const uint64_t* t = reinterpret_cast<const uint64_t*>(timestamps_.cpu + f.ts_off);
         if (t[1] && t[3] > t[1]) rex_nx_meter_gpu_frame(double(t[3] - t[1]) * 625.0 / 384.0 / 1e6);
+        finished = r == DkResult_Success && (t[2] || t[3]);
       }
 #endif
       // ponytail: the trail costs a formatted line and a GPU report per step, so it ends after 100 frames of 150+ draws
       // (the console's menus draw 97 or fewer, a level 235-438; the first swap has 132 clears and 76 resolves, so draws count).
-      // Frames 20 and 60 write their step times; the fps before and after the "GPU trail off" line gives the trail's own
-      // cost. A trail later in the level needs a switch for it.
+      // Frames 20 and 60 keep their step times in memory; the log lines and the files are written once, at "GPU trail
+      // off". The fps before and after that line gives the trail's own cost. A trail later in the level needs a switch for it.
       if (trail_ && std::count_if(f.steps.begin(), f.steps.end(), [](const std::string& s) { return s.starts_with("draw "); }) >= 150) {
         ++trail_frames_;
-        if (r == DkResult_Success && (trail_frames_ == 20 || trail_frames_ == 60)) WriteStepTimes(f, trail_frames_ == 20 ? 0 : 1);
+        if (finished && (trail_frames_ == 20 || trail_frames_ == 60)) KeepStepTimes(f, trail_frames_ == 20 ? 0 : 1);
         if (trail_frames_ == 100) {
           trail_ = false;
           Log("GPU trail off: 100 frames of 150+ draws finished");
+          SaveStepTimes();
         }
       }
     }
@@ -2872,6 +2895,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool trail_ = false;
 #endif
   uint32_t trail_frames_ = 0;
+  struct StepTimes { std::string log, file; };  // KeepStepTimes -> SaveStepTimes: the log lines and the file text
+  StepTimes step_times_[2];
   uint32_t sampler_desc_offset_ = 0;
   Frame frames_[kFrames];
   uint32_t frame_ = 0;

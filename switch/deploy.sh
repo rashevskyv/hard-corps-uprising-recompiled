@@ -61,6 +61,10 @@ case "$ACTION" in
         mkdir -p switch/logs
         # The game's log is hcu_log_<build id>.txt (switch_nx.cpp open_log): the id of the local build.
         ID=$(grep -o 'HCU_BUILD_ID "[^"]*"' "${SWITCH_BUILD_DIR:-out/build/switch}/hcu_version.h" 2>/dev/null | cut -d'"' -f2)
+        # No local build (no id): the newest hcu_log_*.txt on the console, by the build time at the end of its name
+        # (<version>-<YYYYMMDDTHHMMZ>; a version sort would put 0.100 before 0.99).
+        [ -n "$ID" ] || ID=$(curl -sS "$URL/" | tr -d '\r' | awk '{print $NF}' |
+            sed -n 's/^hcu_log_\(.*-\([0-9]\{8\}T[0-9]\{4\}Z\)\)\.txt$/\2 \1/p' | sort | tail -n 1 | cut -d' ' -f2 || true)
         for log in "hcu_log${ID:+_$ID}.txt" hcu_rex_log.txt; do
             curl -sS -o "switch/logs/$log" "$URL/$log" && echo "switch/logs/$log" || true
         done
