@@ -1121,11 +1121,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
                 stride, bytes, vb.fetch_constant, avail, base_vertex, (unsigned long long)vs->ucode_data_hash());
         bytes = avail;
       }
-      uint32_t off = f.data.Alloc(bytes ? bytes : 16, 64);
-      if (off == UINT32_MAX) { LogOnce("ring", "frame data ring full"); skipped_++; return true; }
-      const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2) + src_off;
-      texture_conversion::CopySwapBlock(fetch.endian, f.data.cpu + off, src, bytes);
-      frame_vtx_bytes_ += bytes;
+      uint32_t off = UINT32_MAX;
+#ifndef HCU_DK_GL
+      // A range this frame swapped already (same start and endian, at least as long), its pages unwritten since: that
+      // copy again. Linux has no dirty-page serials: it always copies.
+      const uint32_t src_phys = (fetch.address << 2) + src_off;
+      const uint64_t key = uint64_t(src_phys) | uint64_t(fetch.endian) << 32;
+      auto hit = vtx_copies_.find(key);
+      if (hit != vtx_copies_.end() && bytes <= hit->second.bytes && !WrittenSince(src_phys, hit->second.bytes, hit->second.serial)) {
+        off = hit->second.off;
+        frame_vtx_reused_ += bytes;
+      }
+#endif
+      if (off == UINT32_MAX) {
+        off = f.data.Alloc(bytes ? bytes : 16, 64);
+        if (off == UINT32_MAX) { LogOnce("ring", "frame data ring full"); skipped_++; return true; }
+        const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2) + src_off;
+        texture_conversion::CopySwapBlock(fetch.endian, f.data.cpu + off, src, bytes);
+        frame_vtx_bytes_ += bytes;
+#ifndef HCU_DK_GL
+        vtx_copies_[key] = VtxCopy{bytes, off, serial_};
+#endif
+      }
 #ifdef HCU_DK_GL
       if (TraceFrame() && vertex_count <= 6) {
         // The vertices of small draws (sprites) as floats, after the byte swap.
@@ -1555,10 +1572,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (swaps_ <= 3 || ++summary_frames_ == 60) {
       summary_frames_ = 0;
       std::printf("[nx] gpu: swap #%u\n", swaps_);  // the Eden gate's frame counter
-      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %u shadow-biased, %llu dirty pages; data %u KB (vertices %u KB) staging %u KB; images %u (%u MB), %u image flips so far",
+      Log("swap #%u: front %08X %ux%u %s; frame: %u draws, %u clears, %u resolves, %u skipped, %u no-shader, %u re-uploads, %u shadow-biased, %llu dirty pages; data %u KB (vertices %u KB copied, %u KB reused) staging %u KB; images %u (%u MB), %u image flips so far",
           swaps_, frontbuffer_ptr, frontbuffer_width, frontbuffer_height, front ? "shown" : "MISSING", frame_draws_,
           frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, frame_shadow_biased_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
-          f.data.used >> 10, frame_vtx_bytes_ >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
+          f.data.used >> 10, frame_vtx_bytes_ >> 10, frame_vtx_reused_ >> 10, f.staging.used >> 10, image_count_, images_.used >> 20, image_flips_);
       // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
       // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
       uint32_t n = swaps_ <= 3 ? 1 : 60;  // drawn frames since the last line
@@ -1573,6 +1590,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     last_drawn_swap_ = swaps_;
     last_drawn_draws_ = frame_draws_;
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
+    frame_vtx_reused_ = 0;
     frame_ = (frame_ + 1) % kFrames;
     begun_ = false;
     drawn_frames_++;
@@ -1730,6 +1748,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     f.ts_off = UINT32_MAX;
     f.data.Reset();
+    vtx_copies_.clear();
     f.staging.Reset();
     f.next_descriptor = 0;
     f.descriptors.clear();
@@ -2795,6 +2814,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint32_t image_flips_ = 0;  // recreated + resized images, all frames (the first 40 are logged)
   uint64_t upload_bytes_ = 0;
   uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0, frame_shadow_biased_ = 0;
+  uint32_t frame_vtx_reused_ = 0;  // vertex bytes bound from a copy this frame made already (vtx_copies_)
+  // This frame's byte-swapped vertex ranges (IssueDrawImpl): guest start | endian << 32 -> the copy in the data ring
+  // and the draw serial it was taken at. Cleared in BeginFrame (the ring is reset there).
+  struct VtxCopy { uint32_t bytes, off, serial; };
+  std::unordered_map<uint64_t, VtxCopy> vtx_copies_;
 };
 
 class Deko3dGraphicsSystem : public GraphicsSystem {
