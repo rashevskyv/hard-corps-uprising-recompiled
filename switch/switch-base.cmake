@@ -82,6 +82,12 @@ option(HCU_FLOAT_LOADS "Single-precision guest loads in the vector unit" ON)
 if(NOT HCU_FLOAT_LOADS)
     target_compile_definitions(hcu_recomp PRIVATE REX_FLOAT_LOADS_INTEGER)
 endif()
+# Item 11c: the base's tools/pch_cold_traps.py. ON: ppc_trap [[gnu::cold, gnu::noinline]] (layout only: the same
+# function runs when a trap fires). OFF: REX_TRAP_ATTR empty, the inline function as before.
+option(HCU_COLD_TRAPS "The trap helper of the generated pch cold and out of line" ON)
+if(NOT HCU_COLD_TRAPS)
+    target_compile_definitions(hcu_recomp PRIVATE "REX_TRAP_ATTR=")
+endif()
 # Item 15 of docs/bible-checklist.md: link-time optimisation (the base's BANJO_SWITCH_LTO and BANJO_SWITCH_SDK_OPT,
 # app/CMakeLists.txt of the base). The game code, HCU's code, the GPU plugin (deko3d) and the SDK runtime are compiled
 # to GIMPLE and optimised as one program at the link, which repeats -ffp-contract=off and -fno-strict-aliasing (the
