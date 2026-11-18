@@ -65,6 +65,7 @@ bool Exists(const std::string& p) { return access(p.c_str(), F_OK) == 0; }
 void hcu_settings_load(const char* dir) {
   g_dir = dir ? dir : "";
   HcuSettings& s = hcu_settings;
+  bool saved_fps = false;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "r")) {
     char line[64];
     while (std::fgets(line, sizeof(line), f)) {
@@ -75,7 +76,7 @@ void hcu_settings_load(const char* dir) {
         continue;
       }
       if (std::sscanf(line, "%31[^=]=%f", key, &v) != 2) continue;
-      if (!std::strcmp(key, "fps_mode")) s.fps_mode = int(v);
+      if (!std::strcmp(key, "fps_mode")) s.fps_mode = int(v), saved_fps = true;
       else if (!std::strcmp(key, "early_submit")) s.early_submit = int(v);
       else if (!std::strcmp(key, "gpu_frames")) s.gpu_frames = int(v) == 2 ? 2 : 3;
       else if (!std::strcmp(key, "swap_images")) s.swap_images = int(v) == 2 ? 2 : 3;
@@ -100,11 +101,19 @@ void hcu_settings_load(const char* dir) {
     }
     std::fclose(f);
   }
-  // The marker files of the console A/B tests win.
+  if (s.fps_mode < 0 || s.fps_mode > 4) s.fps_mode = 0;
+  // The marker files of the console A/B tests win, but fps only while settings.txt holds no fps_mode (the menu's
+  // choice, saved when it closes): "30skip" (30), "45", "60skip" / "60" (60), "30" (the half-speed cap, as before).
   if (FILE* f = std::fopen((g_dir + "fps").c_str(), "r")) {
     char t[16] = {};
     if (std::fgets(t, sizeof(t), f)) {
-      s.fps_mode = !std::strncmp(t, "30skip", 6) ? 0 : !std::strncmp(t, "60skip", 6) ? 1 : std::atoi(t) == 30 ? 3 : 2;
+      t[std::strcspn(t, "\r\n")] = 0;
+      const int m = !std::strncmp(t, "30skip", 6) ? 0 : !std::strncmp(t, "60skip", 6) ? 1 : std::atoi(t) == 30 ? 3 : std::atoi(t) == 45 ? 4 : 2;
+      if (saved_fps) std::printf("[nx] settings: the fps file (%s) is ignored: settings.txt fps_mode=%d (the menu's choice) wins\n", t, s.fps_mode);
+      else {
+        s.fps_mode = m;
+        std::printf("[nx] settings: the fps file (%s) sets fps_mode=%d\n", t, m);
+      }
     }
     std::fclose(f);
   }
