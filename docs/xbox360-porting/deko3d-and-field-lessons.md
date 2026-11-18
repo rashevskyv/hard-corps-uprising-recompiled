@@ -69,4 +69,4 @@ Guardian Heroes: a k_4_4_4_4 2048x2225 atlas with 24x26 cells. Later step: redra
 - Game data goes only into PRIVATE repositories, as release assets. Split large files into 300 MB volumes (one 1.9 GB upload timed out with HTTP 408).
   Never change a repository's visibility: one public flip exposed a data release for minutes.
 - Public repository: a fresh single-commit tree from an export script that excludes internal notes, screenshots of the game, local paths and LAN IPs, and that audits for big blobs, images and game files.
-- Licences: ReXGlue is BSD-3. sa2-nx and the Prototype ports are GPL-3 (ideas only). The Hard Corps PC port is GPL-2, so a fork stays GPL-2.
+- Licences: ReXGlue is BSD-3. sa2-nx and the Prototype ports are GPL-3 (ideas only). The Hard Corps PC port was GPL-2.0-only; with the consent of all its authors this port is GPL-3.0-or-later since 2026-11-18.

@@ -251,6 +251,8 @@ How the launcher, settings and installer work is described in [docs/launcher.md]
 - [TRG Launcher](https://github.com/TekRantGaming/trg-launcher), the launcher interface, pinned at v1.1.0. The referenced revision contains no explicit license file.
 - The launcher and package installer follow the approach of the [Earthworm Jim HD PC port](https://github.com/TekRantGaming/earthworm-jim-hd-recompiled)
 - The licenses of the libraries the release includes are in the `licenses` folder of the ZIP
+- The Nintendo Switch build uses methods, tools and SDK parts of [renut_nx_ultimate_base](https://github.com/ChanseyIsTheBest/renut_nx_ultimate_base) and [renut-nx](https://github.com/ChanseyIsTheBest/renut-nx) by ChanseyIsTheBest (SDK parts BSD-3-Clause, tools and app code GPL-3.0). Their notices credit, among others, [nfsmw-nx](https://github.com/StevensND/nfsmw-nx) by StevensND (the Horizon layer of the SDK, the profiling and PGO method), [masseffect-nx](https://github.com/nebadasSwifty/masseffect-nx) by NebadasSwifty, sa2-nx and futari-nx by ChanseyIsTheBest, and [NFSMW Recompiled](https://github.com/madelrandel-blip/NFSMW-Recompiled) by madelrandel-blip. Files taken from them keep their copyright headers.
+- The Direct3D-level renderer of those ports is [reNut](https://github.com/masterspike52/reNut) by reNut and masterspike52, through banjo-nx's adaptation. reNut has no licence file; it is used with the author's permission. Its parts keep their copyright headers.
 
 ## AI disclosure
 
@@ -258,7 +260,7 @@ AI tools were used to assist with code analysis, development, debugging and docu
 
 ## License
 
-Original code in this project is licensed under the GNU General Public License v2.0 only (GPL-2.0-only). See [LICENSE](LICENSE).
+Original code in this project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later). See [LICENSE](LICENSE). The project was GPL-2.0-only before; all its authors agreed to the change.
 
 Third-party components retain their respective licenses and notices. See [licenses/ReXGlue-LICENSE.txt](packaging/licenses/ReXGlue-LICENSE.txt) and [licenses/THIRD-PARTY-LICENSES.txt](packaging/licenses/THIRD-PARTY-LICENSES.txt).
 
