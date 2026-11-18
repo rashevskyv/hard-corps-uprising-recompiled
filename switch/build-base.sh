@@ -30,6 +30,7 @@ opt() {
 }
 NO_VOLATILE=$(opt HCU_NO_VOLATILE 0 "$@")
 DIRECT_CALLS=$(opt HCU_DIRECT_CALLS 1 "$@")
+GUEST_CAS=$(opt HCU_GUEST_CAS 0 "$@")
 
 CLI=$SDK/out/linux-amd64/Release/rexglue
 [ -x "$CLI" ] || { echo "no host CLI: $CLI"; exit 1; }
@@ -47,7 +48,7 @@ fi
 # card-marking forms; the deko3d renderer reads the cards). Again whenever the manifest, its config, the CLI or the
 # cards tool changed.
 CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$CLI" "$BASE/tools/store_cards.py" \
-    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
+    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$BASE/tools/guest_cas.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
 if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.hcu-codegen-stamp" 2>/dev/null)" != "$CG_STAMP" ]; then
     rm -rf "$SRC/generated"
     (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1) \
@@ -60,6 +61,13 @@ if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.
         "$SRC"/generated/default/*.cpp
     if cat "$SRC"/generated/default/*.cpp | grep '__sync_bool_compare_and_swap' | grep -vq 'REX_CARD(ea);$'; then
         echo "a CAS without its store card (switch/build-base.sh)"; exit 1
+    fi
+    # Item 11 (the base's tools/guest_cas.py): every CAS through REX_GUEST_CAS; the cmake option HCU_GUEST_CAS picks the
+    # form (OFF: REX_GUEST_CAS_LEGACY, the same builtin as before), so both flavours come from this one tree.
+    python3 -I "$BASE/tools/guest_cas.py" --gen "$SRC/generated/default" >> "$ROOT/store-cards.log" 2>&1 \
+        || { tail -5 "$ROOT/store-cards.log"; exit 1; }
+    if cat "$SRC"/generated/default/*.cpp | grep -q '__sync_bool_compare_and_swap'; then
+        echo "a CAS that tools/guest_cas.py did not rewrite"; exit 1
     fi
     # Item 9 of docs/bible-checklist.md: guest loads and stores without volatile, with the loop barriers they need
     # (the base's tools; without the barriers GCC turns a guest polling loop into a branch to itself). The cmake option
@@ -104,6 +112,7 @@ PCH=$(ls "$SRC"/generated/default/*_pch.h)
     || { echo "no volatile switch or loop barrier macro in $PCH"; exit 1; }
 cat "$ROOT/loop-barriers.log"
 grep -q '#define REX_CARD(ea)' "$PCH" || { echo "no store cards in $PCH (tools/store_cards.py)"; exit 1; }
+grep -q '(tools/guest_cas.py)' "$PCH" || { echo "no REX_GUEST_CAS in $PCH (tools/guest_cas.py)"; exit 1; }
 # The stores left without a card (each should go through the stack pointer) and the ones with it.
 echo "stores: $(cat "$SRC"/generated/default/*.cpp | grep -oE '\b(REX_STORE_(D_)?U(8|16|32|64)|REX_STVLX|REX_STVRX|REX_STORE_(D_)?F32ANY)(_C)?\(' \
     | sed 's/($//' | sort | uniq -c | tr '\n' ' ') CAS with card: $(cat "$SRC"/generated/default/*.cpp | grep -c 'REX_CARD(ea);$')"
@@ -118,6 +127,7 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 # A flavour NRO names itself in hbmenu and in every log line that carries the version.
 [ "$NO_VOLATILE" = 1 ] && VERSION="$VERSION-novol"
 [ "$DIRECT_CALLS" = 0 ] && VERSION="$VERSION-nodirect"
+[ "$GUEST_CAS" = 1 ] && VERSION="$VERSION-cas"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
@@ -132,7 +142,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"

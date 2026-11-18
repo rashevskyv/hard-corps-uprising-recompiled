@@ -65,6 +65,14 @@ option(HCU_NO_VOLATILE "Guest loads and stores without volatile (with the loop b
 if(NOT HCU_NO_VOLATILE)
     target_compile_definitions(hcu_recomp PRIVATE HCU_KEEP_VOLATILE)
 endif()
+# Item 11 of docs/bible-checklist.md (the base's tools/guest_cas.py, run by switch/build-base.sh): every stwcx. / stdcx.
+# goes through REX_GUEST_CAS. OFF (default): REX_GUEST_CAS_LEGACY, the old __sync builtin with its trailing `dmb ish`.
+# ON: acquire/release exclusives without that barrier (the guest's own lwsync / sync stay). Not a runtime key: the SDK's
+# byte g_rex_atomic_legacy_barrier also drives the SDK's own atomics, which have no barrier now.
+option(HCU_GUEST_CAS "Guest compare-and-swap without the trailing dmb" OFF)
+if(NOT HCU_GUEST_CAS)
+    target_compile_definitions(hcu_recomp PRIVATE REX_GUEST_CAS_LEGACY)
+endif()
 # Item 15 of docs/bible-checklist.md: link-time optimisation (the base's BANJO_SWITCH_LTO and BANJO_SWITCH_SDK_OPT,
 # app/CMakeLists.txt of the base). The game code, HCU's code, the GPU plugin (deko3d) and the SDK runtime are compiled
 # to GIMPLE and optimised as one program at the link, which repeats -ffp-contract=off and -fno-strict-aliasing (the
