@@ -1635,6 +1635,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       }
     }
     rex_nx_meter_cp_swap(meter_block_us_);
+    cp_slow_ = us_draw_ + us_copy_ - cp_us_at_start_ > 16700;  // CP SKIP (NextFrame); before the summary resets the counters
     swaps_++;
     if (swaps_ % 60 == 0) ReadSwapInterval();
     LogSkips();
@@ -1671,9 +1672,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // Every 1800 swaps in the skip modes: frames drawn, and frames skipped for a busy GPU.
   void LogSkips() {
     if (swaps_ % 1800 || !skip_busy_) return;
-    std::printf("[nx] gpu: %s: %u of the last 1800 frames drawn, %u skipped because the GPU was still busy\n",
-                skip_odd_frames_ ? "30" : fps45_ ? "45" : "60", drawn_frames_, busy_skips_);
-    drawn_frames_ = busy_skips_ = 0;
+    std::printf("[nx] gpu: %s: %u of the last 1800 frames drawn, %u skipped because the GPU was still busy, %u because the CP was slow\n",
+                skip_odd_frames_ ? "30" : fps45_ ? "45" : "60", drawn_frames_, busy_skips_, cp_skips_);
+    drawn_frames_ = busy_skips_ = cp_skips_ = 0;
   }
 
   // Whether the next frame is drawn. 60 and 30: every frame. 30skip: not the frame after a drawn one, and not one the GPU
@@ -1697,6 +1698,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // delay one swap of a 60 Hz scene).
     if (skip_odd_frames_ && drawn && long_swaps_ < 2) {
       skip_frame_ = true;
+    } else if (skip_busy_ && drawn && cp_slow_) {
+      // CP SKIP: recording the frame just drawn took the command processor over a guest frame (16.7 ms of draws and
+      // resolves): the next one is not recorded, so the CP catches up with the guest instead of stalling its ring.
+      skip_frame_ = true;
+      cp_skips_++;
     } else if (fps45_ && long_swaps_ < 2 && (pace_ = std::min(pace_ + 3, 7u)) < 4) {
       skip_frame_ = true;  // 45: 3 of every 4 guest frames are drawn (pace_ counts quarter frames)
     }
@@ -1719,6 +1725,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     StartFrame();
   }
   void StartFrame() {
+    cp_us_at_start_ = us_draw_ + us_copy_;
     busy_in_a_row_ = 0;
     if (pace_ >= 4) pace_ -= 4;  // a busy skip keeps a 45 frame due: the next one is drawn
     if (!begun_) {
@@ -3120,6 +3127,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool fps45_ = false;      // mode 4: 3 of 4 frames drawn
   uint32_t pace_ = 0;       // mode 4: quarter frames due (NextFrame)
   bool busy_pending_ = false;  // the frame's busy poll is still to be done (DecideFrame)
+  uint64_t cp_us_at_start_ = 0;  // us_draw_ + us_copy_ when the frame started (CP SKIP)
+  bool cp_slow_ = false;         // the frame just drawn took the CP over 16.7 ms to record
+  uint32_t cp_skips_ = 0;
   uint32_t n_frames_ = kFrames;  // frame slots in use (settings gpu_frames=2|3)
   bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
   bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
