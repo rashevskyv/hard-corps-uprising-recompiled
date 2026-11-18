@@ -57,6 +57,10 @@ if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.
     rm -rf "$SRC/generated"
     (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1) \
         || { tail -20 "$ROOT/codegen.log"; exit 1; }
+    # Item 11c (the base's tools/float_loads.py; why and the switch: below, at its volatile edit). Before the store
+    # cards: its test "a float was just stored to this address" knows only the plain store names, not the card ones.
+    python3 -I "$BASE/tools/float_loads.py" --gen "$SRC/generated/default" > "$ROOT/passes.log" 2>&1 \
+        || { cat "$ROOT/passes.log"; exit 1; }
     python3 "$BASE/tools/store_cards.py" --gen "$SRC/generated/default" > "$ROOT/store-cards.log" 2>&1 \
         || { tail -20 "$ROOT/store-cards.log"; exit 1; }
     # stwcx. / stdcx.: the card tool knows the CAS form of the base's newer codegen (REX_GUEST_CAS); this CLI writes
@@ -90,9 +94,8 @@ if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.
     # flavour comes from this one tree). tools/float_loads.py: a single-precision load as `ldr s` + `rev32` in the
     # vector unit instead of `ldr w` + `rev` + `fmov` (the same four bytes). Its `ldr s` goes through REX_GUEST_VOLATILE
     # like every other guest load (the base copies with memcpy: not volatile), so the default stays volatile-exact.
-    # -DHCU_FLOAT_LOADS=OFF defines REX_FLOAT_LOADS_INTEGER: the loads as before (flavour "-nofl").
-    python3 -I "$BASE/tools/float_loads.py" --gen "$SRC/generated/default" > "$ROOT/passes.log" 2>&1 \
-        || { cat "$ROOT/passes.log"; exit 1; }
+    # -DHCU_FLOAT_LOADS=OFF defines REX_FLOAT_LOADS_INTEGER: the loads as before (flavour "-nofl"). The tool runs right
+    # after the codegen (above); this edit after pch_no_volatile.py, which skips a pch that names REX_GUEST_VOLATILE.
     sed -i 's|^  __builtin_memcpy(&f, p, 4);  // ldr s$|  f = *(REX_GUEST_VOLATILE const float*)p;  // ldr s (switch/build-base.sh: volatile)|' "$PCH"
     # tools/pch_cold_traps.py: ppc_trap (the trap before each division and at the asserts) cold and out of line, so the
     # hot path of a dividing function is the division alone. -DHCU_COLD_TRAPS=OFF passes -DREX_TRAP_ATTR= ("-notrap").
