@@ -81,7 +81,13 @@ SHA=$(git_src rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
 DIRTY=$(git_src -c core.autocrlf=true status --porcelain --untracked-files=no 2>/dev/null | grep -q . && echo "+" || true)
 VERSION="0.$COUNT.$SHA$DIRTY"
 # A flavour NRO names itself in hbmenu and in every log line that carries the version.
-case " $* " in *" -DHCU_NO_VOLATILE=ON "*) VERSION="$VERSION-novol" ;; esac
+# Any value CMake reads as true (ON, 1, TRUE, YES, Y, a non-zero number; any case; also -DHCU_NO_VOLATILE:BOOL=...).
+NOVOL=
+for a in "$@"; do
+    case "$a" in -DHCU_NO_VOLATILE=*|-DHCU_NO_VOLATILE:*=*) v=${a##*=}; v=${v,,} ;; *) continue ;; esac
+    case "$v" in on|true|yes|y|[1-9]*) NOVOL=-novol ;; *) NOVOL= ;; esac  # the last one wins, as in CMake
+done
+VERSION="$VERSION$NOVOL"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
