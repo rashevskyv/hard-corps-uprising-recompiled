@@ -19,7 +19,9 @@ struct HcuSettings {
   int clear_skip;    // 1 = a target clear to the value and rect of its last clear, with no draw since, is not done (live)
   int shadow_direct;  // 1 = a depth resolve inside a larger depth image (the shadow cascades) is copied straight into it,
                       // not into its own image and then merged (live)
-  int strip;          // OVERLAY: the version / meter strip
+  int resolution;     // RESOLUTION (at start): 0 = native 1280x720, 1 = 1120x630, 2 = 960x540, 3 = 800x450; the game's
+                      // 1280-wide targets are drawn at that size, the present pass scales the picture up (the HUD too)
+  int strip;         // OVERLAY: the version / meter strip
   int fps_counter;    // FPS COUNTER: the fps, with the strip or alone (independent of OVERLAY)
   int rumble;
   float shadow_bias;  // shadow-pass depth bias: units, slope (0, 0 = off)

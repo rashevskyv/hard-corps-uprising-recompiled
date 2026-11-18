@@ -258,6 +258,9 @@ struct HostImage {
   uint32_t resolve_swap = 0;  // the swap count when a resolve last filled this image (0 = never)
   uint32_t merge_epoch = 0;  // depth textures: the depth resolve count when the pieces were last looked at
   uint64_t clean_key = 0;    // render targets (CLEAR SKIP): the value and rect of the last clear, 0 = written since
+  // RESOLUTION: width and height stay in guest pixels; the deko3d image is host_w x host_h, drawn at scale / 8 (8 = native).
+  // Only the rects that reach deko3d (HostRect, the viewport) are in host pixels.
+  uint32_t scale = 8, host_w = 0, host_h = 0;
 };
 
 // Microseconds spent in a scope, added to a counter (the 60-swap log prints the per-frame averages: CPU recording
@@ -296,6 +299,7 @@ struct Frame {
   std::unordered_map<uint64_t, uint32_t> descriptors;  // image (and swizzle) -> descriptor slot this frame
   uint32_t ts_off = UINT32_MAX;  // two GPU timestamps (16 bytes each) in `timestamps_`: frame start, after the last barrier
   std::vector<std::string> steps;  // the trail (Step): one text per GPU timestamp report in `steps_`
+  bool level = false;        // [res]: the frame drew 150+ draws (a stage, not a menu)
   bool rec_pending = false;  // RECORD 5 SEC: this frame's front buffer copy waits in rec_ for the fence
   uint32_t rec_swap = 0;
   uint64_t rec_us = 0;
@@ -674,6 +678,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // Samplers, indexed by SamplerIndex: the min and mag filters (the fetch instruction may override the
     // fetch constant's), the border colour (black / white) and every Xenos clamp mode per axis.
     Log("frames in flight: %u (GPU FRAMES)", n_frames_);
+    // RESOLUTION (at start): latched here, the menu's later change applies at the next start.
+    res_scale_ = 8 - uint32_t(std::clamp(hcu_settings.resolution, 0, 3));
+    std::printf("[res] resolution %ux%u (%s)\n", kPresentWidth * res_scale_ / 8, kPresentHeight * res_scale_ / 8, res_scale_ == 8 ? "native" : "scaled up at the present");
     g_dxt_cpu = hcu_settings.dxt_cpu != 0;
     g_depth_fmt = hcu_settings.depth32 ? DkImageFormat_ZF32_X24S8 : DkImageFormat_Z24S8;
     g_rt16 = hcu_settings.rt16 != 0;
@@ -1016,13 +1023,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // (the first Eden picture was upside down without it).
     draw_util::ViewportInfo vi;
     draw_util::GetHostViewportInfo(regs, 1, 1, true, target_w, target_h, false, dc, false, false, false, vi);
-    DkViewport vp{float(vi.xy_offset[0]), float(vi.xy_offset[1]), float(vi.xy_extent[0]), float(vi.xy_extent[1]), vi.z_min, vi.z_max};
+    // RESOLUTION: the viewport and scissor are in guest pixels (the NDC constants stay guest), then scaled to the image.
+    HostImage* const target = color ? color : depth;
+    const float k = float(target->scale) / 8.f;
+    DkViewport vp{float(vi.xy_offset[0]) * k, float(vi.xy_offset[1]) * k, float(vi.xy_extent[0]) * k, float(vi.xy_extent[1]) * k, vi.z_min, vi.z_max};
     dkCmdBufSetViewports(cmd, 0, &vp, 1);
     draw_util::Scissor sc;
     draw_util::GetScissor(regs, sc, true);
     DkScissor scissor{sc.offset[0], sc.offset[1], sc.extent[0], sc.extent[1]};
     if (scissor.x + scissor.width > target_w) scissor.width = scissor.x < target_w ? target_w - scissor.x : 0;
     if (scissor.y + scissor.height > target_h) scissor.height = scissor.y < target_h ? target_h - scissor.y : 0;
+    scissor = HostRect(target, scissor.x, scissor.y, scissor.width, scissor.height);
     dkCmdBufSetScissors(cmd, 0, &scissor, 1);
 
     // Fixed-function state.
@@ -1318,7 +1329,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (menu_dump || (dump_images_ && (swaps_ + 1 == 120 || swaps_ + 1 == 600 || swaps_ + 1 == 2400))) {
       std::vector<HostImage*> dump_imgs;
       auto queue_dump = [&](const char* what, HostImage* img) {
-        if (!img) return;
+        if (!img || img->scale != 8) return;  // RESOLUTION: a scaled image is smaller than its guest size (not dumped)
         if (menu_dump) {
           for (HostImage* d : dump_imgs) if (d == img) return;
           dump_imgs.push_back(img);
@@ -1661,12 +1672,34 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dirty_pages_at_swap_ = dirty_pages_;
     last_drawn_swap_ = swaps_;
     last_drawn_draws_ = frame_draws_;
+    f.level = frame_draws_ >= 150;  // [res]: a level frame (menus draw 97 or fewer)
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
     frame_vtx_reused_ = frame_uniform_sets_ = frame_uniform_reuses_ = 0;
     frame_ = (frame_ + 1) % n_frames_;
     begun_ = false;
     drawn_frames_++;
+    drawn_total_++;
     NextFrame(true);
+  }
+
+  // [res] (RESOLUTION): once, when 120 level frames have finished on the GPU: their GPU time p50, and the frames shown and
+  // the game speed over the same time. Printed at native too: a run before and one after the change compare.
+  void ResSample(bool level, double ms) {
+    if (!level || res_ms_.size() >= 120) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (res_ms_.empty()) {
+      res_t0_ = now;
+      res_swaps0_ = swaps_;
+      res_drawn0_ = drawn_total_;
+    }
+    res_ms_.push_back(float(ms));
+    if (res_ms_.size() < 120) return;
+    std::nth_element(res_ms_.begin(), res_ms_.begin() + 60, res_ms_.end());
+    const double dt = std::max(1e-3, std::chrono::duration<double>(now - res_t0_).count());
+    std::printf("[res] 1280x720 -> %ux%u%s: gpu frame p50 %.1f ms, shown %.1f/s, speed %.0f %% (120 level frames of 150+ draws, %.1f s)\n",
+                kPresentWidth * res_scale_ / 8, kPresentHeight * res_scale_ / 8, res_scale_ == 8 ? " (native)" : "", res_ms_[60],
+                double(drawn_total_ - res_drawn0_) / dt, double(swaps_ - res_swaps0_) / dt / 60.0 * 100.0, dt);
+    std::fflush(stdout);
   }
 
   // Every 1800 swaps in the skip modes: frames drawn, and frames skipped for a busy GPU.
@@ -1881,9 +1914,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     char header[512];
     const HcuSettings& s = hcu_settings;
     std::snprintf(header, sizeof(header), "GPU step times, swap %u: %zu steps, frame top to bottom %.3f ms (GPU work %.3f ms without the acquire wait %.3f ms), "
-                  "steps sum %.3f ms, %u reports missing or out of order\nkeys: fps_mode=%d early_submit=%d gpu_frames=%u swap_images=%d clear_skip=%d shadow_direct=%d rt16=%d prepass_skip=%d depth32=%d",
+                  "steps sum %.3f ms, %u reports missing or out of order\nkeys: fps_mode=%d early_submit=%d gpu_frames=%u swap_images=%d clear_skip=%d shadow_direct=%d resolution=%u/8 rt16=%d prepass_skip=%d depth32=%d",
                   swaps_, f.steps.size(), t1 > t0 ? ms(t1 - t0) : 0.0, t1 > t0 + wait ? ms(t1 - t0 - wait) : 0.0, ms(wait), ms(sum), bad,
-                  s.fps_mode, s.early_submit, n_frames_, s.swap_images, s.clear_skip, s.shadow_direct, s.rt16, s.prepass_skip, s.depth32);
+                  s.fps_mode, s.early_submit, n_frames_, s.swap_images, s.clear_skip, s.shadow_direct, res_scale_, s.rt16, s.prepass_skip, s.depth32);
     auto group_line = [&](const std::pair<std::string, Group>& e, char* out, size_t size) {
       std::snprintf(out, size, "%9.3f %5.1f%% %6u %8.3f %10llu  %s", ms(e.second.total), sum ? 100.0 * double(e.second.total) / double(sum) : 0.0,
                     e.second.count, ms(e.second.max), (unsigned long long)e.second.indices, e.first.c_str());
@@ -1953,6 +1986,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (t[1] && t[7] > t[1]) {
           const uint64_t busy = t[3] && t[5] >= t[3] && t[7] >= t[5] ? (t[3] - t[1]) + (t[7] - t[5]) : t[7] - t[1];
           rex_nx_meter_gpu_frame(double(busy) * 625.0 / 384.0 / 1e6);
+          ResSample(f.level, double(busy) * 625.0 / 384.0 / 1e6);
         }
         finished = r == DkResult_Success && (t[6] || t[7]);
       }
@@ -2066,10 +2100,19 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (img && !img->is_depth) free_images_.push_back(img);
   }
 
-  HostImage* CreateImage(uint32_t width, uint32_t height, DkImageFormat format, uint32_t flags, bool is_depth) {
+  // RESOLUTION: a guest edge in host pixels of an image drawn at scale / 8.
+  static uint32_t HostPx(uint32_t v, uint32_t scale) { return v * scale / 8; }
+  // A guest rect of img in its host pixels, clamped to the image (native: the rect itself, the callers clamp it).
+  static DkScissor HostRect(const HostImage* img, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    const uint32_t x0 = std::min(HostPx(x, img->scale), img->host_w), x1 = std::min(HostPx(x + w, img->scale), img->host_w);
+    const uint32_t y0 = std::min(HostPx(y, img->scale), img->host_h), y1 = std::min(HostPx(y + h, img->scale), img->host_h);
+    return {x0, y0, x1 - x0, y1 - y0};
+  }
+
+  HostImage* CreateImage(uint32_t width, uint32_t height, DkImageFormat format, uint32_t flags, bool is_depth, uint32_t scale = 8) {
     for (size_t i = 0; i < free_images_.size(); i++) {
       HostImage* r = free_images_[i];
-      if (r->width == width && r->height == height && r->format == format && r->flags == flags && r->is_depth == is_depth) {
+      if (r->width == width && r->height == height && r->format == format && r->flags == flags && r->is_depth == is_depth && r->scale == scale) {
         free_images_.erase(free_images_.begin() + i);
         r->from_resolve = false;
         r->content_serial = 0;
@@ -2086,8 +2129,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkImageLayoutMakerDefaults(&lm, device_);
     lm.flags = flags;
     lm.format = format;
-    lm.dimensions[0] = width;
-    lm.dimensions[1] = height;
+    const uint32_t host_w = (width * scale + 7) / 8, host_h = (height * scale + 7) / 8;  // native: width x height
+    lm.dimensions[0] = host_w;
+    lm.dimensions[1] = host_h;
     lm.dimensions[2] = 1;
     dkImageLayoutInitialize(&img->layout, &lm);
     uint64_t size = dkImageLayoutGetSize(&img->layout);
@@ -2102,6 +2146,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     img->format = format;
     img->width = width;
     img->height = height;
+    img->scale = scale;
+    img->host_w = host_w;
+    img->host_h = host_h;
     img->is_depth = is_depth;
     image_count_++;
     return img;
@@ -2118,7 +2165,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       default: break;
     }
     DkCmdBuf cmd = frames_[frame_].cmdbuf;
-    DkScissor sc{0, 0, img->width, img->height};
+    DkScissor sc{0, 0, img->host_w, img->host_h};
     if (img->is_depth) {
       BindTargets(cmd, nullptr, img);
       dkCmdBufSetScissors(cmd, 0, &sc, 1);
@@ -2156,14 +2203,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
     uint32_t rows = tiles ? uint32_t((uint64_t(tiles) * 80 * 16) / pitch) : 0;
     if (rows > kMaxTargetHeight) rows = kMaxTargetHeight;
     if (rows < 16) rows = 16;
-    HostImage* img = CreateImage(pitch, rows, format, DkImageFlags_UsageRender, is_depth);
+    // RESOLUTION: the screen-wide targets (pitch 1280, colour and depth; the shadow cascades are 2080) at the latched scale.
+    HostImage* img = CreateImage(pitch, rows, format, DkImageFlags_UsageRender, is_depth, pitch == kPresentWidth ? res_scale_ : 8);
     if (!img) return nullptr;
     img->edram_base = edram_base;
     img->edram_pitch = pitch;
     targets_.emplace(key, img);
     ClearNewImage(img);
-    Log("%s target: EDRAM base %u pitch %u -> %ux%u image, host format %u (%u MB in images)", is_depth ? "depth" : "color", edram_base, pitch,
-        img->width, img->height, uint32_t(format), images_.used >> 20);
+    Log("%s target: EDRAM base %u pitch %u -> %ux%u image (host %ux%u), host format %u (%u MB in images)", is_depth ? "depth" : "color", edram_base, pitch,
+        img->width, img->height, img->host_w, img->host_h, uint32_t(format), images_.used >> 20);
     return img;
   }
 
@@ -2191,22 +2239,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // format reads the same (HCU's blur chain: a 2_10_10_10 target resolved, then fetched as 8_8_8_8) and when it is at
   // least as large (the resolve's aligned size, the fetch's exact one). Console 0.160 recreated or resized about
   // thirty such images every frame.
+  // `scale` (RESOLUTION): the scale a resolve draws the image at (its source's), or 8 for an upload; -1 = the image's own
+  // (texture fetches, the front buffer). An image of another scale is replaced, like one of another format.
   HostImage* GuestImage(Frame& f, uint32_t base, uint32_t width, uint32_t height, DkImageFormat format, bool at_least,
-                        uint32_t create_w = 0, uint32_t create_h = 0, bool texture = false) {
+                        uint32_t create_w = 0, uint32_t create_h = 0, bool texture = false, int scale = -1) {
     auto it = guest_images_.find(base);
     if (it != guest_images_.end()) {
       HostImage* img = it->second;
+      const uint32_t s = scale < 0 ? img->scale : uint32_t(scale);
       const bool compat = texture && img->from_resolve && IsColor32(img->format) && IsColor32(format);
-      if (img->format != format && !compat) {
+      if ((img->format != format && !compat) || img->scale != s) {
         // The memory was reused with another format (a texture over an old resolve destination or the
         // reverse): a new image. ponytail: the old image's pool memory is not reclaimed (bump pool);
         // a free list when the pool fills in a stage.
-        HostImage* fresh = CreateImage(std::max(width, create_w), std::max(height, create_h), format, DkImageFlags_UsageRender, format == g_depth_fmt);
+        HostImage* fresh = CreateImage(std::max(width, create_w), std::max(height, create_h), format, DkImageFlags_UsageRender, format == g_depth_fmt, s);
         if (!fresh) return nullptr;
         fresh->guest_base = base;
         if (create_w || create_h) ClearNewImage(fresh);
-        if (image_flips_++ < 40) Log("image at %08X recreated: format %u -> %u, %ux%u -> %ux%u", base, uint32_t(img->format), uint32_t(format), img->width,
-            img->height, fresh->width, fresh->height);
+        if (image_flips_++ < 40) Log("image at %08X recreated: format %u -> %u, %ux%u -> %ux%u, scale %u/8 -> %u/8", base, uint32_t(img->format), uint32_t(format), img->width,
+            img->height, fresh->width, fresh->height, img->scale, s);
         it->second = fresh;
         RecycleImage(img);
         return fresh;
@@ -2218,10 +2269,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
         width = std::max(width, img->width);
         height = std::max(height, img->height);
       }
-      HostImage* resized = CreateImage(width, height, img->format, DkImageFlags_UsageRender, img->is_depth);
+      HostImage* resized = CreateImage(width, height, img->format, DkImageFlags_UsageRender, img->is_depth, img->scale);
       if (!resized) return img;
       ClearNewImage(resized);
-      uint32_t cw = std::min(width, img->width), ch = std::min(height, img->height);
+      uint32_t cw = std::min(resized->host_w, img->host_w), ch = std::min(resized->host_h, img->host_h);  // native: the guest sizes
       DkImageView sv, dv;
       dkImageViewDefaults(&sv, &img->image);
       dkImageViewDefaults(&dv, &resized->image);
@@ -2240,7 +2291,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       return resized;
     }
     HostImage* img = CreateImage(std::max(width, create_w), std::max(height, create_h), format,
-                                 DkImageFlags_UsageRender, format == g_depth_fmt);
+                                 DkImageFlags_UsageRender, format == g_depth_fmt, scale < 0 ? 8 : uint32_t(scale));
     if (!img) return nullptr;
     img->guest_base = base;
     guest_images_.emplace(base, img);
@@ -2258,6 +2309,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     for (auto& it : guest_images_) {
       HostImage* p = it.second;
       if (p == img || p->format != g_depth_fmt || !p->from_resolve || it.first <= img->guest_base) continue;
+      if (p->scale != 8 || img->scale != 8) continue;  // RESOLUTION: only native pieces (the shadow cascades are never scaled)
       uint32_t delta = it.first - img->guest_base;
       if (delta % stride) continue;
       uint32_t y = delta / stride * 32;
@@ -2318,10 +2370,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (img->from_resolve && img->resolve_swap == swaps_ + 1) return img;
     // Never filled, or written by the guest (or a file read) after the upload / resolve that filled it.
     if (img->content_serial && !MemoryChanged(*img, base, info.memory.base_size) && (!always_upload_ || img->from_resolve)) return img;
-    if (img->format != format) {
+    if (img->format != format || img->scale != 8) {
       // An upload needs an image of the texture's own format: the resolve's (a compatible colour format, taken
-      // as it was above) was only a stand-in for a fetch of its contents.
-      img = GuestImage(f, base, info.width + 1, info.height + 1, format, false);
+      // as it was above) was only a stand-in for a fetch of its contents. RESOLUTION: and of the guest size (the
+      // texels of a scaled resolve image's memory would overrun it).
+      img = GuestImage(f, base, info.width + 1, info.height + 1, format, false, 0, 0, false, 8);
       if (!img) return nullptr;
       img->checked_serial = serial_;
     }
@@ -2724,7 +2777,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (color_img) color_img->clean_key = color_key;
       if (depth_img) depth_img->clean_key = depth_key;
       BindTargets(cmd, color_img, depth_img);
-      dkCmdBufSetScissors(cmd, 0, &sc, 1);
+      const DkScissor hsc = HostRect(color_img ? color_img : depth_img, sc.x, sc.y, sc.width, sc.height);  // RESOLUTION
+      dkCmdBufSetScissors(cmd, 0, &hsc, 1);
       if (color_img) dkCmdBufClearColor(cmd, 0, DkColorMask_RGBA, color);
       if (depth_img) dkCmdBufClearDepthStencil(cmd, true, z, 0xFF, 0);
       {
@@ -2766,7 +2820,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (cy + ch > d->height) ch = d->height - cy;
         BindTargets(cmd, nullptr, d);
         d->clean_key = 0;  // CLEAR SKIP: not tracked for resolve clears
-        DkScissor sc{cx, cy, cw, ch};
+        const DkScissor sc = HostRect(d, cx, cy, cw, ch);
         dkCmdBufSetScissors(cmd, 0, &sc, 1);
         float z = float(info.rb_depth_clear >> 8) / float(0xFFFFFF);
         dkCmdBufClearDepthStencil(cmd, true, z, 0xFF, info.rb_depth_clear & 0xFF);
@@ -2795,7 +2849,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (hcu_settings.shadow_direct) {
         for (auto& it : guest_images_) {
           HostImage* c = it.second;
-          if (c->format != g_depth_fmt || it.first >= info.copy_dest_base) continue;
+          if (c->format != g_depth_fmt || it.first >= info.copy_dest_base || c->scale != dsrc->scale) continue;
           const uint32_t stride = ((c->width + 31) & ~31u) * 32 * 4, delta = info.copy_dest_base - it.first;
           if (delta % stride || delta / stride * 32 + dy + h > c->height || dx + w > c->width) continue;
           dd = c;
@@ -2805,7 +2859,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
           break;
         }
       }
-      if (!dd) dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, g_depth_fmt, true);
+      if (!dd) dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, g_depth_fmt, true, 0, 0, false, int(dsrc->scale));
       if (!dd) return true;
       dd->from_resolve = true;
       dd->content_serial = serial_;
@@ -2824,7 +2878,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
         DkImageView sv, dv;
         dkImageViewDefaults(&sv, &dsrc->image);
         dkImageViewDefaults(&dv, &dd->image);
-        DkImageRect sr{x, y, 0, w, h, 1}, dr{dx, dy, 0, w, h, 1};
+        const DkScissor hs = HostRect(dsrc, x, y, w, h), hd = HostRect(dd, dx, dy, w, h);  // RESOLUTION (native: the rects above)
+        const uint32_t hw = std::min(hs.width, hd.width), hh = std::min(hs.height, hd.height);
+        DkImageRect sr{hs.x, hs.y, 0, hw, hh, 1}, dr{hd.x, hd.y, 0, hw, hh, 1};
         dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
         dkCmdBufCopyImage(cmd, &sv, &sr, &dv, &dr, 0);
         dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
@@ -2852,7 +2908,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // texture fetch of the resolve finds an image of its own format. sRGB targets resolve to plain RGBA8: the
     // guest reads the stored (gamma-encoded) bytes as a normal texture.
     DkImageFormat dst_format = src->format == DkImageFormat_RGBA8_Unorm_sRGB ? DkImageFormat_RGBA8_Unorm : src->format;
-    HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, dst_format, true);  // gh: exact size (the aligned one made it ping-pong with the texture bind)
+    HostImage* dst = GuestImage(f, info.copy_dest_base, dx + w, dy + h, dst_format, true, 0, 0, false, int(src->scale));  // gh: exact size (the aligned one made it ping-pong with the texture bind)
     if (!dst) return true;
     dst->from_resolve = true;
     // Settings menu VIEW: the frame's first resolve of the scene (1280x720, before the post effects) is shown at the swap.
@@ -2869,7 +2925,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
       DkImageView sv, dv;
       dkImageViewDefaults(&sv, &src->image);
       dkImageViewDefaults(&dv, &dst->image);
-      DkImageRect sr{x, y, 0, w, h, 1}, dr{dx, dy, 0, w, h, 1};
+      const DkScissor hs = HostRect(src, x, y, w, h), hd = HostRect(dst, dx, dy, w, h);  // RESOLUTION (native: the rects above)
+      const uint32_t hw = std::min(hs.width, hd.width), hh = std::min(hs.height, hd.height);
+      DkImageRect sr{hs.x, hs.y, 0, hw, hh, 1}, dr{hd.x, hd.y, 0, hw, hh, 1};
       dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
       dkCmdBufCopyImage(cmd, &sv, &sr, &dv, &dr, 0);
       dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
@@ -2879,7 +2937,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (info.IsClearingColor()) {
       BindTargets(cmd, src, nullptr);
       src->clean_key = 0;  // CLEAR SKIP: not tracked for resolve clears
-      DkScissor sc{x, y, w, h};
+      const DkScissor sc = HostRect(src, x, y, w, h);
       dkCmdBufSetScissors(cmd, 0, &sc, 1);
       uint32_t c = info.rb_color_clear;
       float color[4] = {((c >> 16) & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, (c & 0xFF) / 255.0f, ((c >> 24) & 0xFF) / 255.0f};
@@ -3096,7 +3154,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       hcu_settings.record = 0;
       return;
     }
-    if (!front || front->width != kPresentWidth || front->height != kPresentHeight) return;
+    if (!front || front->width != kPresentWidth || front->height != kPresentHeight || front->scale != 8) return;  // RESOLUTION: not recorded
     if (front->format == DkImageFormat_RGBA16_Float) {
       // SCENE RT 16F: the front buffer is a float image; the recorder's rows are RGBA8, so it is blitted into one first.
       if (!rec_img_) rec_img_ = CreateImage(kPresentWidth, kPresentHeight, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
@@ -3128,6 +3186,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint32_t pace_ = 0;       // mode 4: quarter frames due (NextFrame)
   bool busy_pending_ = false;  // the frame's busy poll is still to be done (DecideFrame)
   uint64_t cp_us_at_start_ = 0;  // us_draw_ + us_copy_ when the frame started (CP SKIP)
+  uint32_t res_scale_ = 8;       // RESOLUTION, latched at start: the 1280-wide targets are drawn at res_scale_ / 8
+  std::vector<float> res_ms_;    // [res]: the GPU times of the first 120 level frames
+  std::chrono::steady_clock::time_point res_t0_;
+  uint32_t res_swaps0_ = 0;
+  uint64_t drawn_total_ = 0, res_drawn0_ = 0;
   bool cp_slow_ = false;         // the frame just drawn took the CP over 16.7 ms to record
   uint32_t cp_skips_ = 0;
   uint32_t n_frames_ = kFrames;  // frame slots in use (settings gpu_frames=2|3)
