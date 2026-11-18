@@ -107,11 +107,15 @@ extern "C" int __wrap_main(int argc, char* argv[]) {
     std::fclose(fp);
   }
   // The deko3d renderer (src/gpu/deko3d_backend.cpp) is the only one: this build links no Vulkan driver. The file
-  // sdmc:/switch/hcu/nogpu selects the plugin's null backend instead (nothing drawn).
-  const bool no_gpu = access("sdmc:/switch/hcu/nogpu", F_OK) == 0;
+  // sdmc:/switch/hcu/nogpu selects the plugin's null backend instead (nothing drawn). The file deko3d wins over it, as
+  // in the old host layer (switch/host/ui/windowed_app_main_nx.cpp), so Eden's staging can keep both files.
+  const bool no_gpu = access("sdmc:/switch/hcu/nogpu", F_OK) == 0 && access("sdmc:/switch/hcu/deko3d", F_OK) != 0;
   const char* const defaults[] = {
-      "--game_data_root=sdmc:/switch/hcu/game",
-      "--user_data_root=sdmc:/switch/hcu/user",
+      // The root form, not "sdmc:/...": libstdc++ takes "sdmc:/x" for a relative path, std::filesystem::absolute puts
+      // the current folder in front, and status() throws (0.348 aborted in Runtime::SetupVfs). newlib opens "/x" on
+      // the SD (the base's GetExecutablePath, sdk/src/core/filesystem_posix.cpp, does the same).
+      "--game_data_root=/switch/hcu/game",
+      "--user_data_root=/switch/hcu/user",
       "--fullscreen=true",
       "--log_file=sdmc:/switch/hcu/hcu_rex_log.txt",
       "--gpu_plugin=xenos",

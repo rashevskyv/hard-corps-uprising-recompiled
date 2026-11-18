@@ -33,13 +33,20 @@ fi
 # Codegen, then the store cards (tools/store_cards.py of the base renames the stores outside the stack to their
 # card-marking forms; the deko3d renderer reads the cards). Again whenever the manifest, its config, the CLI or the
 # cards tool changed.
-CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$CLI" "$BASE/tools/store_cards.py" | sha1sum | cut -c1-40)
+CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$CLI" "$BASE/tools/store_cards.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
 if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.hcu-codegen-stamp" 2>/dev/null)" != "$CG_STAMP" ]; then
     rm -rf "$SRC/generated"
     (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1) \
         || { tail -20 "$ROOT/codegen.log"; exit 1; }
     python3 "$BASE/tools/store_cards.py" --gen "$SRC/generated/default" > "$ROOT/store-cards.log" 2>&1 \
         || { tail -20 "$ROOT/store-cards.log"; exit 1; }
+    # stwcx. / stdcx.: the card tool knows the CAS form of the base's newer codegen (REX_GUEST_CAS); this CLI writes
+    # __sync_bool_compare_and_swap. Their card goes after the store (a failed CAS marks too: one upload more).
+    sed -E -i 's/^(\t[A-Za-z0-9_.]+\.eq = __sync_bool_compare_and_swap\(reinterpret_cast<uint(32|64)_t\*>\(REX_RAW_ADDR\(ea\)\), .*\);)$/\1 REX_CARD(ea);/' \
+        "$SRC"/generated/default/*.cpp
+    if cat "$SRC"/generated/default/*.cpp | grep '__sync_bool_compare_and_swap' | grep -vq 'REX_CARD(ea);$'; then
+        echo "a CAS without its store card (switch/build-base.sh)"; exit 1
+    fi
     echo "$CG_STAMP" > "$SRC/generated/.hcu-codegen-stamp"
 fi
 # Without the cards the renderer would never see a guest write: the build stops.
@@ -47,7 +54,7 @@ PCH=$(ls "$SRC"/generated/default/*_pch.h)
 grep -q '#define REX_CARD(ea)' "$PCH" || { echo "no store cards in $PCH (tools/store_cards.py)"; exit 1; }
 # The stores left without a card (each should go through the stack pointer) and the ones with it.
 echo "stores: $(cat "$SRC"/generated/default/*.cpp | grep -oE '\b(REX_STORE_(D_)?U(8|16|32|64)|REX_STVLX|REX_STVRX|REX_STORE_(D_)?F32ANY)(_C)?\(' \
-    | sed 's/($//' | sort | uniq -c | tr '\n' ' ')"
+    | sed 's/($//' | sort | uniq -c | tr '\n' ' ') CAS with card: $(cat "$SRC"/generated/default/*.cpp | grep -c 'REX_CARD(ea);$')"
 
 # A git worktree made on Windows has "gitdir: D:/..." in its .git file, which WSL's git cannot open.
 WIN_GITDIR=$(sed -n 's|^gitdir: \([A-Za-z]\):/|/mnt/\L\1\E/|p' "$GIT_DIR/.git" 2>/dev/null || true)

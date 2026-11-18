@@ -262,3 +262,115 @@ edit('src/filesystem/virtual_file_system.cpp', [
 ''' + "  // TODO(gibbed): should 'is_directory' remain as a bool or should it be" + NL),
 ])
 print('changed (hcu button glyphs):', *changed, sep=NL + '  ')
+
+# --- RtlFillMemoryUlong marks its store cards (the deko3d backend reads them; the base's CRT hooks and file reads
+# mark theirs, this export did not: a texture it filled was never uploaded again).
+edit('src/kernel/xboxkrnl/xboxkrnl_rtl.cpp', [
+    ('#include <rex/system/xthread.h>' + NL,
+     '#include <rex/system/xthread.h>' + NL + '#include <rex/system/xmemory.h>' + NL),
+    ('  for (uint32_t n = 0; n < count; n++, p++) {' + NL + '    *p = swapped_pattern;' + NL + '  }' + NL,
+     '  for (uint32_t n = 0; n < count; n++, p++) {' + NL + '    *p = swapped_pattern;' + NL + '  }' + NL +
+     '  rex::memory::MarkStoreCards(destination.guest_address(), count * 4);  // hcu: after the stores' + NL),
+])
+print('changed (hcu fill cards):', *changed, sep=NL + '  ')
+
+# --- Own process handle without a loader (Eden). The base maps the guest views with svcMapProcessMemory on its own
+# process. A console's loader passes the process handle; Eden passes none, so the base used the current-process
+# pseudo-handle, and in Eden 0.348 every view stayed unmapped (878,667 "Unmapped Write" lines from the first guest
+# write). Horizon's svcMapProcessMemory takes no pseudo-handle (hypothesis for Eden: the same rule). So without a
+# loader handle a real one is taken once, as nx-hbloader's getOwnProcessHandle does: CUR_PROCESS_HANDLE sent to
+# ourselves through a session as a copy handle. A console has the loader's handle and never runs it. The first
+# failure of each map call goes to stdout, so an emulator run shows which call refused.
+edit('src/core/guest_memory_switch.cpp', [
+    ('''Handle Proc() {
+  const Handle h = envGetOwnProcessHandle();
+  return h != INVALID_HANDLE ? h : CUR_PROCESS_HANDLE;
+}
+''',
+     r'''Handle g_hcu_own_handle = INVALID_HANDLE;  // hcu (switch/sdk-edits-base.py)
+
+void HcuOwnHandleThread(void* arg) {
+  const Handle server = static_cast<Handle>(reinterpret_cast<uintptr_t>(arg));
+  void* tls = armGetTls();
+  memset(tls, 0, 0x100);
+  s32 index = 0;
+  if (R_SUCCEEDED(svcReplyAndReceive(&index, &server, 1, INVALID_HANDLE, UINT64_MAX))) {
+    const HipcParsedRequest r = hipcParseRequest(tls);
+    if (r.meta.num_copy_handles == 1) g_hcu_own_handle = r.data.copy_handles[0];
+  }
+  svcCloseHandle(server);
+}
+
+Handle HcuOwnHandle() {
+  printf("[gm] no loader: own process handle through a session (nx-hbloader's way)\n");
+  fflush(stdout);
+  Handle server = INVALID_HANDLE, client = INVALID_HANDLE;
+  Result rc = svcCreateSession(&server, &client, 0, 0);
+  if (R_SUCCEEDED(rc)) {
+    Thread t;
+    rc = threadCreate(&t, HcuOwnHandleThread, reinterpret_cast<void*>(static_cast<uintptr_t>(server)), nullptr, 0x4000,
+                      0x20, -2);
+    if (R_SUCCEEDED(rc)) {
+      rc = threadStart(&t);
+      if (R_SUCCEEDED(rc)) {
+        HipcRequest req = hipcMakeRequestInline(armGetTls(), .type = CmifCommandType_Request, .num_copy_handles = 1);
+        req.copy_handles[0] = CUR_PROCESS_HANDLE;
+        svcSendSyncRequest(client);  // no reply: the server closes its end
+        threadWaitForExit(&t);
+      } else {
+        svcCloseHandle(server);
+      }
+      threadClose(&t);
+    } else {
+      svcCloseHandle(server);
+    }
+    svcCloseHandle(client);
+  }
+  printf("[gm] own process handle 0x%X (rc 0x%X)\n", g_hcu_own_handle, rc);
+  fflush(stdout);
+  return g_hcu_own_handle;
+}
+
+Handle Proc() {
+  const Handle h = envGetOwnProcessHandle();
+  if (h != INVALID_HANDLE) return h;
+  static const Handle own = HcuOwnHandle();  // hcu: first call from RexGmInit, before any lock is held
+  return own != INVALID_HANDLE ? own : CUR_PROCESS_HANDLE;
+}
+'''),
+    ('''uint8_t* RexGmInit(size_t size) {
+    State& s = S();
+''',
+     '''uint8_t* RexGmInit(size_t size) {
+    (void)Proc();  // hcu: the own handle before the mutex and virtmemLock (its thread needs virtmem)
+    State& s = S();
+'''),
+    ('''        if (R_FAILED(rc)) {
+            free(backing);
+            s.last_result = rc;
+''',
+     r'''        if (R_FAILED(rc)) {
+            static bool logged = false;  // hcu: the first refusal
+            if (!logged) { logged = true; printf("[gm] code alias failed: 0x%X\n", rc); fflush(stdout); }
+            free(backing);
+            s.last_result = rc;
+'''),
+    ('''                                      reinterpret_cast<u64>(backing), sz);
+            free(backing);
+''',
+     r'''                                      reinterpret_cast<u64>(backing), sz);
+            static bool logged = false;  // hcu: the first refusal
+            if (!logged) { logged = true; printf("[gm] alias permission failed: 0x%X\n", rc); fflush(stdout); }
+            free(backing);
+'''),
+    ('''                if (Intersect(c.offset, c.length, s.views[vi].offset, s.views[vi].length, &lo, &hi))
+                    MapChunkIntoView(s, vi, c);
+''',
+     r'''                if (Intersect(c.offset, c.length, s.views[vi].offset, s.views[vi].length, &lo, &hi) &&
+                    !MapChunkIntoView(s, vi, c)) {
+                    static bool logged = false;  // hcu: the first refusal
+                    if (!logged) { logged = true; printf("[gm] view map failed: 0x%X (view %zu)\n", s.last_result, vi); fflush(stdout); }
+                }
+'''),
+])
+print('changed (hcu own process handle):', *changed, sep=NL + '  ')

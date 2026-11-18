@@ -111,6 +111,8 @@ static_assert(CardOf(2, 0x12345) == (0xE0000000u + 0x12345000u - 0x1000u) >> 12)
 static_assert(CardOf(2, 1) == 0xE0000000u >> 12 && CardOf(2, 0) == CardOf(0, 0));
 static_assert(CardOf(3, 0xFFF) == (0x7F000000u + 0xFFF000u) >> 12 && CardOf(3, 0x1000) == CardOf(0, 0x1000));
 static_assert(CardOf(0, 0x1FFFF) < 0x100000u && CardOf(1, 0x1FFFF) < 0x100000u);  // all in the window's first MB
+// ResetCards: the three views' cards are one run, 0xA0000 to 0xFFFFE.
+static_assert(CardOf(0, 0x1FFFF) + 1 == CardOf(1, 0) && CardOf(1, 0x1FFFF) + 1 == CardOf(2, 1) && CardOf(2, 0x1FFFF) == 0xFFFFEu);
 
 constexpr uint32_t kFrames = 3;  // frame slots at most (n_frames_ in use: settings gpu_frames)
 // Three, not two: with two, a drawn frame's acquire waited for the previous frame's GPU work and the next vblank (up to
@@ -670,6 +672,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       Log("memory block creation failed");
       return false;
     }
+    ResetCards();
     // The settings (settings.txt and the A/B marker files in the debug dir, src/settings_menu.cpp). The sampler ones apply
     // here, at start: the fine horizontal hatching over the whole picture (console only) has the period of the game's 480x272
     // post-effect buffers stretched to 1280x720 (TEXTURE FILTER, file sfix).
@@ -2102,6 +2105,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
     first -= first != 0;
     last = std::min<uint32_t>((physical + (bytes ? bytes - 1 : 0)) >> 12, 0x1FFFFu);
   }
+  // At start every card the backend reads goes to 1 (written ones are 0): the memory starts zeroed, so without this
+  // the first pull of a range found every page written, after a resolve too (its image then uploaded stale guest
+  // memory over the resolved picture once). Writes before this have no image yet: a first bind uploads anyway.
+  void ResetCards() {
+    uint8_t* const cards = memory_->virtual_membase();
+    std::memset(cards + CardOf(3, 0), 1, 0x1000);  // the 0x7F000000 view
+    // The 0xA0000000, 0xC0000000 and 0xE0000000 views: one run of cards (static_asserts at CardOf).
+    std::memset(cards + CardOf(0, 0), 1, CardOf(2, 0x1FFFF) - CardOf(0, 0) + 1);
+  }
   bool WrittenSince(uint32_t physical, uint32_t bytes, uint32_t serial) {
     PullCards(physical, bytes);
     uint32_t first, last;
@@ -2129,6 +2141,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
   void PullCards(uint32_t, uint32_t) {}
+  void ResetCards() {}
   bool WrittenSince(uint32_t physical, uint32_t bytes, uint32_t serial) const {
     uint32_t first = (physical & 0x1FFFFFFFu) >> 12;
     uint32_t last = ((physical & 0x1FFFFFFFu) + (bytes ? bytes - 1 : 0)) >> 12;
@@ -2992,10 +3005,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // Settings menu VIEW: the frame's first resolve of the scene (1280x720, before the post effects) is shown at the swap.
     if (!view_image_ && hcu_settings.view == 1 && w == kPresentWidth && h == kPresentHeight) view_image_ = dst;
     // Guest writes before this resolve are older than its contents: their cards are taken now, not at the next bind.
-    PullCards(info.copy_dest_base, dest_pitch * dest_height * 4);
+    // The guest's bytes: 8 per pixel from a 64-bit target (the bind checks the texture's whole base_size).
+    const uint32_t dest_bytes = dest_pitch * dest_height *
+        (xenos::IsColorRenderTargetFormat64bpp(xenos::ColorRenderTargetFormat(info.color_edram_info.format)) ? 8 : 4);
+    PullCards(info.copy_dest_base, dest_bytes);
     dst->content_serial = serial_;
     dst->resolve_swap = swaps_ + 1;
-    dst->mem_bytes = dest_pitch * dest_height * 4;
+    dst->mem_bytes = dest_bytes;
     dst->mem_hash = HashMemory(info.copy_dest_base, dst->mem_bytes);
     if (x + w > src->width) w = x < src->width ? src->width - x : 0;
     if (y + h > src->height) h = y < src->height ? src->height - y : 0;

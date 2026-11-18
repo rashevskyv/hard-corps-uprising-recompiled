@@ -9,6 +9,22 @@ Commits are the versions that ReXGlue SDK 0.10.0 pins.
 
 
 ========================================================================
+renut_nx_ultimate_base (Nintendo Switch build, branch renut-ultimate)
+========================================================================
+
+Source: renut_nx_ultimate_base by ChanseyIsTheBest (from renut-nx / banjo-nx, sa2-nx, nfsmw-nx)
+License: GPL-3.0 (the app and tools); BSD-3-Clause (its sdk/, ReXGlue SDK with the Horizon layer)
+
+The Switch NRO links the base's sdk/ (BSD-3-Clause, the ReXGlue SDK license above) with the HCU edits of
+switch/sdk-edits-base.py. These files of this project are taken from the base's GPL-3.0 code:
+  - switch/hcu_pgo.cpp, switch/hcu_pgo.h (app/src/banjo_pgo.cpp of the base, itself from sa2-nx): GPL-3.0
+  - the base's tools used by switch/build-base.sh at build time (tools/store_cards.py, tools/pgo_merge.py,
+    tools/switch/cmake/switch-devkitA64.cmake): GPL-3.0, not shipped in the NRO
+The base's code is used with its author's permission. The full GPL-3.0 text is in the LICENSE file of
+this project.
+
+
+========================================================================
 SDL3
 ========================================================================
 

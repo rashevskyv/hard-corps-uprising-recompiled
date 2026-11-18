@@ -1,4 +1,5 @@
-# Nintendo Switch build on the ultimate base's SDK (renut_nx_ultimate_base sdk, GPL-3.0; the HCU edits of
+# Nintendo Switch build on the ultimate base's SDK (renut_nx_ultimate_base sdk, BSD-3-Clause; its app and tools
+# GPL-3.0, packaging/licenses/THIRD-PARTY-LICENSES.txt; the HCU edits of
 # switch/sdk-edits-base.py on top), included from CMakeLists.txt when the base's toolchain file
 # (tools/switch/cmake/switch-devkitA64.cmake of the base) sets REXGLUE_PLATFORM_SWITCH. switch/build-base.sh configures
 # and builds hcu.nro. The base owns the Horizon layer (main, memory, threads, crash hooks, NRO packaging); HCU adds its
