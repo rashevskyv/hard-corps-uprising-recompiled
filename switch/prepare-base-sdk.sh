@@ -50,3 +50,7 @@ git add -A && git -c user.email=hcu@local -c user.name=hcu commit -qm "HCU patch
 patch -p1 --no-backup-if-mismatch < "$HERE/patches/rexglue-sdk-base/0001-hcu-failed-hunks-on-base.patch"
 git add -A && git -c user.email=hcu@local -c user.name=hcu commit -qm "HCU failed hunks merged onto the base"
 echo "failed hunks merged: $(git diff --stat HEAD~1 | tail -1)" | tee -a "$report"
+# 5. thirdparty/FFmpeg/config.h, the per-platform dispatcher: FFmpeg's own .gitignore hides it, so the base's repo
+#    never got it and no SDK target builds without it. Same text as the stock SDK's after switch/sdk-edits.py.
+cp "$HERE/patches/rexglue-sdk-base/ffmpeg-config.h" thirdparty/FFmpeg/config.h
+git add -f thirdparty/FFmpeg/config.h && git -c user.email=hcu@local -c user.name=hcu commit -qm "FFmpeg config.h"
