@@ -34,6 +34,7 @@ GUEST_CAS=$(opt HCU_GUEST_CAS 0 "$@")
 METER=$(opt HCU_NX_METER 0 "$@")
 FLOAT_LOADS=$(opt HCU_FLOAT_LOADS 1 "$@")
 COLD_TRAPS=$(opt HCU_COLD_TRAPS 1 "$@")
+INLINE_MEMCALLS=$(opt HCU_INLINE_MEMCALLS 1 "$@")
 
 CLI=$SDK/out/linux-amd64/Release/rexglue
 [ -x "$CLI" ] || { echo "no host CLI: $CLI"; exit 1; }
@@ -51,7 +52,7 @@ fi
 # card-marking forms; the deko3d renderer reads the cards). Again whenever the manifest, its config, the CLI or the
 # cards tool changed.
 CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$CLI" "$BASE/tools/store_cards.py" \
-    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$BASE/tools/guest_cas.py" "$BASE/tools/float_loads.py" "$BASE/tools/pch_cold_traps.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
+    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$BASE/tools/guest_cas.py" "$BASE/tools/float_loads.py" "$BASE/tools/pch_cold_traps.py" "$BASE/tools/inline_memcalls.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
 if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.hcu-codegen-stamp" 2>/dev/null)" != "$CG_STAMP" ]; then
     rm -rf "$SRC/generated"
     (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1) \
@@ -96,6 +97,14 @@ if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.
     # tools/pch_cold_traps.py: ppc_trap (the trap before each division and at the asserts) cold and out of line, so the
     # hot path of a dividing function is the division alone. -DHCU_COLD_TRAPS=OFF passes -DREX_TRAP_ATTR= ("-notrap").
     python3 -I "$BASE/tools/pch_cold_traps.py" "$PCH" >> "$ROOT/passes.log" 2>&1 || { cat "$ROOT/passes.log"; exit 1; }
+    # tools/inline_memcalls.py: a call of the CRT memcpy (sub_82819390, first instruction `std r3,-8(r1)` as the tool
+    # needs) or memset (sub_828198C0) with a constant size of 1-64 bytes copies inline; an overlap the original smears,
+    # a range outside plain memory (MMIO, physical 0xA0000000 and up, as src/crt_native.cpp) or a destination over the
+    # r1-8 slot calls the function as before. -DHCU_INLINE_MEMCALLS=OFF defines REX_INLINE_MEMCALLS_OFF ("-nomc").
+    cat "$SRC"/generated/default/*.cpp | grep -A12 '^DEFINE_REX_FUNC(sub_82819390) {' | grep -m1 $'^\t// ' \
+        | grep -qx $'\t// std r3,-8(r1)' || { echo "sub_82819390 does not start with std r3,-8(r1) (tools/inline_memcalls.py)"; exit 1; }
+    python3 -I "$BASE/tools/inline_memcalls.py" --gen "$SRC/generated/default" --memcpy 82819390 --memset 828198C0 \
+        >> "$ROOT/passes.log" 2>&1 || { cat "$ROOT/passes.log"; exit 1; }
     echo "$CG_STAMP" > "$SRC/generated/.hcu-codegen-stamp"
 fi
 # Item 11 of docs/bible-checklist.md (the base's post-codegen step tools/direct_calls.py): a call to a game function
@@ -129,6 +138,7 @@ grep -q '#define REX_CARD(ea)' "$PCH" || { echo "no store cards in $PCH (tools/s
 grep -q '(tools/guest_cas.py)' "$PCH" || { echo "no REX_GUEST_CAS in $PCH (tools/guest_cas.py)"; exit 1; }
 grep -q '(switch/build-base.sh: volatile)$' "$PCH" || { echo "no volatile float load in $PCH (tools/float_loads.py)"; exit 1; }
 grep -q '(tools/pch_cold_traps.py)' "$PCH" || { echo "no cold ppc_trap in $PCH (tools/pch_cold_traps.py)"; exit 1; }
+grep -q '(tools/inline_memcalls.py)' "$PCH" || { echo "no inline memcpy in $PCH (tools/inline_memcalls.py)"; exit 1; }
 cat "$ROOT/passes.log"
 # The stores left without a card (each should go through the stack pointer) and the ones with it.
 echo "stores: $(cat "$SRC"/generated/default/*.cpp | grep -oE '\b(REX_STORE_(D_)?U(8|16|32|64)|REX_STVLX|REX_STVRX|REX_STORE_(D_)?F32ANY)(_C)?\(' \
@@ -148,6 +158,7 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 [ "$METER" = 1 ] && VERSION="$VERSION-meter"
 [ "$FLOAT_LOADS" = 0 ] && VERSION="$VERSION-nofl"
 [ "$COLD_TRAPS" = 0 ] && VERSION="$VERSION-notrap"
+[ "$INLINE_MEMCALLS" = 0 ] && VERSION="$VERSION-nomc"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
@@ -162,7 +173,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"

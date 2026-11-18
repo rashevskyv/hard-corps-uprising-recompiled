@@ -88,6 +88,12 @@ option(HCU_COLD_TRAPS "The trap helper of the generated pch cold and out of line
 if(NOT HCU_COLD_TRAPS)
     target_compile_definitions(hcu_recomp PRIVATE "REX_TRAP_ATTR=")
 endif()
+# Item 11c: the base's tools/inline_memcalls.py. ON: the CRT memcpy / memset calls of a constant 1-64 bytes copy
+# inline (the same bytes and the r1-8 slot as the original; other cases call it). OFF: REX_INLINE_MEMCALLS_OFF.
+option(HCU_INLINE_MEMCALLS "Constant-size memcpy / memset of the game inline" ON)
+if(NOT HCU_INLINE_MEMCALLS)
+    target_compile_definitions(hcu_recomp PRIVATE REX_INLINE_MEMCALLS_OFF)
+endif()
 # Item 15 of docs/bible-checklist.md: link-time optimisation (the base's BANJO_SWITCH_LTO and BANJO_SWITCH_SDK_OPT,
 # app/CMakeLists.txt of the base). The game code, HCU's code, the GPU plugin (deko3d) and the SDK runtime are compiled
 # to GIMPLE and optimised as one program at the link, which repeats -ffp-contract=off and -fno-strict-aliasing (the
