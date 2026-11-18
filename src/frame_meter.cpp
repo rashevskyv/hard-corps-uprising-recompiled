@@ -25,6 +25,8 @@
 #include <rex/chrono/clock.h>
 #include <rex/hook.h>
 
+#include "settings_menu.h"
+
 extern "C" volatile uint64_t rex_nx_audio_cb_us;
 extern "C" char rex_nx_meter_text[48];
 
@@ -166,9 +168,12 @@ void Report(uint64_t now) {
   const double secs = ToMs(now - g_report_tick) / 1000.0;
   uint32_t le34 = 0;
   for (int i = 0; i <= 340; i++) le34 += g_shown.bin[i];
-  std::printf("[nx] game speed %.1f %% (%.1f guest frames/s); shown %.1f/s, interval p50 %.1f p95 %.1f p99 %.1f ms, %.1f %% <= 34 ms\n",
+  // fps_mode and the main thread frames with over 16.7 ms of work (they cannot keep 60 guest frames/s; the profile of
+  // mode 3, 30 at half speed, against the others).
+  std::printf("[nx] game speed %.1f %% (%.1f guest frames/s); shown %.1f/s, interval p50 %.1f p95 %.1f p99 %.1f ms, %.1f %% <= 34 ms; fps_mode %d, main work >= 16.7 ms %.1f %% of frames\n",
               secs > 0 ? g_main_work.n / secs / 60.0 * 100.0 : 0.0, secs > 0 ? g_main_work.n / secs : 0.0, secs > 0 ? g_shown.n / secs : 0.0,
-              g_shown.Pct(0.5), g_shown.Pct(0.95), g_shown.Pct(0.99), g_shown.n ? le34 * 100.0 / g_shown.n : 0.0);
+              g_shown.Pct(0.5), g_shown.Pct(0.95), g_shown.Pct(0.99), g_shown.n ? le34 * 100.0 / g_shown.n : 0.0, hcu_settings.fps_mode,
+              g_main_work.Over(16.7));
   {
     const uint32_t cp_n = __atomic_load_n(&g_cp_n, __ATOMIC_ACQUIRE);
     const uint32_t end = std::min(cp_n, g_main_n);
