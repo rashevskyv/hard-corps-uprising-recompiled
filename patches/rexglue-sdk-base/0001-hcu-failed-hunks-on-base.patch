@@ -354,6 +354,46 @@ index 5e8e21e0..0a7fe2c0 100644
      }
  
      // Perform the clear.
+diff --git a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+index a4a886ff..182162c8 100644
+--- a/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
++++ b/src/kernel/xboxkrnl/xboxkrnl_rtl.cpp
+@@ -468,16 +468,6 @@ static void xeEnterCriticalSection(X_RTL_CRITICAL_SECTION* cs, uint32_t cur_thre
+   cs->recursion_count = 1;
+ }
+ 
+-constexpr int kCriticalSectionIdleSpins = 256;
+-
+-inline void SpinPause() {
+-#if defined(__x86_64__) || defined(_M_X64)
+-  _mm_pause();
+-#elif defined(__aarch64__)
+-  __builtin_arm_yield();
+-#endif
+-}
+-
+ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
+   xeEnterCriticalSection(cs, XThread::GetCurrentThread()->guest_object(),
+                          static_cast<uint32_t>(std::max(REXCVAR_GET(kernel_critsec_spin), 0)));
+@@ -499,18 +489,6 @@ static uint32_t xeTryEnterCriticalSection(X_RTL_CRITICAL_SECTION* cs, uint32_t t
+   }
+ 
+   // Failed to acquire lock.
+-  // Holds are short and a kernel wait costs far more than the hold, so poll briefly first. Only a free
+-  // lock without waiters reads -1, so this cannot take the lock from a thread that is already waiting.
+-  for (int i = 0; i < kCriticalSectionIdleSpins; ++i) {
+-    if (*reinterpret_cast<volatile int32_t*>(&cs->lock_count) == -1 &&
+-        rex::thread::atomic_cas(-1, 0, &cs->lock_count)) {
+-      cs->owning_thread = cur_thread;
+-      cs->recursion_count = 1;
+-      return;
+-    }
+-    SpinPause();
+-  }
+-
+   return 0;
+ }
+ 
 diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
 index feed11e2..260b0127 100644
 --- a/src/system/xobject.cpp
@@ -386,3 +426,17 @@ index feed11e2..260b0127 100644
      XThread::CheckTitleTermination();
      switch (result) {
        case rex::thread::WaitResult::kSuccess:
+diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
+index c5c4b350..84fa5eeb 100644
+--- a/src/ui/vulkan/vulkan_presenter.cpp
++++ b/src/ui/vulkan/vulkan_presenter.cpp
+@@ -1840,9 +1840,6 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+              std::find(present_modes.cbegin(), present_modes.cend(),
+                        VK_PRESENT_MODE_FIFO_RELAXED_KHR) != present_modes.cend()) {
+     // Limiting the frame rate, but lets too long frames cause tearing not to
+-            } else {
+-              swapchain_effect_pipeline.swapchain_format =
+-                  paint_context_.swapchain_render_pass_format;
+     // make the latency even worse.
+     swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+   } else {

@@ -46,6 +46,10 @@ echo "patches: $failed of $total hunks failed" | tee -a "$report"
 #    waits in WaitMultiple, on the base's (handles, count) signature). Dropped because the base already has them or a
 #    better form: 0004's primitive cache bound, 0034's exp_adjust word, 0006's timer queue (the base blocks on a
 #    condition variable; the hunk that applied is reverted), 0021's multi-wait (the base parks on a wake point).
+#    Also reverted, because fuzz 3 put them in the wrong place: 0006's critical-section spin (it landed in
+#    xeTryEnterCriticalSection; the base spins in xeEnterCriticalSection, count from the cvar kernel_critsec_spin)
+#    and 0035's swapchain_format line (the base already sets it, further down). 10 hunks applied with fuzz; the
+#    other 8 were checked against their hunk text.
 git add -A && git -c user.email=hcu@local -c user.name=hcu commit -qm "HCU patches, fuzz 3"
 patch -p1 --no-backup-if-mismatch < "$HERE/patches/rexglue-sdk-base/0001-hcu-failed-hunks-on-base.patch"
 git add -A && git -c user.email=hcu@local -c user.name=hcu commit -qm "HCU failed hunks merged onto the base"
