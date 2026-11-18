@@ -18,8 +18,11 @@ add_compile_definitions(REX_CARD_VIEWS_ONLY HCU_BASE_SDK)
 # The SDK's libraries in this build folder (the base's rule: each folder builds them with its own LTO / PGO options).
 set(REXGLUE_OUTPUT_IN_BUILD ON CACHE BOOL "The SDK's libraries and tools in this build folder")
 # HCU_NX_METER: the CPU-work meter of src/frame_meter.cpp (call counts of the exports, the time in the waiting ones and
-# in VdSwap, the command processor's waits; switch/sdk-edits-base.py). A diagnostic: no guest-visible change.
-option(HCU_NX_METER "The CPU-work meter's counters in the SDK (diagnostic)" ON)
+# in VdSwap, the command processor's waits; switch/sdk-edits-base.py). A diagnostic: no guest-visible change. OFF by
+# default (2026-11-19): every export call paid a count and the waiting ones two clock reads (Eden: rex_nx_meter_leave
+# 2.4 % of the busy samples). Without it the overlay shows fps only (no "m c g", no 30 s report): measurement builds
+# take -DHCU_NX_METER=ON (flavour "-meter", switch/build-base.sh).
+option(HCU_NX_METER "The CPU-work meter's counters in the SDK (diagnostic)" OFF)
 if(HCU_NX_METER)
     add_compile_definitions(HCU_NX_METER)
 endif()

@@ -31,6 +31,7 @@ opt() {
 NO_VOLATILE=$(opt HCU_NO_VOLATILE 0 "$@")
 DIRECT_CALLS=$(opt HCU_DIRECT_CALLS 1 "$@")
 GUEST_CAS=$(opt HCU_GUEST_CAS 0 "$@")
+METER=$(opt HCU_NX_METER 0 "$@")
 
 CLI=$SDK/out/linux-amd64/Release/rexglue
 [ -x "$CLI" ] || { echo "no host CLI: $CLI"; exit 1; }
@@ -128,6 +129,7 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 [ "$NO_VOLATILE" = 1 ] && VERSION="$VERSION-novol"
 [ "$DIRECT_CALLS" = 0 ] && VERSION="$VERSION-nodirect"
 [ "$GUEST_CAS" = 1 ] && VERSION="$VERSION-cas"
+[ "$METER" = 1 ] && VERSION="$VERSION-meter"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
@@ -142,7 +144,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"
