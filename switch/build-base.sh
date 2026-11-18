@@ -18,6 +18,19 @@ export DEVKITPRO=${DEVKITPRO:-/opt/devkitpro}
 export PATH=$DEVKITPRO/tools/bin:$DEVKITPRO/devkitA64/bin:$PATH
 BUILD=${HCU_BUILD_DIR:-$SRC/out/build/switch-base}
 
+# The flavour switches of this script, given as cmake -D options: the last -DNAME=value wins, as in CMake, and any
+# value CMake reads as true (ON, 1, TRUE, YES, Y, a non-zero number; any case; also -DNAME:BOOL=...) is 1.
+opt() {
+    local r=$2 a v
+    for a in "${@:3}"; do
+        case "$a" in "-D$1="*|"-D$1:"*=*) v=${a##*=}; v=${v,,} ;; *) continue ;; esac
+        case "$v" in on|true|yes|y|[1-9]*) r=1 ;; *) r=0 ;; esac
+    done
+    echo "$r"
+}
+NO_VOLATILE=$(opt HCU_NO_VOLATILE 0 "$@")
+DIRECT_CALLS=$(opt HCU_DIRECT_CALLS 1 "$@")
+
 CLI=$SDK/out/linux-amd64/Release/rexglue
 [ -x "$CLI" ] || { echo "no host CLI: $CLI"; exit 1; }
 [ -f "$SRC/game/extracted/default.xex" ] || { echo "no game files: $SRC/game/extracted/default.xex"; exit 1; }
@@ -63,6 +76,28 @@ if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.
     grep -qE ': [1-9][0-9]* loop headers' "$ROOT/loop-barriers.log" || { cat "$ROOT/loop-barriers.log"; exit 1; }
     echo "$CG_STAMP" > "$SRC/generated/.hcu-codegen-stamp"
 fi
+# Item 11 of docs/bible-checklist.md (the base's post-codegen step tools/direct_calls.py): a call to a game function
+# without a hook goes to __imp__sub_X, the same function but not a weak alias, so GCC and LTO may inline it. Every
+# build, because a hook in src/ changes the list without a new codegen; --redo writes only the files that change.
+# The hooked list is every 82xxxxxx address in the code of HCU and the SDK (comments not counted; direct_calls.py's
+# own scan, on HCU's folders), and in config/overrides.toml (only function bounds there: safe, a few calls stay weak).
+# -DHCU_DIRECT_CALLS=OFF gives back the plain calls (the A/B flavour "-nodirect").
+python3 -I - "$BASE/tools" "$SRC" "$SDK" > "$ROOT/hooked.txt" <<'EOF'
+import sys
+sys.path.insert(0, sys.argv[1])
+import direct_calls
+s, k = sys.argv[2], sys.argv[3]
+direct_calls.SOURCES = [s + '/src', s + '/switch', k + '/src', k + '/include', s + '/config/overrides.toml',
+                        s + '/hard_corps_uprising_manifest.toml', s + '/CMakeLists.txt']
+print('\n'.join(sorted(direct_calls.hooked(s + '/generated/default'))))
+EOF
+grep -q 'sub_825520F8' "$ROOT/hooked.txt" || { echo "the hooked list misses REX_HOOK_RAW(sub_825520F8) (src/window_host.cpp)"; exit 1; }
+if [ "$DIRECT_CALLS" = 1 ]; then
+    python3 -I "$BASE/tools/direct_calls.py" --gen "$SRC/generated/default" --hooked-list "$ROOT/hooked.txt" --redo
+    python3 -I "$BASE/tools/direct_calls.py" --gen "$SRC/generated/default" --hooked-list "$ROOT/hooked.txt" --check
+else
+    python3 -I "$BASE/tools/direct_calls.py" --gen "$SRC/generated/default" --undo
+fi
 # Without the cards the renderer would never see a guest write: the build stops. The same for the flavour switch.
 PCH=$(ls "$SRC"/generated/default/*_pch.h)
 [ "$(grep -c 'HCU_KEEP_VOLATILE\|^#define REX_GUEST_VOLATILE$\|loop barrier (tools/loop_barriers.py)' "$PCH")" -ge 3 ] \
@@ -81,13 +116,8 @@ SHA=$(git_src rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
 DIRTY=$(git_src -c core.autocrlf=true status --porcelain --untracked-files=no 2>/dev/null | grep -q . && echo "+" || true)
 VERSION="0.$COUNT.$SHA$DIRTY"
 # A flavour NRO names itself in hbmenu and in every log line that carries the version.
-# Any value CMake reads as true (ON, 1, TRUE, YES, Y, a non-zero number; any case; also -DHCU_NO_VOLATILE:BOOL=...).
-NOVOL=
-for a in "$@"; do
-    case "$a" in -DHCU_NO_VOLATILE=*|-DHCU_NO_VOLATILE:*=*) v=${a##*=}; v=${v,,} ;; *) continue ;; esac
-    case "$v" in on|true|yes|y|[1-9]*) NOVOL=-novol ;; *) NOVOL= ;; esac  # the last one wins, as in CMake
-done
-VERSION="$VERSION$NOVOL"
+[ "$NO_VOLATILE" = 1 ] && VERSION="$VERSION-novol"
+[ "$DIRECT_CALLS" = 0 ] && VERSION="$VERSION-nodirect"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
