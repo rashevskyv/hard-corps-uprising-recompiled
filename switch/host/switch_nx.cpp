@@ -67,6 +67,7 @@ struct Clock {
     bool open;
     u32 old;
     volatile u32 set;
+    bool lowered;  // keep_clocks found it below `set` at its last check
 };
 Clock clocks[] = {
     {"CPU", PcvModuleId_CpuBus, 1785000000},
@@ -74,6 +75,8 @@ Clock clocks[] = {
     {"memory", PcvModuleId_EMC, 1600000000},
 };
 bool clkrst_up = false;
+// sys-clk runs (Kefir's vanilla build: it sets only the modules its profile names, every tick).
+bool sysclk = false;
 
 // The CPU clock as the core really runs it, whatever clkrst says: 8 dependent adds per iteration (1 cycle each on
 // the A57), timed with the 19.2 MHz system tick; the fastest of three runs (a preempted run reads slow). All four
@@ -109,11 +112,16 @@ bool service_running(const char* name) {
 }
 
 void raise_clocks() {
-    // sys-clk and Horizon OC set the clocks themselves; fighting them froze consoles (NFSU2's port).
-    if (service_running("sys:clk") || service_running("hoc:clk")) {
-        std::printf("[clock] sys-clk or Horizon OC is running: the clocks are left to it\n");
+    // Horizon OC puts stock rates back every tick; fighting it froze consoles (NFSU2's port).
+    if (service_running("hoc:clk")) {
+        std::printf("[clock] Horizon OC is running: the clocks are left to it\n");
         return;
     }
+    // Kefir's sys-clk leaves alone the modules its profile does not name, so the game sets its rates as without
+    // it (0.330 left them to sys-clk: GPU 307 MHz, 20 FPS). A module the profile names goes to the profile
+    // (keep_clocks).
+    sysclk = service_running("sys:clk");
+    if (sysclk) std::printf("[clock] sys-clk is running: the game sets its clocks, a sys-clk profile wins over them\n");
     if (!hosversionAtLeast(8, 0, 0) || R_FAILED(clkrstInitialize())) {
         std::printf("[clock] no clkrst: the clocks are unchanged\n");
         return;
@@ -139,6 +147,8 @@ void raise_clocks() {
                         loop_before, busy_loop_mhz());
         }
     }
+    std::printf("[clock] the game set CPU %u, GPU %u, memory %u MHz\n", clocks[0].set / 1000000,
+                clocks[1].set / 1000000, clocks[2].set / 1000000);
 }
 
 // HOME, docking and sleep put the system's clocks back: set ours again.
@@ -146,8 +156,17 @@ void keep_clocks() {
     for (Clock& clock : clocks) {
         u32 now = 0;
         if (clock.set == 0 || R_FAILED(clkrstGetClockRate(&clock.session, &now)) || now >= clock.set) {
+            clock.lowered = false;
             continue;
         }
+        // sys-clk: lower again 2 s after our re-set = its profile (it sets it every tick). The profile wins; the
+        // old rate does not come back on exit either.
+        if (sysclk && clock.lowered) {
+            std::printf("[clock] %s held at %u MHz by a sys-clk profile: left to it\n", clock.name, now / 1000000);
+            clock.set = clock.old = 0;
+            continue;
+        }
+        clock.lowered = true;
         clkrstSetClockRate(&clock.session, clock.set);
         std::printf("[clock] %s was put back to %u MHz: set to %u MHz again\n", clock.name, now / 1000000,
                     clock.set / 1000000);
