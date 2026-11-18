@@ -57,8 +57,8 @@ const char* const kDataDir = "sdmc:/switch/hcu";
 Thread log_flush_thread;
 volatile bool log_flush_running = false;
 
-// CPU 1785 MHz (the highest), GPU 768 MHz (docked's rate), memory 1600 MHz, as the Xbox ports do.
-// The old rates come back on exit.
+// With settings.txt clocks=1 only (default 0 = stock, the owner's sys-clk decides): CPU 1785 MHz (the highest), GPU
+// 768 MHz (docked's rate), memory 1600 MHz, as the Xbox ports do. The old rates come back on exit.
 struct Clock {
     const char* name;
     PcvModuleId module;
@@ -111,7 +111,45 @@ bool service_running(const char* name) {
     return rc == MAKERESULT(21, 4);
 }
 
+// settings.txt clocks=1 raises the clocks (the old default); without it (default 0) they are only read. Read here, at
+// start, before settings_menu.cpp loads the rest of the file; the menu's save keeps the key (HcuSettings::clocks).
+bool clocks_key_on() {
+    bool on = false;
+    if (FILE* f = std::fopen("sdmc:/switch/hcu/settings.txt", "r")) {
+        char line[64];
+        int v = 0;
+        while (std::fgets(line, sizeof(line), f))
+            if (std::sscanf(line, "clocks=%d", &v) == 1) on = v != 0;
+        std::fclose(f);
+    }
+    return on;
+}
+
+// clocks=0: the rates as they are (stock, or sys-clk's profile), read through clkrst sessions that are closed again, so
+// keep_clocks and restore_clocks have nothing to do (clock.set stays 0, clkrst_up false).
+void log_stock_clocks() {
+    u32 mhz[3] = {};
+    if (hosversionAtLeast(8, 0, 0) && R_SUCCEEDED(clkrstInitialize())) {
+        for (int i = 0; i < 3; i++) {
+            ClkrstSession s;
+            u32 hz = 0;
+            if (R_SUCCEEDED(clkrstOpenSession(&s, clocks[i].module, 3))) {
+                clkrstGetClockRate(&s, &hz);
+                clkrstCloseSession(&s);
+            }
+            mhz[i] = hz / 1000000;
+        }
+        clkrstExit();
+    }
+    std::printf("[clock] clocks=0 (settings.txt clocks=1 raises them): not changed; CPU %u, GPU %u, memory %u MHz; "
+                "busy-loop equals %u MHz\n", mhz[0], mhz[1], mhz[2], busy_loop_mhz());
+}
+
 void raise_clocks() {
+    if (!clocks_key_on()) {
+        log_stock_clocks();
+        return;
+    }
     // Horizon OC puts stock rates back every tick; fighting it froze consoles (NFSU2's port).
     if (service_running("hoc:clk")) {
         std::printf("[clock] Horizon OC is running: the clocks are left to it\n");
@@ -233,6 +271,10 @@ void clock_meter_loop(void*) {
     const bool api = hosversionAtLeast(8, 0, 0) && R_SUCCEEDED(clkrstInitialize());
     const bool open = api && R_SUCCEEDED(clkrstOpenSession(&session, PcvModuleId_CpuBus, 3));
     if (!open) std::printf("[clock] meter: no clkrst, the busy loop only\n");
+    // GPU and memory: read once per 10-s line (sys-clk or docking may change them; clocks=0 leaves them to it).
+    ClkrstSession gpu_s, emc_s;
+    const bool gpu_open = api && R_SUCCEEDED(clkrstOpenSession(&gpu_s, PcvModuleId_GPU, 3));
+    const bool emc_open = api && R_SUCCEEDED(clkrstOpenSession(&emc_s, PcvModuleId_EMC, 3));
     u32 rate[4] = {}, count[4] = {}, other = 0, samples = 0, resets = 0, last = 0;
     u32 loop[10], loop_api[10], loops = 0;
     while (clock_meter_running) {
@@ -257,7 +299,11 @@ void clock_meter_loop(void*) {
         for (int i = 0; i < 4 && rate[i] && samples; i++)
             n += std::snprintf(line + n, sizeof(line) - n, "%s %u MHz %u%%", i ? "," : "", rate[i], count[i] * 100 / samples);
         if (other && samples) n += std::snprintf(line + n, sizeof(line) - n, ", other %u%%", other * 100 / samples);
-        if (samples) std::printf("[clock] cpu%s over 10 s (%u resets, %u samples)\n", line, resets, samples);
+        u32 gpu_hz = 0, emc_hz = 0;
+        if (gpu_open) clkrstGetClockRate(&gpu_s, &gpu_hz);
+        if (emc_open) clkrstGetClockRate(&emc_s, &emc_hz);
+        if (samples) std::printf("[clock] cpu%s over 10 s (%u resets, %u samples); now GPU %u, memory %u MHz\n", line, resets,
+                                 samples, gpu_hz / 1000000, emc_hz / 1000000);
         n = 0;
         u32 sorted[10];
         std::memcpy(sorted, loop, sizeof(sorted));
@@ -270,6 +316,8 @@ void clock_meter_loop(void*) {
         other = samples = resets = loops = 0;
     }
     if (open) clkrstCloseSession(&session);
+    if (gpu_open) clkrstCloseSession(&gpu_s);
+    if (emc_open) clkrstCloseSession(&emc_s);
     if (api) clkrstExit();
 }
 
