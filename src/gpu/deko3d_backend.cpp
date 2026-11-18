@@ -72,6 +72,9 @@ REXCVAR_DEFINE_BOOL(deko3d_fill_rectangle, false, "GPU",
                     "deko3d backend: draw rectangle lists with the hardware fill-rectangle mode instead of a geometry shader")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+#if defined(HCU_BASE_SDK)
+// The ultimate base's SDK: its store cards (PullCards below) take the place of the dirty-page bytes.
+#else
 // The Switch host layer's dirty-page bytes (switch/host/memory_nx.cpp): one byte per 4 KB page of the
 // physical arena, set by every guest store (the codegen pch) and by host writes into guest memory
 // (file reads). This backend is their only consumer (there is no SharedMemory here).
@@ -83,10 +86,31 @@ extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200];
 extern "C" volatile uint8_t rex_nx_dirty[0x20000] = {};
 extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200] = {};
 #endif
+#endif  // HCU_BASE_SDK
 
 namespace rex::graphics::deko {
 
 namespace {
+
+// The store card (an offset in the guest window) of physical page p in view 0 (0xA0000000), 1 (0xC0000000),
+// 2 (0xE0000000) or 3 (0x7F000000) (Deko3dCommandProcessor::PullCards). Page 0 has no 0xE0000000 card and pages from
+// 16 MB up no 0x7F000000 one: the 0xA0000000 card stands in.
+constexpr uint32_t CardOf(int view, uint32_t p) {
+  switch (view) {
+    case 1: return 0xC0000u + p;
+    case 2: return p ? 0xE0000u + p - 1 : 0xA0000u + p;
+    case 3: return p < 0x1000u ? 0x7F000u + p : 0xA0000u + p;
+    default: return 0xA0000u + p;
+  }
+}
+// A guest store at va marks card va >> 12 (the base's store macros, MarkStoreCards): each view's card of a physical
+// page is the one its own guest address marks.
+static_assert(CardOf(0, 0x12345) == (0xA0000000u + 0x12345000u) >> 12);
+static_assert(CardOf(1, 0x12345) == (0xC0000000u + 0x12345000u) >> 12);
+static_assert(CardOf(2, 0x12345) == (0xE0000000u + 0x12345000u - 0x1000u) >> 12);  // guest 0xE0000000 = physical 0x1000
+static_assert(CardOf(2, 1) == 0xE0000000u >> 12 && CardOf(2, 0) == CardOf(0, 0));
+static_assert(CardOf(3, 0xFFF) == (0x7F000000u + 0xFFF000u) >> 12 && CardOf(3, 0x1000) == CardOf(0, 0x1000));
+static_assert(CardOf(0, 0x1FFFF) < 0x100000u && CardOf(1, 0x1FFFF) < 0x100000u);  // all in the window's first MB
 
 constexpr uint32_t kFrames = 3;  // frame slots at most (n_frames_ in use: settings gpu_frames)
 // Three, not two: with two, a drawn frame's acquire waited for the previous frame's GPU work and the next vblank (up to
@@ -1183,6 +1207,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (off == UINT32_MAX) {
         off = f.data.Alloc(bytes ? bytes : 16, 64);
         if (off == UINT32_MAX) { LogOnce("ring", "frame data ring full"); skipped_++; return true; }
+#ifndef HCU_DK_GL
+        PullCards(src_phys, bytes);  // before the bytes are read: the copy's serial (below) covers what it read
+#endif
         const uint8_t* src = memory_->TranslatePhysical(fetch.address << 2) + src_off;
         texture_conversion::CopySwapBlock(fetch.endian, f.data.cpu + off, src, bytes);
         frame_vtx_bytes_ += bytes;
@@ -2037,6 +2064,54 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // written in the same microsecond as its bind can be uploaded stale once (the next write fixes it).
   void SyncDirtyPages() {
     serial_++;
+#if defined(HCU_BASE_SDK)
+  }
+
+  // ----- store cards (the ultimate base's SDK) ---------------------------------------------------
+  // One byte per 4 KB guest page in the guest window's first MB (memory_->virtual_membase() + (address >> 12)): every
+  // guest store outside the stack sets its page's byte to 0 (the generated code, tools/store_cards.py of the base), and
+  // so do the host writers (file reads into physical memory, the CRT copies). A physical page has a card in each view
+  // the guest writes it through: 0xA0000000, 0xC0000000, 0xE0000000 (4 KB lower: guest 0xE0000000 is physical 0x1000)
+  // and, in the first 16 MB, 0x7F000000. A store marks its first byte's page only, so a page also counts as written when
+  // the page before it was. (Renut's PagesClean, app/src/renut_engine/gpu/render/draw.cpp of the base, the same rule.)
+  // A range's cards are pulled when it is read (texture bind, vertex copy) and when its contents are set (upload,
+  // resolve): each page found written gets a serial newer than every content_serial set before the pull, and its cards
+  // go back to 1. ponytail: a store whose card lands before its data can be uploaded stale once (the next write to the
+  // page fixes it), as with the dirty-page bytes.
+  void PullCards(uint32_t physical, uint32_t bytes) {
+    uint8_t* const cards = memory_->virtual_membase();
+    uint32_t first, last;
+    CardPages(physical, bytes, first, last);
+    bool bumped = false;
+    for (uint32_t p = first; p <= last; p++) {
+      volatile uint8_t* const a = cards + CardOf(0, p);
+      volatile uint8_t* const c = cards + CardOf(1, p);
+      volatile uint8_t* const e = cards + CardOf(2, p);
+      volatile uint8_t* const v = cards + CardOf(3, p);
+      if (*a && *c && *e && *v) continue;
+      *a = 1, *c = 1, *e = 1, *v = 1;
+      if (!bumped) serial_++, bumped = true;
+      page_serial_[p] = serial_;
+      dirty_pages_++;
+    }
+  }
+  // The pages a range's check reads: from the page before its first (a store into it may run over), to its last.
+  static void CardPages(uint32_t physical, uint32_t bytes, uint32_t& first, uint32_t& last) {
+    physical &= 0x1FFFFFFFu;
+    first = physical >> 12;
+    first -= first != 0;
+    last = std::min<uint32_t>((physical + (bytes ? bytes - 1 : 0)) >> 12, 0x1FFFFu);
+  }
+  bool WrittenSince(uint32_t physical, uint32_t bytes, uint32_t serial) {
+    PullCards(physical, bytes);
+    uint32_t first, last;
+    CardPages(physical, bytes, first, last);
+    for (uint32_t p = first; p <= last; p++) {
+      if (page_serial_[p] > serial) return true;
+    }
+    return false;
+  }
+#else
     const uint64_t* words = reinterpret_cast<const uint64_t*>(const_cast<const uint8_t*>(rex_nx_dirty));
     for (uint32_t c = 0; c < 0x200; c++) {
       if (!rex_nx_dirty_coarse[c]) continue;
@@ -2053,6 +2128,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
   }
 
+  void PullCards(uint32_t, uint32_t) {}
   bool WrittenSince(uint32_t physical, uint32_t bytes, uint32_t serial) const {
     uint32_t first = (physical & 0x1FFFFFFFu) >> 12;
     uint32_t last = ((physical & 0x1FFFFFFFu) + (bytes ? bytes - 1 : 0)) >> 12;
@@ -2061,6 +2137,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     return false;
   }
+#endif  // HCU_BASE_SDK
 
   // Whether the guest memory behind an image changed since its contents were set. Switch: the dirty-page
   // serials. Linux: a hash of the range against the hash taken when the contents were set.
@@ -2083,7 +2160,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     return 0;
 #endif
   }
-  bool MemoryChanged(const HostImage& img, uint32_t physical, uint32_t bytes) const {
+  bool MemoryChanged(const HostImage& img, uint32_t physical, uint32_t bytes) {
 #ifdef HCU_DK_GL
     (void)bytes;
     return HashMemory(physical, img.mem_bytes) != img.mem_hash;
@@ -2378,6 +2455,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (!img) return nullptr;
       img->checked_serial = serial_;
     }
+    PullCards(base, info.memory.base_size);  // before the upload reads the bytes (a first upload had no check above)
     // A failed re-upload (staging ring full) keeps the previous contents rather than unbinding the slot.
     if (!UploadTexture(f, *img, info, fetch.endianness)) return img->content_serial ? img : nullptr;
     if (img->content_serial) {
@@ -2913,6 +2991,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dst->from_resolve = true;
     // Settings menu VIEW: the frame's first resolve of the scene (1280x720, before the post effects) is shown at the swap.
     if (!view_image_ && hcu_settings.view == 1 && w == kPresentWidth && h == kPresentHeight) view_image_ = dst;
+    // Guest writes before this resolve are older than its contents: their cards are taken now, not at the next bind.
+    PullCards(info.copy_dest_base, dest_pitch * dest_height * 4);
     dst->content_serial = serial_;
     dst->resolve_swap = swaps_ + 1;
     dst->mem_bytes = dest_pitch * dest_height * 4;

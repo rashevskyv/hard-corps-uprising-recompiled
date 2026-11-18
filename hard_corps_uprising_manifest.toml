@@ -12,4 +12,6 @@ ctr_as_local = true
 xer_as_local = true
 reserved_as_local = true
 non_volatile_as_local = true
+# The ultimate base's codegen (an unknown key for the old one): the vector registers stay in ctx, as HCU's old SDK patch did.
+non_volatile_as_local_keep = ["v0-v127"]
 includes = ["config/overrides.toml", "config/discovered-functions.toml"]

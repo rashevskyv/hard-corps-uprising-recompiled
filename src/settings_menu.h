@@ -56,6 +56,8 @@ struct HcuSettings {
   int clocks;         // clocks=1: the game raises CPU 1785 / GPU 768 / memory 1600 MHz and keeps them (the old default);
                       // 0 (default): the clocks are not touched (stock, or what sys-clk sets), only logged. Read by
                       // switch_nx.cpp at start, before this struct is loaded; kept here so the menu's save keeps it
+  int audio_threads;  // audio_threads=1 (the ultimate base's SDK only): one host thread per guest audio client
+                      // (switch/sdk-edits-base.py); 0 (default): the base's one audio worker runs every client
 };
 
 extern HcuSettings hcu_settings;

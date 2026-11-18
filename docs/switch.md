@@ -111,3 +111,38 @@ X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screensho
 - **GPU queue errors.** When deko3d puts the queue in its error state (a fault in an earlier list), the backend logs
   the swap, the live settings and each nvdrv channel's error notification (type 31 = MMU fault, 8/24 = timeouts,
   25 = illegal method), then ends the process the same way, instead of the deko3d abort.
+
+## Build on the ultimate base's SDK (branch renut-ultimate)
+
+The branch `renut-ultimate` builds the same game on the SDK of
+[renut_nx_ultimate_base](https://github.com/ChanseyIsTheBest/renut_nx_ultimate_base) (GPL-3.0, used with the author's
+permission). The branch `renut-base` keeps the old build above as the fallback.
+
+| What | Where |
+| --- | --- |
+| Sources | `/root/renut-hcu/src`, rsync'd by `switch/build-base.sh` |
+| SDK | `/root/renut-ult/sdk`: the base's SDK, then `switch/sdk-edits-base.py` (committed there) |
+| Base tools | `/mnt/d/git/dev/renut-ref/renut_nx_ultimate_base`: the toolchain file, `tools/store_cards.py`, `tools/pgo_summary.py` |
+| Build folder | `/root/renut-hcu/src/out/build/switch-base` (`HCU_BUILD_DIR` for another) |
+| PGO profile | `/root/renut-hcu/pgo` (`HCU_PGO_DIR`) |
+
+- `switch/build-base.sh [cmake -D...]`: rsync, SDK edits (the build stops if they change the SDK), codegen and the
+  store cards when the manifest changed, configure with the base's toolchain file, build. Under
+  `D:\git\dev\renut-ref\build.lock`.
+- The base owns `main`, threads, memory and the exit. `switch/hcu_nx_base.cpp` adds the SD log, `args.txt`, the
+  console defaults of the cvars (`--wrap=main`) and the quick exit. Clocks are not changed (the base never sets them;
+  the `clocks` key of `settings.txt` does nothing in this build).
+- GPU writes: the base's store cards (one byte per 4 KB page) replace the dirty-page bytes. The deko3d backend pulls
+  the cards at a texture bind, a vertex copy and a resolve (`PullCards`). The shaders are the same as the old build's:
+  this build copies none, the ones in `sdmc:/switch/hcu/shaders/` are used.
+- New `settings.txt` key: `audio_threads=1` runs each audio client's callback on its own thread (the old SDK's patch);
+  default 0 = the base's audio worker.
+
+### PGO
+
+1. `HCU_BUILD_DIR=/root/renut-hcu/src/out/build/switch-pgogen switch/build-base.sh -DHCU_PGO=generate`: an
+   instrumented NRO (slower; never a speed test).
+2. Play one session on the console. The NRO writes `pgo/banjo_pgo_<N>.stream` next to itself every 2 minutes, at HOME
+   and at exit. Copy that one stream to the PC.
+3. `switch/pgo-merge-base.sh <folder with the stream>`: the `.gcda` files in `/root/renut-hcu/pgo`.
+4. `HCU_BUILD_DIR=/root/renut-hcu/src/out/build/switch-pgouse switch/build-base.sh -DHCU_PGO=use`.

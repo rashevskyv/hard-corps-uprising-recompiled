@@ -91,7 +91,7 @@ uint64_t g_any_last = 0, g_any_last_wait = 0, g_any_last_block_us = 0;
 uint64_t ThreadKey() { return std::hash<std::thread::id>{}(std::this_thread::get_id()); }
 uint64_t g_main_key = 0;  // ThreadKey of the thread that calls VdSwap
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) && !defined(HCU_BASE_SDK)  // the old SDK's FPCR counter (the base has its census)
 constexpr int kFpcrSlots = 64;
 rex::ppc::RexNxFpcrCount g_fpcr[kFpcrSlots];
 int g_fpcr_n = 0;
@@ -201,7 +201,7 @@ void Report(uint64_t now) {
                 g_join_n, cp_n, g_main_n, d, s, g_mf_prev[1].n, g_mf_prev[1].Over(25.0), g_mf_prev[0].n, g_mf_prev[0].Over(25.0));
     for (Hist* h : {g_cpf, g_cpw, g_mf, g_mw, g_mf_prev}) h[0] = h[1] = Hist{};
   }
-#ifdef __SWITCH__
+#if defined(__SWITCH__) && !defined(HCU_BASE_SDK)
   ReportFpcr(secs);
 #endif
   std::fflush(stdout);
@@ -268,7 +268,7 @@ void rex_nx_meter_present() {
   g_shown_last = now;
 }
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) && !defined(HCU_BASE_SDK)
 // A guest context's first FPCR switch (rex/ppc/context.h): its counter slot.
 __attribute__((noinline, cold)) rex::ppc::RexNxFpcrCount* rex_nx_fpcr_count_new() {
   int i = __atomic_fetch_add(&g_fpcr_n, 1, __ATOMIC_RELAXED);

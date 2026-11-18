@@ -6,6 +6,12 @@ project(hard_corps_uprising VERSION 0.6.1 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# The Switch build on the ultimate base's SDK (its toolchain file sets REXGLUE_PLATFORM_SWITCH; switch/build-base.sh).
+if(REXGLUE_PLATFORM_SWITCH)
+    include(switch/switch-base.cmake)
+    return()
+endif()
+
 if(NINTENDO_SWITCH)
     include(switch/switch.cmake)
     return()

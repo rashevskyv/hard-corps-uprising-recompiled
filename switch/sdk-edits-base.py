@@ -10,13 +10,17 @@
 #     timers, IssueDraw phases, pre sub-timers, GPU work generators.
 #   behaviour (7): the sections in SECTIONS below, except "GPU write tracking": its store marks call the fold
 #     (rex_nx_host_offset), which the base does not have, and miss the base's D-form stores. On the base the
-#     marks are its store cards (tools/store_cards.py, one card per 4 KB guest page at ea >> 12); the deko3d
-#     back end must read the cards of a texture's physical-mirror pages at its bind instead of rex_nx_dirty.
-#     Not done yet. 2 anchors of "Directory opens" (host_path_entry.cpp, host_path_file.cpp) do not match: the base
-#     already opens a directory without a host handle (host_path_entry.cpp) and guards ReadSync and the others
-#     against it (host_path_file.cpp). The script warns for them; that is expected.
-# The sections are taken from sdk-edits.py by their header line, so both files stay one source of truth.
-# --print writes the composed script to stdout instead of running it (for the anchor check).
+#     marks are its store cards (tools/store_cards.py of the base, one card per 4 KB guest page at ea >> 12), which
+#     the deko3d back end reads at each texture bind and vertex copy (src/gpu/deko3d_backend.cpp, PullCards).
+#     2 anchors of "Directory opens" (host_path_entry.cpp, host_path_file.cpp) do not match: the base already opens a
+#     directory without a host handle (host_path_entry.cpp) and guards ReadSync and the others against it
+#     (host_path_file.cpp). The script warns for them; that is expected.
+#     "Null GPU backend" without its rex_app.cpp edit: the base defines the gpu_backend cvar and passes it to
+#     LoadGpuPlugin itself (a second definition was a duplicate symbol).
+# The sections are taken from sdk-edits.py by their header line, so both files stay one source of truth. The HCU edits
+# of switch/sdk-edits-hcu.py follow below, re-anchored on the base (its text differs: the hook macro has the export
+# census, the audio worker waits for a running callback at unregistration, ReadSync has three more success paths).
+# --print writes the composed sdk-edits.py part to stdout instead of running it (for the anchor check).
 import os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SECTIONS = [
@@ -35,23 +39,226 @@ for want in SECTIONS:
     assert len(hit) == 1, want
     end = next((j for j in starts if j > hit[0]), len(src))
     parts.append('\n'.join(src[hit[0]:end]))
+code = '\n'.join(parts) + '\n'
+# The base has the gpu_backend cvar: the Null section's rex_app.cpp edit goes.
+cut = code.index("edit('src/ui/rex_app.cpp', [")
+code = code[:cut] + code[code.index('\n])\n', cut) + len('\n])\n'):]
+if '--print' in sys.argv:
+    print(code)
+    sys.exit(0)
+sys.argv = [os.path.join(HERE, 'sdk-edits.py')] + sys.argv[1:]
+g = {'__name__': '__main__', '__file__': sys.argv[0]}
+exec(compile(code, sys.argv[0], 'exec'), g)
+edit, write, NL, changed = g['edit'], g['write'], g['NL'], g['changed']
+
 # From switch/sdk-edits-hcu.py: HCU's patch 0009 (guest_wake.cpp) takes the Linux futex branch on the Switch too,
 # where <linux/futex.h> does not exist (the rexgpu-xenos build failed on it). Of its other 14 edits, 5 are in the
-# base or not needed there (threading_switch wait, critical-section spin, nop audio -> audout, fold table, vector
-# registers in ctx = non_volatile_as_local_keep), 5 are diagnostics (WAIT_REG_MEM statistics, hook counters (2),
-# swap histogram, CP wait meter) and 4 still have to be ported (audio client threads, the button-glyph swap in
-# host_path_file.cpp and virtual_file_system.cpp, the FPCR counter; FPCR one mode is the base's BLUR_FPCR_ONE_MODE).
-parts.append('''
+# base or not needed there (threading_switch wait, critical-section spin = the base's kernel_critsec_spin cvar, nop
+# audio -> audout, fold table, vector registers in ctx = non_volatile_as_local_keep). The FPCR switch counter is not
+# ported: it is a diagnostic, and the base's FPSCRRegister has its own census hooks (REX_NX_CENSUS, REX_SYS_CENSUS)
+# where the same counts go. The WAIT_REG_MEM statistics and the swap histogram are dropped (diagnostics). Ported below:
+# the hook counters and the CP wait meter (src/frame_meter.cpp's frame mark and waits; CMake HCU_NX_METER), the
+# audio client threads (settings.txt audio_threads=1; off = the base's worker), the button-glyph swap.
 edit('src/graphics/guest_wake.cpp', [
     ('#elif REX_PLATFORM_LINUX' + NL + '#include <climits>' + NL,
      '#elif REX_PLATFORM_LINUX && !REX_PLATFORM_SWITCH' + NL + '#include <climits>' + NL),
     ('#elif REX_PLATFORM_LINUX' + NL + '  std::atomic_thread_fence',
      '#elif REX_PLATFORM_LINUX && !REX_PLATFORM_SWITCH' + NL + '  std::atomic_thread_fence'),
 ])
+
+# --- The CPU-work meter (src/frame_meter.cpp): VdSwap marks the main thread's frame, the waiting exports its waits.
+write('include/rex/nx_hook_counter.h', r'''#pragma once
+#include <cstdint>
+#include <cstring>
+// The CPU-work meter (hcu src/frame_meter.cpp): time in waiting exports, and VdSwap as the frame mark.
+// Weak defaults for binaries without the meter; frame_meter.cpp defines the real ones.
+#ifndef REX_NX_METER_IMPL
+extern "C" __attribute__((weak)) uint64_t rex_nx_meter_enter() { return 0; }
+extern "C" __attribute__((weak)) void rex_nx_meter_leave(uint64_t, int, uint64_t*) {}
+#else
+extern "C" uint64_t rex_nx_meter_enter();
+// main_wait: the export's HookCounter::main_wait (the main thread's time in it) or null.
+extern "C" void rex_nx_meter_leave(uint64_t t0, int kind, uint64_t* main_wait);
+#endif
+namespace rex_nx {
+inline int HookKind(const char* s) {
+  static const char* const waits[] = {"__imp__KeWaitForSingleObject", "__imp__KeWaitForMultipleObjects",
+                                      "__imp__NtWaitForSingleObjectEx", "__imp__NtWaitForMultipleObjectsEx",
+                                      "__imp__KeDelayExecutionThread", "__imp__NtYieldExecution",
+                                      "__imp__RtlEnterCriticalSection"};
+  if (std::strcmp(s, "__imp__VdSwap") == 0) return 2;
+  for (const char* w : waits) if (std::strcmp(s, w) == 0) return 1;
+  return 0;
+}
+struct HookCounter {
+  const char* name;
+  uint32_t n = 0;
+  int kind;  // 0 plain, 1 a waiting export, 2 VdSwap
+  uint64_t main_wait = 0;  // host ticks the main thread waited in it (written and reset by that thread only)
+  HookCounter* next;
+  static HookCounter*& head() { static HookCounter* h = nullptr; return h; }
+  explicit HookCounter(const char* s) : name(s), kind(HookKind(s)), next(head()) { head() = this; }
+};
+}  // namespace rex_nx
 ''')
-code = '\n'.join(parts) + '\n'
-if '--print' in sys.argv:
-    print(code)
-else:
-    sys.argv = [os.path.join(HERE, 'sdk-edits.py')] + [a for a in sys.argv[1:] if a != '--print']
-    exec(compile(code, sys.argv[0], 'exec'), {'__name__': '__main__', '__file__': sys.argv[0]})
+edit('include/rex/hook.h', [
+    ('#else' + NL + '#define REX_HOOK(subroutine, function)                  \\' + NL +
+     '  extern "C" REX_FUNC(subroutine) {                     \\' + NL +
+     '    REX_EXPORT_CENSUS(#subroutine);                     \\' + NL,
+     r'''#elif defined(__SWITCH__) && defined(HCU_NX_METER)
+// hcu (switch/sdk-edits-base.py, CMake HCU_NX_METER): call counts, and the time in the waiting exports and VdSwap for
+// the CPU-work meter (src/frame_meter.cpp).
+#include <rex/nx_hook_counter.h>
+#define REX_HOOK(subroutine, function)                           \
+  static rex_nx::HookCounter rex_nx_hc_##subroutine{#subroutine}; \
+  extern "C" REX_FUNC(subroutine) {                              \
+    ++rex_nx_hc_##subroutine.n;                                  \
+    if (!rex_nx_hc_##subroutine.kind) {                          \
+      rex::ppc::HostToGuestFunction<function>(ctx, base);        \
+      return;                                                    \
+    }                                                            \
+    const uint64_t rex_nx_t0 = rex_nx_meter_enter();             \
+    rex::ppc::HostToGuestFunction<function>(ctx, base);          \
+    rex_nx_meter_leave(rex_nx_t0, rex_nx_hc_##subroutine.kind,   \
+                       &rex_nx_hc_##subroutine.main_wait);       \
+  }
+''' + '#else' + NL + '#define REX_HOOK(subroutine, function)                  \\' + NL +
+     '  extern "C" REX_FUNC(subroutine) {                     \\' + NL +
+     '    REX_EXPORT_CENSUS(#subroutine);                     \\' + NL),
+])
+# The command processor's waits (its idle wait for the write pointer, WAIT_REG_MEM sleeps) as one tick count.
+edit('src/graphics/command_processor.cpp', [
+    ('#include <rex/graphics/guest_wake.h>' + NL,
+     '#include <rex/graphics/guest_wake.h>' + NL + r'''#if defined(__SWITCH__) && defined(HCU_NX_METER)
+extern "C" volatile uint64_t rex_nx_cp_wait_ticks;  // hcu src/frame_meter.cpp (switch/sdk-edits-base.py)
+#define HCU_CP_WAIT_T0(v) const uint64_t v = rex::chrono::Clock::QueryHostTickCount()
+#define HCU_CP_WAIT_ADD(v) (rex_nx_cp_wait_ticks += rex::chrono::Clock::QueryHostTickCount() - (v))
+#else
+#define HCU_CP_WAIT_T0(v) ((void)0)
+#define HCU_CP_WAIT_ADD(v) ((void)0)
+#endif
+'''),
+    ('      PrepareForWait();' + NL + '      bool poll_background_work = PollBackgroundWork();' + NL,
+     '      HCU_CP_WAIT_T0(hcu_idle0);' + NL +
+     '      PrepareForWait();' + NL + '      bool poll_background_work = PollBackgroundWork();' + NL),
+    ('      ReturnFromWait();' + NL + '      if (!worker_running_ || !pending_fns_.empty()) {' + NL,
+     '      ReturnFromWait();' + NL + '      HCU_CP_WAIT_ADD(hcu_idle0);' + NL +
+     '      if (!worker_running_ || !pending_fns_.empty()) {' + NL),
+    ('        PrepareForWait();' + NL + '        if (unmatched_poll_count < kYieldPollCount',
+     '        HCU_CP_WAIT_T0(hcu_wait0);' + NL + '        PrepareForWait();' + NL +
+     '        if (unmatched_poll_count < kYieldPollCount'),
+    ('        rex::thread::SyncMemory();' + NL + '        ReturnFromWait();' + NL,
+     '        rex::thread::SyncMemory();' + NL + '        ReturnFromWait();' + NL + '        HCU_CP_WAIT_ADD(hcu_wait0);' + NL),
+])
+print('changed (hcu cpu meter):', *changed, sep=NL + '  ')
+
+# --- Audio client threads (from gh-recomp, switch/audio_client_threads.inc): one host thread per guest audio client
+# instead of the one worker that runs every client's callback in turn. settings.txt audio_threads=1 (src/settings_menu.cpp);
+# 0, the default, keeps the base's worker. On HCU's old SDK the worker's WaitAny polled at 1 ms and spun at 75-80 % of
+# a core (0.191); whether the base's does is the A/B. ponytail: the client threads do not set the base's
+# dispatching_client_, so UnregisterClient does not wait for a callback still running on one (the base's fix of a
+# start-up crash in Banjo); HCU registers its clients once.
+_inc = open(os.path.join(HERE, 'audio_client_threads.inc'), encoding='utf-8').read()
+edit('src/audio/audio_system.cpp', [
+    ('#include <rex/audio/audio_system.h>' + NL + '#include <rex/audio/flags.h>' + NL,
+     '#include <rex/audio/audio_system.h>' + NL + '#include <chrono>' + NL + '#include <cstdio>' + NL + '#include <memory>' + NL +
+     '#include <string>' + NL + '#include <rex/audio/flags.h>' + NL),
+    ('namespace rex::audio {' + NL,
+     'namespace rex::audio {' + NL + '#if REX_PLATFORM_SWITCH  // hcu (switch/sdk-edits-base.py): the audio client threads' + NL +
+     'static system::KernelState* hcu_kernel_state = nullptr;' + NL + 'static uint32_t hcu_client_gen[8];' + NL +
+     'extern "C" volatile uint64_t rex_nx_audio_cb_us;  // hcu src/frame_meter.cpp' + NL +
+     'extern "C" int rex_hcu_audio_threads(void);  // hcu src/settings_menu.cpp: settings.txt audio_threads' + NL + '#endif' + NL),
+    ('X_STATUS AudioSystem::Setup(system::KernelState* kernel_state) {' + NL,
+     'X_STATUS AudioSystem::Setup(system::KernelState* kernel_state) {' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL + '  hcu_kernel_state = kernel_state;' + NL + '#endif' + NL),
+    ('  clients_[index] = {driver, callback, callback_arg, ptr, true};' + NL,
+     '  clients_[index] = {driver, callback, callback_arg, ptr, true};' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL + '  if (rex_hcu_audio_threads())' + NL + '#endif' + NL + _inc),
+    ('  DestroyDriver(clients_[index].driver);' + NL + '  memory()->SystemHeapFree(clients_[index].wrapped_callback_arg);' + NL +
+     '  clients_[index] = {nullptr, 0, 0, 0, false};' + NL,
+     '  DestroyDriver(clients_[index].driver);' + NL + '  memory()->SystemHeapFree(clients_[index].wrapped_callback_arg);' + NL +
+     '  clients_[index] = {nullptr, 0, 0, 0, false};' + NL + '#if REX_PLATFORM_SWITCH' + NL +
+     '  ++hcu_client_gen[index];  // its client thread leaves' + NL + '#endif' + NL),
+    ('  while (worker_running_) {' + NL + '    // These handles signify',
+     '  while (worker_running_) {' + NL + r'''#if REX_PLATFORM_SWITCH
+    // hcu: with the client threads the worker only waits for the shutdown (and the pause) event.
+    if (rex_hcu_audio_threads()) {
+      if (rex::thread::Wait(shutdown_event_.get(), true, std::chrono::milliseconds(500)) ==
+              rex::thread::WaitResult::kSuccess &&
+          paused_) {
+        pause_fence_.Signal();
+        thread::Wait(resume_event_.get(), false);
+      }
+      continue;
+    }
+#endif
+''' + '    // These handles signify'),
+])
+print('changed (hcu audio client threads):', *changed, sep=NL + '  ')
+
+# --- The button prompts on the Switch: the pad maps by position (Xbox A = the bottom button = Switch B), so a prompt
+# must show the Switch label of the button in that place. button_glyphs=switch (src/button_glyphs.cpp): every
+# successful HostPathFile::ReadSync hands its bytes to rex_hcu_glyph_read, which serves our Switch icon in place of
+# Gui/Img/guidebutton_<NAME>.bin (same 5152-byte file). The base's ReadSync has four success paths (startup trace,
+# read-ahead window, fill, plain read): the old body becomes ReadSyncBase and ReadSync wraps it.
+# button_glyphs=xbox: the game's Xbox icons, A/B/X/Y.bin opened swapped (A<->B, X<->Y). The game opens them relative to
+# the Gui\Img directory handle, so the swap is in OpenFile; the base's path parameter is const, so the swapped name is
+# opened by a second OpenFile call.
+edit('include/rex/filesystem/devices/host_path_file.h', [
+    ('  X_STATUS ReadSync(std::span<uint8_t> buffer, size_t byte_offset, size_t* out_bytes_read) override;' + NL,
+     '  X_STATUS ReadSync(std::span<uint8_t> buffer, size_t byte_offset, size_t* out_bytes_read) override;' + NL +
+     '  // hcu (switch/sdk-edits-base.py): the read itself; ReadSync adds the button glyphs.' + NL +
+     '  X_STATUS ReadSyncBase(std::span<uint8_t> buffer, size_t byte_offset, size_t* out_bytes_read);' + NL),
+])
+edit('src/filesystem/devices/host_path_file.cpp', [
+    ('#include <rex/string.h>' + NL,
+     '#include <rex/string.h>' + NL + '#if REX_PLATFORM_SWITCH' + NL +
+     'extern "C" void rex_hcu_glyph_read(const char* name, uint64_t offset, uint8_t* dst, size_t len);  // hcu src/button_glyphs.cpp' + NL +
+     '#endif' + NL),
+    ('X_STATUS HostPathFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,' + NL +
+     '                                size_t* out_bytes_read) {' + NL,
+     r'''X_STATUS HostPathFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset, size_t* out_bytes_read) {
+  const X_STATUS status = ReadSyncBase(buffer, byte_offset, out_bytes_read);
+#if REX_PLATFORM_SWITCH
+  if (status == X_STATUS_SUCCESS) rex_hcu_glyph_read(entry()->name().c_str(), byte_offset, buffer.data(), *out_bytes_read);
+#endif
+  return status;
+}
+
+X_STATUS HostPathFile::ReadSyncBase(std::span<uint8_t> buffer, size_t byte_offset,
+                                    size_t* out_bytes_read) {
+'''),
+])
+edit('src/filesystem/virtual_file_system.cpp', [
+    ('#include <rex/string.h>' + NL,
+     '#include <rex/string.h>' + NL + '#include <cctype>' + NL + '#include <cstdio>' + NL + '#include <cstring>' + NL +
+     '#if REX_PLATFORM_SWITCH' + NL + 'extern "C" int rex_hcu_button_glyphs(void);  // hcu src/button_glyphs.cpp: 1 = Switch icons' + NL +
+     '#endif' + NL),
+    ("  // TODO(gibbed): should 'is_directory' remain as a bool or should it be" + NL,
+     r'''#if REX_PLATFORM_SWITCH
+  // hcu (switch/sdk-edits-base.py): Switch labels on the button prompts with the Xbox icons (button_glyphs=xbox).
+  static thread_local bool hcu_swapping = false;
+  if (!hcu_swapping && !rex_hcu_button_glyphs()) {
+    static const char kSwap[] = "ABYX";  // A<->B, X<->Y
+    std::string low(path);
+    for (char& ch : low) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    const size_t at = low.find("guidebutton_");
+    if (at != std::string::npos && at + 13 < low.size() && low[at + 13] == '.') {
+      const char c = char(std::toupper(static_cast<unsigned char>(path[at + 12])));
+      if (const char* k = c ? std::strchr(kSwap, c) : nullptr) {
+        std::string nx_path(path);
+        nx_path[at + 12] = kSwap[(k - kSwap) ^ 1];
+        static int logged = 0;
+        if (logged++ < 8) std::printf("[nx] vfs: prompt image %.*s -> %s\n", int(path.size()), path.data(), nx_path.c_str());
+        hcu_swapping = true;
+        const X_STATUS swapped = OpenFile(root_entry, nx_path, creation_disposition, desired_access, is_directory,
+                                          is_non_directory, out_file, out_action);
+        hcu_swapping = false;
+        return swapped;
+      }
+    }
+  }
+#endif
+''' + "  // TODO(gibbed): should 'is_directory' remain as a bool or should it be" + NL),
+])
+print('changed (hcu button glyphs):', *changed, sep=NL + '  ')
