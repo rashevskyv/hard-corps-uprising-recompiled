@@ -67,6 +67,15 @@ add_executable(hcu
     src/frame_recorder.cpp
 )
 rexglue_setup_target(hcu GPU_PLUGINS xenos)
+# Item 15a of docs/bible-checklist.md (the base's rule: both flags on every target that compiles guest code, and on the
+# link). The SDK has them; the generated game code (hcu_recomp) and the app (hooks, crt_native.cpp) did not, and the
+# link flag alone did not stop GCC's default -ffp-contract=fast: the 0.339 ELF had 566 vector fmla/fmls in guest
+# functions, though the generated code has no vector FMA (vmaddfp is a mul and an add), and 6140 scalar fused ops for
+# 6098 std::fma sites. Guest fmadd/fmsub stay fused (std::fma); a guest fmul followed by fadd now rounds twice, as on
+# the Xenon. -fno-strict-aliasing: guest memory is read through u8/u16/u32/u64/float casts of one buffer.
+foreach(_t hcu hcu_recomp)
+    target_compile_options(${_t} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-ffp-contract=off;-fno-strict-aliasing>")
+endforeach()
 # The SDK's UI headers include imgui.h (headers only: ImGui is compiled into rexruntime).
 target_include_directories(hcu PRIVATE "${REXSDK_DIR}/thirdparty/imgui" src)
 
