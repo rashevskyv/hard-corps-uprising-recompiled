@@ -58,3 +58,7 @@ echo "failed hunks merged: $(git diff --stat HEAD~1 | tail -1)" | tee -a "$repor
 #    never got it and no SDK target builds without it. Same text as the stock SDK's after switch/sdk-edits.py.
 cp "$HERE/patches/rexglue-sdk-base/ffmpeg-config.h" thirdparty/FFmpeg/config.h
 git add -f thirdparty/FFmpeg/config.h && git -c user.email=hcu@local -c user.name=hcu commit -qm "FFmpeg config.h"
+# 6. The 6 sections of switch/sdk-edits.py the base lacks (switch/sdk-edits-base.py says which and why).
+python3 "$HERE/switch/sdk-edits-base.py" "$OUT" > .hcu-edits-base.log
+git add -A && git -c user.email=hcu@local -c user.name=hcu commit -qm "switch/sdk-edits-base.py"
+echo "base edits: $(git diff --stat HEAD~1 | tail -1)" | tee -a "$report"

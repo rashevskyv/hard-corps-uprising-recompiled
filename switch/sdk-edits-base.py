@@ -35,6 +35,20 @@ for want in SECTIONS:
     assert len(hit) == 1, want
     end = next((j for j in starts if j > hit[0]), len(src))
     parts.append('\n'.join(src[hit[0]:end]))
+# From switch/sdk-edits-hcu.py: HCU's patch 0009 (guest_wake.cpp) takes the Linux futex branch on the Switch too,
+# where <linux/futex.h> does not exist (the rexgpu-xenos build failed on it). Of its other 14 edits, 5 are in the
+# base or not needed there (threading_switch wait, critical-section spin, nop audio -> audout, fold table, vector
+# registers in ctx = non_volatile_as_local_keep), 5 are diagnostics (WAIT_REG_MEM statistics, hook counters (2),
+# swap histogram, CP wait meter) and 4 still have to be ported (audio client threads, the button-glyph swap in
+# host_path_file.cpp and virtual_file_system.cpp, the FPCR counter; FPCR one mode is the base's BLUR_FPCR_ONE_MODE).
+parts.append('''
+edit('src/graphics/guest_wake.cpp', [
+    ('#elif REX_PLATFORM_LINUX' + NL + '#include <climits>' + NL,
+     '#elif REX_PLATFORM_LINUX && !REX_PLATFORM_SWITCH' + NL + '#include <climits>' + NL),
+    ('#elif REX_PLATFORM_LINUX' + NL + '  std::atomic_thread_fence',
+     '#elif REX_PLATFORM_LINUX && !REX_PLATFORM_SWITCH' + NL + '  std::atomic_thread_fence'),
+])
+''')
 code = '\n'.join(parts) + '\n'
 if '--print' in sys.argv:
     print(code)
