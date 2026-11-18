@@ -1,0 +1,388 @@
+diff --git a/src/core/timer_queue.cpp b/src/core/timer_queue.cpp
+index 88c6814f..80bba690 100644
+--- a/src/core/timer_queue.cpp
++++ b/src/core/timer_queue.cpp
+@@ -27,56 +27,6 @@ using WaitItem = TimerQueueWaitItem;
+ // Timers are handed to a single dispatch thread, which blocks on a condition
+ // variable until a new timer arrives or the earliest pending one is due. It
+ // does not wake up while there is nothing to do.
+-namespace {
+-
+-// Waits on a condition variable instead of spinning. disruptorplus' own blocking strategy hands its predicate and
+-// timeout to std::condition_variable in the wrong order, so it cannot wait with a timeout.
+-class BlockingWaitStrategy {
+- public:
+-  dp::sequence_t wait_until_published(dp::sequence_t sequence, size_t count,
+-                                      const std::atomic<dp::sequence_t>* const sequences[]) {
+-    dp::sequence_t result;
+-    std::unique_lock<std::mutex> lock(mutex_);
+-    condition_.wait(lock, [&]() { return Published(sequence, count, sequences, &result); });
+-    return result;
+-  }
+-
+-  template <typename Rep, typename Period>
+-  dp::sequence_t wait_until_published(dp::sequence_t sequence, size_t count,
+-                                      const std::atomic<dp::sequence_t>* const sequences[],
+-                                      const std::chrono::duration<Rep, Period>& timeout) {
+-    return wait_until_published(sequence, count, sequences, std::chrono::steady_clock::now() + timeout);
+-  }
+-
+-  template <typename Clock, typename Duration>
+-  dp::sequence_t wait_until_published(dp::sequence_t sequence, size_t count,
+-                                      const std::atomic<dp::sequence_t>* const sequences[],
+-                                      const std::chrono::time_point<Clock, Duration>& timeout_time) {
+-    dp::sequence_t result;
+-    std::unique_lock<std::mutex> lock(mutex_);
+-    condition_.wait_until(lock, timeout_time,
+-                          [&]() { return Published(sequence, count, sequences, &result); });
+-    return result;
+-  }
+-
+-  void signal_all_when_blocking() {
+-    std::lock_guard<std::mutex> lock(mutex_);
+-    condition_.notify_all();
+-  }
+-
+- private:
+-  static bool Published(dp::sequence_t sequence, size_t count,
+-                        const std::atomic<dp::sequence_t>* const sequences[], dp::sequence_t* result) {
+-    *result = dp::minimum_sequence_after(sequence, count, sequences);
+-    return dp::difference(*result, sequence) >= 0;
+-  }
+-
+-  std::mutex mutex_;
+-  std::condition_variable condition_;
+-};
+-
+-}  // namespace
+-
+ //
+ // This used to be a disruptorplus ring buffer with a spin-wait strategy, which
+ // kept yielding and sleeping for 1 ms in a loop even with no timer queued: in
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index bcf0f1c5..dbcb60ef 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -258,29 +258,27 @@ void CommandProcessor::WorkerThreadMain() {
+     if (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index) {
+       SCOPE_profile_cpu_i("gpu", "rex::graphics::CommandProcessor::Stall");
+       // We've run out of commands to execute.
+-      // We spin here waiting for new ones, as the overhead of waiting on our
+-      // event is too high.
++      // A short yield burst catches back-to-back submissions, then sleep on the write pointer
++      // event so the core is free for the guest threads feeding the ring.
++      constexpr uint32_t kIdleYieldCount = 32;
+       PrepareForWait();
+-#if !REX_PLATFORM_SWITCH
++      bool poll_background_work = PollBackgroundWork();
+       uint32_t loop_count = 0;
+-#endif
+       do {
+-#if REX_PLATFORM_SWITCH
+-        // UpdateWritePointer and CallInThread signal the event. Leave the CPU free
+-        // for the guest from the first attempt, without 501 polls beforehand.
+-        rex::thread::Wait(write_ptr_index_event_.get(), true, std::chrono::milliseconds(5));
+-#else
+-        // If we spin around too much, revert to a "low-power" state.
+-        if (loop_count > 500) {
+-          const int wait_time_ms = 5;
+-          rex::thread::Wait(write_ptr_index_event_.get(), true,
+-                            std::chrono::milliseconds(wait_time_ms));
++        if (loop_count < kIdleYieldCount) {
++          rex::thread::MaybeYield();
++          loop_count++;
++        } else {
++          // Background work needs timely polling; thread calls posted without a write pointer
++          // update are only noticed when the wait times out. Not alertable: this thread has no
++          // APCs, and an alertable wait is polled in 1 ms slices on POSIX.
++          rex::thread::Wait(write_ptr_index_event_.get(), false,
++                            std::chrono::milliseconds(poll_background_work ? 1 : 5));
+         }
+-
+-        rex::thread::MaybeYield();
+-        loop_count++;
+-#endif
+         write_ptr_index = write_ptr_index_.load();
++        if (poll_background_work) {
++          poll_background_work = PollBackgroundWork();
++        }
+       } while (worker_running_ && pending_fns_.empty() &&
+                (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index));
+       ReturnFromWait();
+diff --git a/src/graphics/vulkan/render_target_cache.cpp b/src/graphics/vulkan/render_target_cache.cpp
+index 5e8e21e0..0a7fe2c0 100644
+--- a/src/graphics/vulkan/render_target_cache.cpp
++++ b/src/graphics/vulkan/render_target_cache.cpp
+@@ -1186,157 +1186,65 @@ bool VulkanRenderTargetCache::Resolve(const memory::Memory& memory,
+                                    copy_shader_constants, copy_group_count_x, copy_group_count_y);
+     assert_true(copy_group_count_x && copy_group_count_y);
+     if (copy_shader != draw_util::ResolveCopyShaderIndex::kUnknown) {
+-      const draw_util::ResolveCopyShaderInfo& copy_shader_info =
+-          draw_util::resolve_copy_shader_info[size_t(copy_shader)];
+-      if (GetPath() == Path::kHostRenderTargets) {
+-        // Dump the current contents of the render targets owning the affected
+-        // range to edram_buffer_.
+-        uint32_t dump_base;
+-        uint32_t dump_row_length_used;
+-        uint32_t dump_rows;
+-        uint32_t dump_pitch;
+-        resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
+-        if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch)) {
++      DeferredResolve writes = GetResolveWrites(resolve_info, copy_shader, copy_shader_constants,
++                                                copy_group_count_x, copy_group_count_y);
++      PrepareResolveDestination(writes);
++
++      // Textures sampling the destination must be found while they still match the memory.
++      draw_util::ResolveTextureCopy texture_copy;
++      RenderTarget* texture_copy_source = nullptr;
++      ResolveTextureCopyResult texture_copy_result =
++          GetPath() == Path::kHostRenderTargets
++              ? PlanResolveTextureCopy(resolve_info, texture_copy, texture_copy_source)
++              : ResolveTextureCopyResult::kDisabled;
++      if (texture_copy_result == ResolveTextureCopyResult::kEligible &&
++          copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
++        texture_copy_result = ResolveTextureCopyResult::kFormat;
++      }
++      uint32_t texture_copy_count = 0;
++      if (texture_copy_result == ResolveTextureCopyResult::kEligible) {
++        texture_copy_count = texture_cache.PrepareResolveTextureCopies(
++            texture_copy, GetColorVulkanFormat(texture_copy_source->key().GetColorFormat()));
++      }
++      TextureCache::DeferredResolveTexture deferred_texture =
++          texture_copy_count == 1 && CanDeferResolveWriteback(texture_copy, texture_cache,
++                                                              texture_cache.resolve_copy_texture(0))
++              ? texture_cache.resolve_copy_texture(0)
++              : nullptr;
++
++      if (deferred_texture) {
++        copied = true;
++      } else {
++        if (GetPath() == Path::kHostRenderTargets &&
++            !DumpRenderTargets(writes.dump_base, writes.dump_row_length_used, writes.dump_rows,
++                               writes.dump_pitch)) {
+           REXGPU_ERROR("VulkanRenderTargetCache: Failed to dump host render targets for resolve");
+           return false;
+         }
++        copied = DispatchResolveCopy(&shared_memory, texture_cache, writes);
+       }
+-
+-      uint32_t copy_dest_range_unscaled = resolve_info.copy_dest_extent_start -
+-                                          resolve_info.copy_dest_base +
+-                                          resolve_info.copy_dest_extent_length;
+-      uint64_t copy_dest_base = resolve_info.copy_dest_base;
+-      uint64_t copy_dest_range_length = copy_dest_range_unscaled;
+-      uint64_t copy_dest_use_start = resolve_info.copy_dest_extent_start;
+-      uint64_t copy_dest_use_length = resolve_info.copy_dest_extent_length;
+-      if (draw_resolution_scaled) {
+-        if (!texture_cache.GetScaledResolveRange(
+-                resolve_info.copy_dest_base, copy_dest_range_unscaled,
+-                copy_shader_info.dest_bpe_log2, copy_dest_base, copy_dest_range_length) ||
+-            !texture_cache.GetScaledResolveRange(
+-                resolve_info.copy_dest_extent_start, resolve_info.copy_dest_extent_length,
+-                copy_shader_info.dest_bpe_log2, copy_dest_use_start, copy_dest_use_length)) {
+-          REXGPU_ERROR(
+-              "VulkanRenderTargetCache: Failed to map scaled resolve "
+-              "destination range (base={:08X}, length={:08X})",
+-              resolve_info.copy_dest_base, copy_dest_range_unscaled);
+-          return false;
++      if (copied) {
++        // Invalidate textures and mark the range as scaled if needed.
++        texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
++                                          resolve_info.copy_dest_extent_length);
++        if (texture_copy_count) {
++          auto& source = *static_cast<VulkanRenderTarget*>(texture_copy_source);
++          command_processor_.PushImageMemoryBarrier(
++              source.image(), ui::vulkan::util::InitializeSubresourceRange(),
++              source.current_stage_mask(), VK_PIPELINE_STAGE_TRANSFER_BIT,
++              source.current_access_mask(), VK_ACCESS_TRANSFER_READ_BIT, source.current_layout(),
++              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++          source.SetUsage(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
++                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
++          texture_cache.PerformResolveTextureCopies(texture_copy, source.image());
+         }
+-      }
+-
+-      // Make sure there is memory to write to.
+-      bool copy_dest_committed;
+-      if (draw_resolution_scaled) {
+-        copy_dest_committed = texture_cache.CommitScaledResolveRange(
+-            resolve_info.copy_dest_base, copy_dest_range_unscaled, copy_shader_info.dest_bpe_log2);
+-      } else {
+-        copy_dest_committed = shared_memory.RequestRange(resolve_info.copy_dest_extent_start,
+-                                                         resolve_info.copy_dest_extent_length);
+-      }
+-      if (!copy_dest_committed) {
+-        REXGPU_ERROR(
+-            "VulkanRenderTargetCache: Failed to obtain the resolve destination "
+-            "memory region");
+-      } else {
+-        // TODO(Triang3l): Switching between descriptors if exceeding
+-        // maxStorageBufferRange.
+-        // TODO(Triang3l): Use a single 512 MB shared memory binding if
+-        // possible.
+-        VkDescriptorSet descriptor_set_dest = command_processor_.AllocateSingleTransientDescriptor(
+-            VulkanCommandProcessor::SingleTransientDescriptorLayout ::kStorageBufferCompute);
+-        if (descriptor_set_dest != VK_NULL_HANDLE) {
+-          // Write the destination descriptor.
+-          VkDescriptorBufferInfo write_descriptor_set_dest_buffer_info;
+-          write_descriptor_set_dest_buffer_info.buffer = draw_resolution_scaled
+-                                                             ? texture_cache.scaled_resolve_buffer()
+-                                                             : shared_memory.buffer();
+-          write_descriptor_set_dest_buffer_info.offset = copy_dest_base;
+-          write_descriptor_set_dest_buffer_info.range = copy_dest_range_length;
+-          VkWriteDescriptorSet write_descriptor_set_dest;
+-          write_descriptor_set_dest.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+-          write_descriptor_set_dest.pNext = nullptr;
+-          write_descriptor_set_dest.dstSet = descriptor_set_dest;
+-          write_descriptor_set_dest.dstBinding = 0;
+-          write_descriptor_set_dest.dstArrayElement = 0;
+-          write_descriptor_set_dest.descriptorCount = 1;
+-          write_descriptor_set_dest.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+-          write_descriptor_set_dest.pImageInfo = nullptr;
+-          write_descriptor_set_dest.pBufferInfo = &write_descriptor_set_dest_buffer_info;
+-          write_descriptor_set_dest.pTexelBufferView = nullptr;
+-          dfn.vkUpdateDescriptorSets(device, 1, &write_descriptor_set_dest, 0, nullptr);
+-
+-          // Submit the resolve.
+-          if (draw_resolution_scaled) {
+-            texture_cache.UseScaledResolveBufferForWrite(copy_dest_use_start, copy_dest_use_length);
+-          } else {
+-            shared_memory.Use(VulkanSharedMemory::Usage::kComputeWrite,
+-                              std::pair<uint32_t, uint32_t>(uint32_t(copy_dest_use_start),
+-                                                            uint32_t(copy_dest_use_length)));
+-          }
+-          UseEdramBuffer(EdramBufferUsage::kComputeRead);
+-          command_processor_.BindExternalComputePipeline(
+-              resolve_copy_pipelines_[size_t(copy_shader)]);
+-          VkDescriptorSet descriptor_sets[kResolveCopyDescriptorSetCount] = {};
+-          descriptor_sets[kResolveCopyDescriptorSetEdram] = edram_storage_buffer_descriptor_set_;
+-          descriptor_sets[kResolveCopyDescriptorSetDest] = descriptor_set_dest;
+-          command_buffer.CmdVkBindDescriptorSets(
+-              VK_PIPELINE_BIND_POINT_COMPUTE, resolve_copy_pipeline_layout_, 0,
+-              uint32_t(rex::countof(descriptor_sets)), descriptor_sets, 0, nullptr);
+-          if (draw_resolution_scaled) {
+-            command_buffer.CmdVkPushConstants(
+-                resolve_copy_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+-                sizeof(copy_shader_constants.dest_relative), &copy_shader_constants.dest_relative);
+-          } else {
+-            // TODO(Triang3l): Proper dest_base in case of one 512 MB shared
+-            // memory binding, or multiple shared memory bindings in case of
+-            // splitting due to maxStorageBufferRange overflow.
+-            copy_shader_constants.dest_base -=
+-                uint32_t(write_descriptor_set_dest_buffer_info.offset);
+-            command_buffer.CmdVkPushConstants(
+-                resolve_copy_pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+-                sizeof(copy_shader_constants), &copy_shader_constants);
+-          }
+-          command_processor_.SubmitBarriers(true);
+-#if REX_PLATFORM_SWITCH
+-          if (!RexSwitchPerfSkip(4))
+-#endif
+-          command_buffer.CmdVkDispatch(copy_group_count_x, copy_group_count_y, 1);
+-
+-          // Textures sampling the destination must be found while they still match the memory.
+-          draw_util::ResolveTextureCopy texture_copy;
+-          RenderTarget* texture_copy_source = nullptr;
+-          ResolveTextureCopyResult texture_copy_result =
+-              GetPath() == Path::kHostRenderTargets
+-                  ? PlanResolveTextureCopy(resolve_info, texture_copy, texture_copy_source)
+-                  : ResolveTextureCopyResult::kDisabled;
+-          if (texture_copy_result == ResolveTextureCopyResult::kEligible &&
+-              copy_shader != draw_util::ResolveCopyShaderIndex::kFast32bpp1x2xMSAA) {
+-            texture_copy_result = ResolveTextureCopyResult::kFormat;
+-          }
+-          uint32_t texture_copy_count = 0;
+-          if (texture_copy_result == ResolveTextureCopyResult::kEligible) {
+-            texture_copy_count = texture_cache.PrepareResolveTextureCopies(
+-                texture_copy, GetColorVulkanFormat(texture_copy_source->key().GetColorFormat()));
+-          }
+-
+-          // Invalidate textures and mark the range as scaled if needed.
+-          texture_cache.MarkRangeAsResolved(resolve_info.copy_dest_extent_start,
+-                                            resolve_info.copy_dest_extent_length);
+-          if (texture_copy_count) {
+-            auto& source = *static_cast<VulkanRenderTarget*>(texture_copy_source);
+-            command_processor_.PushImageMemoryBarrier(
+-                source.image(), ui::vulkan::util::InitializeSubresourceRange(),
+-                source.current_stage_mask(), VK_PIPELINE_STAGE_TRANSFER_BIT,
+-                source.current_access_mask(), VK_ACCESS_TRANSFER_READ_BIT, source.current_layout(),
+-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+-            source.SetUsage(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+-                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+-            texture_cache.PerformResolveTextureCopies(texture_copy, source.image());
+-          }
+-          written_address_out = resolve_info.copy_dest_extent_start;
+-          written_length_out = resolve_info.copy_dest_extent_length;
+-          copied = true;
++        if (deferred_texture) {
++          writes.source_key = texture_copy_source->key();
++          writes.texture = deferred_texture;
++          AddDeferredResolve(writes, texture_cache);
+         }
++        written_address_out = resolve_info.copy_dest_extent_start;
++        written_length_out = resolve_info.copy_dest_extent_length;
+       }
+     }
+   } else {
+@@ -5564,7 +5472,9 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+                   sizeof(uint32_t), &transfer_stencil_bit);
+               command_buffer.CmdVkSetStencilWriteMask(VK_STENCIL_FACE_FRONT_AND_BACK,
+                                                       transfer_stencil_bit);
++              command_buffer.CmdVkDraw(transfer_vertex_count, 1, 0, 0);
+             }
++          } else {
+ #if REX_PLATFORM_SWITCH
+             RexSwitchPerfCount(13);
+ #endif
+@@ -5575,6 +5485,19 @@ void VulkanRenderTargetCache::PerformTransfersAndResolveClears(
+           }
+         }
+       }
++
++      // Where the destination was cleared and the whole tile was transferred, it now has the
++      // source's; otherwise something of what it had may remain. A color render target that doesn't
++      // carry the stencil has it unknown.
++      bool dest_replaced = all_transfers_drawn && !get_cutout(i, dest_rt_key.is_depth);
++      for (const Transfer& transfer : current_transfers) {
++        for (uint32_t tile = transfer.start_tiles; tile < transfer.end_tiles; ++tile) {
++          uint32_t source_bits = GetTransferTileStencilBits(transfer, tile, dest_rt_key);
++          dest_vulkan_rt.SetTileStencilBits(
++              tile, dest_replaced ? source_bits
++                                  : (source_bits | dest_vulkan_rt.GetTileStencilBits(tile)));
++        }
++      }
+     }
+ 
+     // Perform the clear.
+diff --git a/src/system/xobject.cpp b/src/system/xobject.cpp
+index feed11e2..260b0127 100644
+--- a/src/system/xobject.cpp
++++ b/src/system/xobject.cpp
+@@ -295,8 +295,11 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
+ 
+   XThread::CheckTitleTermination();
+   if (wait_type) {
+-    auto result =
+-        rex::thread::WaitAny(wait_handles, count, alertable ? true : false, timeout_ms);
++    std::pair<rex::thread::WaitResult, size_t> result;
++    {
++      XThread::GuestWait wait;
++      result = rex::thread::WaitAny(wait_handles, count, alertable ? true : false, timeout_ms);
++    }
+     XThread::CheckTitleTermination();
+     switch (result.first) {
+       case rex::thread::WaitResult::kSuccess:
+@@ -316,8 +319,11 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
+         return X_STATUS_UNSUCCESSFUL;
+     }
+   } else {
+-    auto result =
+-        rex::thread::WaitAll(wait_handles, count, alertable ? true : false, timeout_ms);
++    rex::thread::WaitResult result;
++    {
++      XThread::GuestWait wait;
++      result = rex::thread::WaitAll(wait_handles, count, alertable ? true : false, timeout_ms);
++    }
+     XThread::CheckTitleTermination();
+     switch (result) {
+       case rex::thread::WaitResult::kSuccess:

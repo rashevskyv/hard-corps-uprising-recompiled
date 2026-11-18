@@ -40,3 +40,13 @@ for p in "$HERE"/patches/rexglue-sdk/*.patch; do
     echo "$out" | grep -E 'FAILED|can.t find file' | sed 's/^/    /' >> "$report" || true
 done
 echo "patches: $failed of $total hunks failed" | tee -a "$report"
+# 4. The failed hunks, merged by hand onto the base's text (patches/rexglue-sdk-base/0001): 0003+0019 (command
+#    processor idle loop: HCU's yield burst, background-work polling, non-alertable wait, on every platform), 0017 and
+#    0032 (Vulkan transfers and deferred resolve, the base's Switch perf lines kept where they still fit), 0033 (guest
+#    waits in WaitMultiple, on the base's (handles, count) signature). Dropped because the base already has them or a
+#    better form: 0004's primitive cache bound, 0034's exp_adjust word, 0006's timer queue (the base blocks on a
+#    condition variable; the hunk that applied is reverted), 0021's multi-wait (the base parks on a wake point).
+git add -A && git -c user.email=hcu@local -c user.name=hcu commit -qm "HCU patches, fuzz 3"
+patch -p1 --no-backup-if-mismatch < "$HERE/patches/rexglue-sdk-base/0001-hcu-failed-hunks-on-base.patch"
+git add -A && git -c user.email=hcu@local -c user.name=hcu commit -qm "HCU failed hunks merged onto the base"
+echo "failed hunks merged: $(git diff --stat HEAD~1 | tail -1)" | tee -a "$report"
