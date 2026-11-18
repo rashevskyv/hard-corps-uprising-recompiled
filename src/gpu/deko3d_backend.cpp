@@ -89,6 +89,10 @@ namespace rex::graphics::deko {
 namespace {
 
 constexpr uint32_t kFrames = 2;
+// Three, not kFrames: with two, a drawn frame's acquire waited for the previous frame's GPU work and the next vblank (up to
+// one more frame on the command processor thread, so the guest lost logic steps). The third image takes a frame the GPU
+// finished early, so the guest keeps its 60 steps a second at any shown rate.
+constexpr uint32_t kSwapImages = 3;
 constexpr uint32_t kMaxSteps = 4096;  // GPU timestamp reports of one frame's trail (Step)
 constexpr uint32_t kFrameDataBytes = 24u << 20;  // vertex, index and uniform data of one frame
 constexpr uint32_t kFrameCmdBytes = 4u << 20;
@@ -253,6 +257,7 @@ struct HostImage {
   std::unordered_map<HostImage*, uint32_t> merged;  // depth textures: piece image -> its content serial when copied in
   uint32_t resolve_swap = 0;  // the swap count when a resolve last filled this image (0 = never)
   uint32_t merge_epoch = 0;  // depth textures: the depth resolve count when the pieces were last looked at
+  uint64_t clean_key = 0;    // render targets (CLEAR SKIP): the value and rect of the last clear, 0 = written since
 };
 
 // Microseconds spent in a scope, added to a counter (the 60-swap log prints the per-frame averages: CPU recording
@@ -686,7 +691,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       std::memcpy(descriptors_.cpu + sampler_desc_offset_ + i * sizeof(DkSamplerDescriptor), &sd, sizeof(sd));
     }
     // The swapchain on the default window.
-    for (uint32_t i = 0; i < kFrames; i++) {
+    for (uint32_t i = 0; i < kSwapImages; i++) {
       HostImage* img = CreateImage(kPresentWidth, kPresentHeight, DkImageFormat_RGBA8_Unorm,
                                    DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression, false);
       if (!img) { Log("swapchain image %u failed", i); return false; }
@@ -694,7 +699,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       swap_image_ptrs_[i] = &img->image;
     }
     DkSwapchainMaker sm;
-    dkSwapchainMakerDefaults(&sm, device_, nwindowGetDefault(), swap_image_ptrs_, kFrames);
+    dkSwapchainMakerDefaults(&sm, device_, nwindowGetDefault(), swap_image_ptrs_, kSwapImages);
     swapchain_ = dkSwapchainCreate(&sm);
     if (!swapchain_) { Log("dkSwapchainCreate failed"); return false; }
     shader_dir_ = REXCVAR_GET(deko3d_shader_dir);
@@ -987,6 +992,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       return true;
     }
     BindTargets(cmd, color, depth);
+    if (color) color->clean_key = 0;  // CLEAR SKIP: a draw may write them
+    if (depth) depth->clean_key = 0;
     uint32_t target_w = color ? color->width : depth->width;
     uint32_t target_h = color ? color->height : depth->height;
 
@@ -1420,6 +1427,26 @@ class Deko3dCommandProcessor : public CommandProcessor {
       rex_nx_quick_exit("the GPU queue is in its error state (see the lines before)");
     }
 #endif
+    // EARLY SUBMIT (early_submit=1, the default): the scene is its own list, submitted and flushed before the acquire.
+    // dkQueueAcquireImage queues a GPU wait for the image's release (vblank) before every later submit: in the old order
+    // the whole scene waited behind it, and an 18 ms scene rounded up to 33 ms (30 shown). Now only the present pass
+    // (list two, same command buffer and fence: data, staging and descriptors stay alive until the fence) waits.
+    const bool early = hcu_settings.early_submit != 0;
+    if (early) {
+      dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
+#ifdef __SWITCH__
+      if (f.ts_off != UINT32_MAX) dkCmdBufReportCounter(cmd, DkCounter_Timestamp, timestamps_.gpu + f.ts_off + 16);
+#endif
+      DkCmdList scene = dkCmdBufFinishList(cmd);
+      {
+        ScopedUs timer(us_submit_);
+        dkQueueSubmitCommands(queue_, scene);
+        dkQueueFlush(queue_);
+      }
+      // A new list does not inherit the descriptor sets BeginFrame bound.
+      dkCmdBufBindImageDescriptorSet(cmd, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
+      dkCmdBufBindSamplerDescriptorSet(cmd, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
+    }
     int slot;
     {
       ScopedUs timer(us_acquire_);
@@ -1429,6 +1456,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (swaps_ < 5) Log("swap #%u: slot %d", swaps_ + 1, slot);
     HostImage* target = swap_images_[slot];
     dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+    if (early) {
+#ifdef __SWITCH__
+      if (f.ts_off != UINT32_MAX) dkCmdBufReportCounter(cmd, DkCounter_Timestamp, timestamps_.gpu + f.ts_off + 32);
+#endif
+      Step(f, "acquire wait (vsync, not GPU work)");
+    }
     DkImageView tv;
     dkImageViewDefaults(&tv, &target->image);
     DkImageView const* targets[1] = {&tv};
@@ -1437,8 +1470,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufSetViewports(cmd, 0, &vp, 1);
     DkScissor sc{0, 0, kPresentWidth, kPresentHeight};
     dkCmdBufSetScissors(cmd, 0, &sc, 1);
-    const float navy[4] = {0.0f, 0.0f, 0.25f, 1.0f};  // dark blue: visible when the present draw does not run
-    dkCmdBufClearColor(cmd, 0, DkColorMask_RGBA, navy);
+    // The front triangle covers every pixel: the clear (0.1 ms of 1280x720 writes) is only for a frame without it.
+    const uint32_t dslot = front && present_vs_ && present_fs_ ? DescriptorFor(f, front, 0) : UINT32_MAX;
+    if (dslot == UINT32_MAX) {
+      const float navy[4] = {0.0f, 0.0f, 0.25f, 1.0f};  // dark blue: visible when the present draw does not run
+      dkCmdBufClearColor(cmd, 0, DkColorMask_RGBA, navy);
+    }
     if (front && present_vs_ && present_fs_) {
       DkRasterizerState rs;
       dkRasterizerStateDefaults(&rs);
@@ -1459,7 +1496,6 @@ class Deko3dCommandProcessor : public CommandProcessor {
       dkCmdBufBindShaders(cmd, DkStageFlag_GraphicsMask, shaders, 2);
       dkCmdBufBindVtxAttribState(cmd, nullptr, 0);
       dkCmdBufBindVtxBufferState(cmd, nullptr, 0);
-      uint32_t dslot = DescriptorFor(f, front, 0);
       if (dslot != UINT32_MAX) {
         DkResHandle handle = dkMakeTextureHandle(dslot, 4);  // linear, clamp
         dkCmdBufBindTextures(cmd, DkStage_Fragment, 0, &handle, 1);
@@ -1519,7 +1555,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     Step(f, "present");
     dkCmdBufBarrier(cmd, DkBarrier_Full, 0);
 #ifdef __SWITCH__
-    if (f.ts_off != UINT32_MAX) dkCmdBufReportCounter(cmd, DkCounter_Timestamp, timestamps_.gpu + f.ts_off + 16);
+    if (f.ts_off != UINT32_MAX) dkCmdBufReportCounter(cmd, DkCounter_Timestamp, timestamps_.gpu + f.ts_off + 48);
 #endif
     DkCmdList list = dkCmdBufFinishList(cmd);
     {
@@ -1619,9 +1655,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
   // Every 1800 swaps in the skip modes: frames drawn, and frames skipped for a busy GPU.
   void LogSkips() {
-    if (swaps_ % 1800 || !(skip_odd_frames_ || skip_busy_)) return;
+    if (swaps_ % 1800 || !skip_busy_) return;
     std::printf("[nx] gpu: %s: %u of the last 1800 frames drawn, %u skipped because the GPU was still busy\n",
-                skip_odd_frames_ ? "30skip" : "60skip", drawn_frames_, busy_skips_);
+                skip_odd_frames_ ? "30" : fps45_ ? "45" : "60", drawn_frames_, busy_skips_);
     drawn_frames_ = busy_skips_ = 0;
   }
 
@@ -1647,13 +1683,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // delay one swap of a 60 Hz scene).
     if (skip_odd_frames_ && drawn && long_swaps_ < 2) {
       skip_frame_ = true;
-    } else if ((skip_odd_frames_ || skip_busy_) && frames_[frame_].fenced &&
-               dkFenceWait(&frames_[frame_].fence, poll_ns) != DkResult_Success) {
+    } else if (fps45_ && long_swaps_ < 2 && (pace_ = std::min(pace_ + 3, 7u)) < 4) {
+      skip_frame_ = true;  // 45: 3 of every 4 guest frames are drawn (pace_ counts quarter frames)
+    } else if (skip_busy_ && frames_[frame_].fenced && dkFenceWait(&frames_[frame_].fence, poll_ns) != DkResult_Success) {
       skip_frame_ = true;
       busy_skips_++;
       busy_in_a_row_++;
     }
     if (!skip_frame_) busy_in_a_row_ = 0;
+    if (!skip_frame_ && pace_ >= 4) pace_ -= 4;  // a busy skip keeps the frame due: the next one is drawn
     if (!skip_frame_ && !begun_) {
       BeginFrame();
       begun_ = true;
@@ -1661,10 +1699,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
  private:
-  // The frame-rate mode: file fps in the debug dir (sdmc:/switch/hcu/fps). No file or "30skip" (the default) = the guest
-  // keeps 60 frames a second but only every second one is drawn (the command processor still runs every packet: fences,
-  // write-backs, the guest's waits; see NextFrame); "60" = every frame drawn; "60skip" = every frame the GPU has a free
-  // slot for; "30" = every frame drawn, presented every second vblank (the game is frame-locked: it runs at half speed).
+  // The frame-rate mode (settings FRAME RATE, or the file fps in the debug dir). The game is frame-locked (one logic step a
+  // guest frame, paced by the 60 Hz vsync worker), so its speed stays 100 % only while the command processor never waits
+  // for the GPU: every mode but 3 skips a frame the GPU has no free slot for (see NextFrame). 0 = 30: every second frame
+  // drawn; 4 = 45: 3 of 4 drawn (OLED 45 Hz); 1 and 2 = 60: every frame the GPU has a slot for (until 0.331 mode 2 waited
+  // for the GPU, and a slow frame slowed the game: 18 ms frames ran it at 50 %); 3 = every frame drawn, presented every
+  // second vblank (the game at half speed). The swap interval stays 1 (no VRR or refresh-rate change is forced).
   // Read at start and every 60 swaps.
   void ReadSwapInterval() {
     // The files record_now / dump_now in the debug dir do what the menu's RECORD 5 SEC / DUMP NEXT FRAME do (scripted
@@ -1679,16 +1719,19 @@ class Deko3dCommandProcessor : public CommandProcessor {
     z_bias_ = hcu_settings.colour_bias;
     const int mode = hcu_settings.fps_mode;
     const uint32_t interval = mode == 3 ? 2 : 1;
-    const bool skip = mode == 0, busy = mode == 1;
-    if (interval == swap_interval_ && skip == skip_odd_frames_ && busy == skip_busy_ && swaps_) return;
+    const bool skip = mode == 0, busy = mode != 3, f45 = mode == 4;
+    if (interval == swap_interval_ && skip == skip_odd_frames_ && busy == skip_busy_ && f45 == fps45_ && swaps_) return;
     swap_interval_ = interval;
     skip_odd_frames_ = skip;
     skip_busy_ = busy;
+    fps45_ = f45;
+    pace_ = 0;
 #ifdef __SWITCH__
     dkSwapchainSetSwapInterval(swapchain_, interval);
 #endif
-    std::printf("[nx] gpu: swap interval %u, %s (%s) from swap #%u\n", interval, skip ? "every second frame drawn" : "every frame drawn",
-                skip ? "30skip" : interval == 2 ? "30 fps cap" : busy ? "60skip" : "60", swaps_);
+    std::printf("[nx] gpu: swap interval %u, %s (%s) from swap #%u\n", interval,
+                skip ? "every second frame drawn" : f45 ? "3 of 4 frames drawn" : "every frame drawn",
+                skip ? "30, busy skip" : interval == 2 ? "30 fps cap, half speed" : f45 ? "45, busy skip" : "60, busy skip", swaps_);
   }
 
   // Linux test host: HCU_DK_START_SWAP=N turns the backend into a null backend until swap N (the guest runs
@@ -1761,7 +1804,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (f.ts_off == UINT32_MAX || f.steps.empty()) return;
     const uint64_t* ts = reinterpret_cast<const uint64_t*>(timestamps_.cpu + f.ts_off);
     const uint64_t* reports = reinterpret_cast<const uint64_t*>(steps_.cpu) + uint64_t(&f - frames_) * kMaxSteps * 2;
-    const uint64_t t0 = ts[1] ? ts[1] : ts[0], t1 = ts[3] ? ts[3] : ts[2];
+    const uint64_t t0 = ts[1] ? ts[1] : ts[0], t1 = ts[7] ? ts[7] : ts[6];
+    const uint64_t wait = ts[3] && ts[5] > ts[3] ? ts[5] - ts[3] : 0;  // EARLY SUBMIT: the acquire wait between the lists
     auto ms = [](uint64_t ticks) { return double(ticks) * 625.0 / 384.0 / 1e6; };  // GPU ticks of 625/384 ns
     struct Group { uint32_t count = 0; uint64_t total = 0, max = 0, indices = 0; };
     std::unordered_map<std::string, Group> groups;
@@ -1798,9 +1842,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     std::vector<std::pair<std::string, Group>> sorted(groups.begin(), groups.end());
     std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second.total > b.second.total; });
-    char header[256];
-    std::snprintf(header, sizeof(header), "GPU step times, swap %u: %zu steps, frame top to bottom %.3f ms, steps sum %.3f ms, %u reports missing or out of order",
-                  swaps_, f.steps.size(), t1 > t0 ? ms(t1 - t0) : 0.0, ms(sum), bad);
+    char header[512];
+    const HcuSettings& s = hcu_settings;
+    std::snprintf(header, sizeof(header), "GPU step times, swap %u: %zu steps, frame top to bottom %.3f ms (GPU work %.3f ms without the acquire wait %.3f ms), "
+                  "steps sum %.3f ms, %u reports missing or out of order\nkeys: fps_mode=%d early_submit=%d clear_skip=%d shadow_direct=%d rt16=%d prepass_skip=%d depth32=%d",
+                  swaps_, f.steps.size(), t1 > t0 ? ms(t1 - t0) : 0.0, t1 > t0 + wait ? ms(t1 - t0 - wait) : 0.0, ms(wait), ms(sum), bad,
+                  s.fps_mode, s.early_submit, s.clear_skip, s.shadow_direct, s.rt16, s.prepass_skip, s.depth32);
     auto group_line = [&](const std::pair<std::string, Group>& e, char* out, size_t size) {
       std::snprintf(out, size, "%9.3f %5.1f%% %6u %8.3f %10llu  %s", ms(e.second.total), sum ? 100.0 * double(e.second.total) / double(sum) : 0.0,
                     e.second.count, ms(e.second.max), (unsigned long long)e.second.indices, e.first.c_str());
@@ -1865,8 +1912,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // The GPU's own time for that frame (timestamps in GPU ticks, 625/384 ns each): the CPU-work meter's gpu line.
       if (f.ts_off != UINT32_MAX) {
         const uint64_t* t = reinterpret_cast<const uint64_t*>(timestamps_.cpu + f.ts_off);
-        if (t[1] && t[3] > t[1]) rex_nx_meter_gpu_frame(double(t[3] - t[1]) * 625.0 / 384.0 / 1e6);
-        finished = r == DkResult_Success && (t[2] || t[3]);
+        // t[1] top, t[3] scene end and t[5] present start (EARLY SUBMIT only), t[7] bottom: the GPU's work without the
+        // acquire wait between the two lists.
+        if (t[1] && t[7] > t[1]) {
+          const uint64_t busy = t[3] && t[5] >= t[3] && t[7] >= t[5] ? (t[3] - t[1]) + (t[7] - t[5]) : t[7] - t[1];
+          rex_nx_meter_gpu_frame(double(busy) * 625.0 / 384.0 / 1e6);
+        }
+        finished = r == DkResult_Success && (t[6] || t[7]);
       }
 #endif
       // ponytail: the trail costs a formatted line and a GPU report per step, so it ends after 100 frames of 150+ draws
@@ -1898,8 +1950,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #ifdef __SWITCH__
     // In their own block, not in `data`: Eden served the read of the vertex ring after the fence slowly (0.323 battle:
     // 1.7 ms a drawn frame on those two loads in BeginFrame).
-    f.ts_off = frame_ * 32;
-    std::memset(timestamps_.cpu + f.ts_off, 0, 32);
+    f.ts_off = frame_ * 64;
+    std::memset(timestamps_.cpu + f.ts_off, 0, 64);
     dkCmdBufReportCounter(f.cmdbuf, DkCounter_Timestamp, timestamps_.gpu + f.ts_off);
     if (trail_) std::memset(steps_.cpu + frame_ * kMaxSteps * 16, 0, kMaxSteps * 16);
 #endif
@@ -1988,6 +2040,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         r->checked_serial = 0;
         r->guest_base = 0;
         r->edram_base = r->edram_pitch = 0;
+        r->clean_key = 0;
         return r;
       }
     }
@@ -2185,6 +2238,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       dkCmdBufCopyImage(f.cmdbuf, &sv, &sr, &dv, &dr, 0);
       dkCmdBufBarrier(f.cmdbuf, DkBarrier_Full, DkInvalidateFlags_Image);
       img->merged[p] = p->content_serial;
+      Step(f, "shadow merge %08X -> %08X row %u", it.first, img->guest_base, y);  // was counted in the next draw's time
       char key[64];
       std::snprintf(key, sizeof(key), "merge %08X %08X", img->guest_base, it.first);
       LogOnce(key, "depth image at %08X (%ux%u) copied into the texture at %08X at row %u", it.first, p->width, p->height, img->guest_base, y);
@@ -2612,11 +2666,28 @@ class Deko3dCommandProcessor : public CommandProcessor {
         else depth_img = TargetImage(depth_info.depth_base, pitch, g_depth_fmt, true);
       }
       if (!color_img && !depth_img) continue;
-      BindTargets(cmd, color_img, depth_img);
       uint32_t w = color_img ? color_img->width : depth_img->width, h = color_img ? color_img->height : depth_img->height;
       if (sc.x >= w || sc.y >= h) continue;
       if (sc.x + sc.width > w) sc.width = w - sc.x;
       if (sc.y + sc.height > h) sc.height = h - sc.y;
+      // CLEAR SKIP (clear_skip=1): a clear of the same rect to the same value as the last one, with no draw into the
+      // images since, writes what they already hold (dk_gpu_times_1: the 1280x720 colour+depth clear at the frame's start,
+      // repeated before the scene after the shadow pass: 0.4 ms). A colour target and a depth target each keep their own.
+      auto mix = [](uint64_t h, uint64_t v) { return h ^ (v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2)); };
+      const uint64_t rect_key = (uint64_t(sc.x) << 48) | (uint64_t(sc.y) << 32) | (uint64_t(sc.width) << 16) | sc.height;
+      uint32_t bits[5];
+      std::memcpy(bits, color, 16);
+      std::memcpy(bits + 4, &z, 4);
+      const uint64_t color_key = mix(mix(rect_key, (uint64_t(bits[0]) << 32) | bits[1]), (uint64_t(bits[2]) << 32) | bits[3]) | 1;
+      const uint64_t depth_key = mix(rect_key, bits[4]) | 1;
+      if (hcu_settings.clear_skip && (!color_img || color_img->clean_key == color_key) && (!depth_img || depth_img->clean_key == depth_key)) {
+        LogOnce("clearskip", "CLEAR SKIP: first skipped clear (EDRAM %u/%u rect %ux%u, swap #%u)", color_info.color_base, depth_info.depth_base,
+                sc.width, sc.height, swaps_);
+        continue;
+      }
+      if (color_img) color_img->clean_key = color_key;
+      if (depth_img) depth_img->clean_key = depth_key;
+      BindTargets(cmd, color_img, depth_img);
       dkCmdBufSetScissors(cmd, 0, &sc, 1);
       if (color_img) dkCmdBufClearColor(cmd, 0, DkColorMask_RGBA, color);
       if (depth_img) dkCmdBufClearDepthStencil(cmd, true, z, 0xFF, 0);
@@ -2658,6 +2729,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (cx + cw > d->width) cw = d->width - cx;
         if (cy + ch > d->height) ch = d->height - cy;
         BindTargets(cmd, nullptr, d);
+        d->clean_key = 0;  // CLEAR SKIP: not tracked for resolve clears
         DkScissor sc{cx, cy, cw, ch};
         dkCmdBufSetScissors(cmd, 0, &sc, 1);
         float z = float(info.rb_depth_clear >> 8) / float(0xFFFFFF);
@@ -2679,7 +2751,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
       uint32_t w = info.coordinate_info.width_div_8 * 8, h = info.height_div_8 * 8;
       uint32_t dx = info.copy_dest_coordinate_info.offset_x_div_8 * 8, dy = info.copy_dest_coordinate_info.offset_y_div_8 * 8;
       if (!dsrc || !w || !h) return true;
-      HostImage* dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, g_depth_fmt, true);
+      // SHADOW DIRECT (shadow_direct=1): a resolve to an address inside a larger depth image (HCU's cascades 2 and 3, rows
+      // 704 and 1408 of the one 2048x2048 shadow texture) goes straight to its rows. Without it each cascade is copied
+      // twice: into its own image here, then by MergeDepthPieces into the texture (dk_gpu_times_1: about 1.1 ms in the
+      // first receiver draw). Its newer content serial makes MergeDepthPieces skip the old piece images.
+      HostImage* dd = nullptr;
+      if (hcu_settings.shadow_direct) {
+        for (auto& it : guest_images_) {
+          HostImage* c = it.second;
+          if (c->format != g_depth_fmt || it.first >= info.copy_dest_base) continue;
+          const uint32_t stride = ((c->width + 31) & ~31u) * 32 * 4, delta = info.copy_dest_base - it.first;
+          if (delta % stride || delta / stride * 32 + dy + h > c->height || dx + w > c->width) continue;
+          dd = c;
+          dy += delta / stride * 32;
+          LogOnce("shadowdirect", "SHADOW DIRECT: depth resolve to %08X written into the depth image at %08X at row %u (swap #%u)",
+                  info.copy_dest_base, it.first, dy, swaps_ + 1);
+          break;
+        }
+      }
+      if (!dd) dd = GuestImage(f, info.copy_dest_base, dx + w, dy + h, g_depth_fmt, true);
       if (!dd) return true;
       dd->from_resolve = true;
       dd->content_serial = serial_;
@@ -2752,6 +2842,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     if (info.IsClearingColor()) {
       BindTargets(cmd, src, nullptr);
+      src->clean_key = 0;  // CLEAR SKIP: not tracked for resolve clears
       DkScissor sc{x, y, w, h};
       dkCmdBufSetScissors(cmd, 0, &sc, 1);
       uint32_t c = info.rb_color_clear;
@@ -2887,7 +2978,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   DkQueue queue_ = nullptr;
   DkSwapchain swapchain_ = nullptr;
   MemBlock code_, images_, descriptors_, cmdmem_;
-  MemBlock timestamps_;  // Frame::ts_off: 32 bytes per frame (two GPU timestamps)
+  MemBlock timestamps_;  // Frame::ts_off: 64 bytes per frame (top, scene end, present start, bottom)
   MemBlock steps_;       // Frame::steps: kMaxSteps reports of 16 bytes per frame
 #ifdef __SWITCH__
   bool trail_ = true;  // Step: a GPU timestamp after each draw, clear, resolve and upload of the first level frames
@@ -2900,8 +2991,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint32_t sampler_desc_offset_ = 0;
   Frame frames_[kFrames];
   uint32_t frame_ = 0;
-  HostImage* swap_images_[kFrames] = {};
-  DkImage const* swap_image_ptrs_[kFrames] = {};
+  HostImage* swap_images_[kSwapImages] = {};
+  DkImage const* swap_image_ptrs_[kSwapImages] = {};
   DkShader present_vs_shader_{}, present_fs_shader_{};
   bool present_vs_ = false, present_fs_ = false;
   bool present_target_ = false;
@@ -2996,7 +3087,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
 #endif
   uint32_t swap_interval_ = 1;
   bool skip_odd_frames_ = false;
-  bool skip_busy_ = false;  // 60skip: a frame the GPU has no free slot for is not drawn (NextFrame)
+  bool skip_busy_ = false;  // every mode but 3: a frame the GPU has no free slot for is not drawn (NextFrame)
+  bool fps45_ = false;      // mode 4: 3 of 4 frames drawn
+  uint32_t pace_ = 0;       // mode 4: quarter frames due (NextFrame)
   bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
   bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
   uint32_t drawn_frames_ = 0, busy_skips_ = 0, busy_in_a_row_ = 0;

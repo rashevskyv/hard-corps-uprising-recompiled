@@ -9,7 +9,13 @@
 extern "C" {
 
 struct HcuSettings {
-  int fps_mode;       // 0 = 30skip, 1 = 60skip, 2 = 60 (every frame), 3 = 30 cap (the game at half speed)
+  int fps_mode;       // 0 = 30, 4 = 45, 1 and 2 = 60 (all skip a frame the GPU is busy for: the game keeps 100 %),
+                      // 3 = 30 cap (the game at half speed)
+  int early_submit;   // 1 = the scene goes to the GPU before the swapchain image is acquired (its wait is only for the
+                      // present pass); 0 = the old order: the whole frame waited for vblank (18 ms frames shown at 30)
+  int clear_skip;     // 1 = a target clear to the value and rect of its last clear, with no draw since, is not done (live)
+  int shadow_direct;  // 1 = a depth resolve inside a larger depth image (the shadow cascades) is copied straight into it,
+                      // not into its own image and then merged (live)
   int strip;          // OVERLAY: the version / meter strip
   int fps_counter;    // FPS COUNTER: the fps, with the strip or alone (independent of OVERLAY)
   int rumble;
