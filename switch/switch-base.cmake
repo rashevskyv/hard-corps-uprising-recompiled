@@ -57,6 +57,29 @@ set_property(SOURCE switch/hcu_nx_main.cpp ${HCU_SWITCH_HOST}/input/nx_input_dri
 foreach(_t hcu hcu_recomp)
     target_compile_options(${_t} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-ffp-contract=off;-fno-strict-aliasing>")
 endforeach()
+# Item 15 of docs/bible-checklist.md: link-time optimisation (the base's BANJO_SWITCH_LTO and BANJO_SWITCH_SDK_OPT,
+# app/CMakeLists.txt of the base). The game code, HCU's code, the GPU plugin (deko3d) and the SDK runtime are compiled
+# to GIMPLE and optimised as one program at the link, which repeats -ffp-contract=off and -fno-strict-aliasing (the
+# LTRANS stage must not fuse what the compile stage kept apart): exact. Out of LTO: the files that define --wrap's
+# __wrap_ functions (the link must see them as ordinary definitions) and the ones with top-level asm naming C symbols.
+option(HCU_SWITCH_LTO "Link-time optimisation of the game code, HCU's code, the GPU plugin and the SDK runtime" ON)
+set(HCU_SWITCH_LTO_JOBS "4" CACHE STRING "Parallel LTRANS jobs of the LTO link")
+if(HCU_SWITCH_LTO)
+    set(_hcu_lto_compile -flto -fno-fat-lto-objects)
+    foreach(_t hcu_recomp hcu rexgpu-xenos rexruntime libavcodec libavutil rexaudio rexcore rexfilesystem rexinput rexui)
+        if(TARGET ${_t})
+            target_compile_options(${_t} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:${_hcu_lto_compile}>")
+            target_compile_definitions(${_t} PRIVATE XXH_FORCE_MEMORY_ACCESS=0)
+        endif()
+    endforeach()
+    target_link_options(hcu PRIVATE -flto=${HCU_SWITCH_LTO_JOBS} -flto-partition=balanced -ffp-contract=off
+                        -fno-strict-aliasing)
+    set_property(SOURCE switch/hcu_nx_base.cpp APPEND PROPERTY COMPILE_OPTIONS -fno-lto)
+    set_property(SOURCE "${REXSDK_DIR}/src/core/threading_switch.cpp" "${REXSDK_DIR}/src/ui/switch_perf.cpp"
+                        "${REXSDK_DIR}/src/core/exception_handler_switch.cpp" "${REXSDK_DIR}/src/core/fiber_switch.cpp"
+                 TARGET_DIRECTORY rexcore rexui APPEND PROPERTY COMPILE_OPTIONS -fno-lto)
+    message(STATUS "hcu: LTO (${HCU_SWITCH_LTO_JOBS} jobs)")
+endif()
 # hcu_version.h (switch/build-base.sh writes it into the build folder); src for settings_menu.h; lz4 from portlibs.
 target_include_directories(hcu PRIVATE src ${CMAKE_BINARY_DIR} "${DEVKITPRO}/portlibs/switch/include")
 foreach(_dep imgui xxhash)
