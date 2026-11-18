@@ -140,5 +140,12 @@ rm -f "$BUILD/hcu.nro"
 cmake --build "$BUILD" --parallel "${HCU_JOBS:-12}" -- -k 0 > "$BUILD/build.log" 2>&1 \
     || { grep -E 'error|Error|undefined reference' "$BUILD/build.log" | head -40; tail -5 "$BUILD/build.log"; exit 1; }
 ls -la "$BUILD"/hcu.nro "$BUILD"/hcu  # hcu = the ELF with symbols (addr2line)
+# A direct call goes past a hook: every function the ELF overrides (sub_X not at the address of __imp__sub_X) must be on
+# the hooked list. 0.354 overrides 3 (src/frame_meter.cpp, src/crt_native.cpp x2; the other REX_HOOK_RAW are PC-only).
+MISSED=$(aarch64-none-elf-nm "$BUILD/hcu" | awk '$3 ~ /^(__imp__)?sub_8[0-9A-F]{7}$/ { n = $3; sub(/^__imp__/, "", n);
+    if ($3 ~ /^__imp__/) imp[n] = $1; else s[n] = $1 } END { for (k in s) if (!(k in imp) || imp[k] != s[k]) print k }' \
+    | grep -vxFf "$ROOT/hooked.txt" || true)
+[ -z "$MISSED" ] || { echo "functions with a hook that direct calls skip (not in $ROOT/hooked.txt):" $MISSED; exit 1; }
 sha1sum "$BUILD"/hcu.nro
-python3 "$SRC/tools/nro_nacp.py" "$BUILD/hcu.nro" "$VERSION"
+# The NACP display version holds 15 characters: hbmenu shows a flavour suffix cut ("-n"); the logs carry it whole.
+python3 "$SRC/tools/nro_nacp.py" "$BUILD/hcu.nro" "${VERSION:0:15}"
