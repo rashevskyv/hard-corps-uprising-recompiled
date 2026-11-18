@@ -10,7 +10,7 @@
 
 // The defaults are the configuration the user verified on the console (run14, build 0.294): the hidden settings are still
 // read from settings.txt (A/B tests), the menu shows only the user settings.
-HcuSettings hcu_settings = {.fps_mode = 0, .early_submit = 1, .swap_images = 3, .clear_skip = 0, .shadow_direct = 0, .strip = 1, .fps_counter = 1, .rumble = 1, .shadow_bias = 0.f, .shadow_slope = 0.f,
+HcuSettings hcu_settings = {.fps_mode = 0, .early_submit = 1, .gpu_frames = 3, .swap_images = 3, .clear_skip = 0, .shadow_direct = 0, .strip = 1, .fps_counter = 1, .rumble = 1, .shadow_bias = 0.f, .shadow_slope = 0.f,
                             .colour_bias = 0.f, .precise = 0, .filter = 0, .lod_bias = 0.f, .aniso = 1.f, .shadow_map = 1,
                             .view = 0, .view_step = 0, .dump = 0, .record = 0, .dxt_cpu = 1, .depth32 = 0, .gamma = 0,
                             .rt16 = 1, .prepass_skip = 0, .upload_strips = 0, .tex_view = 0, .pad_applet = 0, .button_glyphs = 1};
@@ -52,8 +52,8 @@ void Save() {
   if (g_dir.empty()) return;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
-    std::fprintf(f, "fps_mode=%d\nearly_submit=%d\nswap_images=%d\nclear_skip=%d\nshadow_direct=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass_skip=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%s\n",
-                 s.fps_mode, s.early_submit, s.swap_images, s.clear_skip, s.shadow_direct, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass_skip, s.gamma, s.rt16, s.button_glyphs ? "switch" : "xbox");
+    std::fprintf(f, "fps_mode=%d\nearly_submit=%d\ngpu_frames=%d\nswap_images=%d\nclear_skip=%d\nshadow_direct=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass_skip=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%s\n",
+                 s.fps_mode, s.early_submit, s.gpu_frames, s.swap_images, s.clear_skip, s.shadow_direct, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass_skip, s.gamma, s.rt16, s.button_glyphs ? "switch" : "xbox");
     std::fclose(f);
   }
 }
@@ -77,6 +77,7 @@ void hcu_settings_load(const char* dir) {
       if (std::sscanf(line, "%31[^=]=%f", key, &v) != 2) continue;
       if (!std::strcmp(key, "fps_mode")) s.fps_mode = int(v);
       else if (!std::strcmp(key, "early_submit")) s.early_submit = int(v);
+      else if (!std::strcmp(key, "gpu_frames")) s.gpu_frames = int(v) == 2 ? 2 : 3;
       else if (!std::strcmp(key, "swap_images")) s.swap_images = int(v) == 2 ? 2 : 3;
       else if (!std::strcmp(key, "clear_skip")) s.clear_skip = int(v);
       else if (!std::strcmp(key, "shadow_direct")) s.shadow_direct = int(v);

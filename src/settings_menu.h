@@ -13,7 +13,8 @@ struct HcuSettings {
                       // 3 = 30 cap (the game at half speed)
   int early_submit;   // 1 = the scene goes to the GPU before the swapchain image is acquired (its wait is only for the
                       // present pass); 0 = the old order: the whole frame waited for vblank (18 ms frames shown at 30)
-  int swap_images;    // swapchain images, 2 or 3 (at start): 3 = a drawn frame's acquire seldom waits (up to one more
+  int gpu_frames;     // frames in flight, 2 or 3 (at start): 3 = an 18 ms GPU frame is not skipped every second frame
+  int swap_images;   // swapchain images, 2 or 3 (at start): 3 = a drawn frame's acquire seldom waits (up to one more
                       // frame of display latency); 2 = the build 0.331 setup
   int clear_skip;    // 1 = a target clear to the value and rect of its last clear, with no draw since, is not done (live)
   int shadow_direct;  // 1 = a depth resolve inside a larger depth image (the shadow cascades) is copied straight into it,

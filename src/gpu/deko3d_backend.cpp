@@ -88,8 +88,8 @@ namespace rex::graphics::deko {
 
 namespace {
 
-constexpr uint32_t kFrames = 2;
-// Three, not kFrames: with two, a drawn frame's acquire waited for the previous frame's GPU work and the next vblank (up to
+constexpr uint32_t kFrames = 3;  // frame slots at most (n_frames_ in use: settings gpu_frames)
+// Three, not two: with two, a drawn frame's acquire waited for the previous frame's GPU work and the next vblank (up to
 // one more frame on the command processor thread, so the guest lost logic steps). The third image takes a frame the GPU
 // finished early, so the guest keeps its 60 steps a second at any shown rate.
 constexpr uint32_t kSwapImages = 3;
@@ -642,10 +642,25 @@ class Deko3dCommandProcessor : public CommandProcessor {
       Log("memory block creation failed");
       return false;
     }
-    for (uint32_t i = 0; i < kFrames; i++) {
+    // The settings (settings.txt and the A/B marker files in the debug dir, src/settings_menu.cpp). The sampler ones apply
+    // here, at start: the fine horizontal hatching over the whole picture (console only) has the period of the game's 480x272
+    // post-effect buffers stretched to 1280x720 (TEXTURE FILTER, file sfix).
+    const std::string sdir = REXCVAR_GET(deko3d_shader_dir);  // shader_dir_ is set below; the debug dir is its parent
+    const size_t scut = sdir.size() >= 2 ? sdir.rfind('/', sdir.size() - 2) : std::string::npos;
+    hcu_settings_load(scut == std::string::npos ? "" : sdir.substr(0, scut + 1).c_str());
+    // GPU FRAMES (gpu_frames=2|3, default 3): frames in flight. With 2, an 18 ms GPU frame left the busy poll one frame
+    // short every second frame (60 -> 40 shown); a third slot (+100 MB: data, staging, commands) absorbs it. A third
+    // slot whose memory fails falls back to 2.
+    n_frames_ = hcu_settings.gpu_frames == 2 ? 2 : kFrames;
+    for (uint32_t i = 0; i < n_frames_; i++) {
       Frame& f = frames_[i];
       if (!f.data.Create(device_, kFrameDataBytes, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached) ||
           !f.staging.Create(device_, kStagingBytes, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)) {
+        if (i >= 2) {
+          Log("frame %u memory failed: %u frames in flight", i, i);
+          n_frames_ = i;
+          break;
+        }
         Log("frame %u memory failed", i);
         return false;
       }
@@ -658,12 +673,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     sampler_desc_offset_ = kFrames * kMaxImageDescriptors * sizeof(DkImageDescriptor);
     // Samplers, indexed by SamplerIndex: the min and mag filters (the fetch instruction may override the
     // fetch constant's), the border colour (black / white) and every Xenos clamp mode per axis.
-    // The settings (settings.txt and the A/B marker files in the debug dir, src/settings_menu.cpp). The sampler ones apply
-    // here, at start: the fine horizontal hatching over the whole picture (console only) has the period of the game's 480x272
-    // post-effect buffers stretched to 1280x720 (TEXTURE FILTER, file sfix).
-    const std::string sdir = REXCVAR_GET(deko3d_shader_dir);  // shader_dir_ is set below; the debug dir is its parent
-    const size_t scut = sdir.size() >= 2 ? sdir.rfind('/', sdir.size() - 2) : std::string::npos;
-    hcu_settings_load(scut == std::string::npos ? "" : sdir.substr(0, scut + 1).c_str());
+    Log("frames in flight: %u (GPU FRAMES)", n_frames_);
     g_dxt_cpu = hcu_settings.dxt_cpu != 0;
     g_depth_fmt = hcu_settings.depth32 ? DkImageFormat_ZF32_X24S8 : DkImageFormat_Z24S8;
     g_rt16 = hcu_settings.rt16 != 0;
@@ -774,6 +784,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
   bool IssueDraw(xenos::PrimitiveType prim_type, uint32_t index_count, IndexBufferInfo* index_buffer_info,
                  bool major_mode_explicit) override {
+    DecideFrame();
     ScopedUs timer(us_draw_);
     return IssueDrawImpl(prim_type, index_count, index_buffer_info, major_mode_explicit);
   }
@@ -1242,6 +1253,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
   bool IssueCopy() override {
+    DecideFrame();
     ScopedUs timer(us_copy_);
     if (Skipping()) return true;
     SyncDirtyPages();
@@ -1249,6 +1261,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
 
   void IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width, uint32_t frontbuffer_height) override {
+    DecideFrame();
     rex_nx_meter_cp_frame(meter_block_us_, !Skipping());
     {
       // The guest's swap interval, for 30skip (NextFrame): a 30 Hz scene (the movies) swaps every ~33 ms.
@@ -1649,7 +1662,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     last_drawn_draws_ = frame_draws_;
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
     frame_vtx_reused_ = frame_uniform_sets_ = frame_uniform_reuses_ = 0;
-    frame_ = (frame_ + 1) % kFrames;
+    frame_ = (frame_ + 1) % n_frames_;
     begun_ = false;
     drawn_frames_++;
     NextFrame(true);
@@ -1675,11 +1688,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
       rex_nx_quick_exit("the GPU queue is in its error state (see the lines before)");
     }
 #endif
-    // The busy poll. A wait of 0 only reads the fence's semaphore; one with a timeout also asks the GPU channel for
-    // its error (deko3d gpu_error.cpp): a fault then puts the queue in its error state (the exit above, with the fault
-    // in the log from libdeko3dd) and signals every fence. Console 0.273: a fault under 60skip was 300 busy polls of 0
-    // in a row (the picture frozen), found only by the first wait with a timeout.
-    const int64_t poll_ns = busy_in_a_row_ && busy_in_a_row_ % 30 == 0 ? 1000000ll : 0;
+    // The busy poll (DecideFrame): a wait of 0 only reads the fence's semaphore; one with a timeout also asks the GPU
+    // channel for its error (deko3d gpu_error.cpp): a fault then puts the queue in its error state (the exit above, with
+    // the fault in the log from libdeko3dd) and signals every fence. Console 0.273: a fault under 60skip was 300 busy
+    // polls of 0 in a row (the picture frozen), found only by the first wait with a timeout.
     // A 30 Hz scene (two guest swaps in a row over kLongSwapMs apart: the movies) is not halved again to 15 frames a
     // second: the frame after a drawn one is drawn too. One long interval is not enough (a drawn frame's acquire can
     // delay one swap of a 60 Hz scene).
@@ -1687,14 +1699,29 @@ class Deko3dCommandProcessor : public CommandProcessor {
       skip_frame_ = true;
     } else if (fps45_ && long_swaps_ < 2 && (pace_ = std::min(pace_ + 3, 7u)) < 4) {
       skip_frame_ = true;  // 45: 3 of every 4 guest frames are drawn (pace_ counts quarter frames)
-    } else if (skip_busy_ && frames_[frame_].fenced && dkFenceWait(&frames_[frame_].fence, poll_ns) != DkResult_Success) {
+    }
+    // The busy poll is lazy (DecideFrame): right after this swap the frame slot's last frame was still on the GPU
+    // (an 18 ms GPU frame finishes ~1.3 ms after the next swap), so every second frame was skipped: 60 -> 40 shown.
+    busy_pending_ = !skip_frame_ && skip_busy_;
+    if (!skip_frame_ && !busy_pending_) StartFrame();
+  }
+  // At the frame's first draw, copy or swap (the only entry points that record): the busy poll NextFrame left pending.
+  void DecideFrame() {
+    if (!busy_pending_) return;
+    busy_pending_ = false;
+    const int64_t poll_ns = busy_in_a_row_ && busy_in_a_row_ % 30 == 0 ? 1000000ll : 0;
+    if (frames_[frame_].fenced && dkFenceWait(&frames_[frame_].fence, poll_ns) != DkResult_Success) {
       skip_frame_ = true;
       busy_skips_++;
       busy_in_a_row_++;
+      return;
     }
-    if (!skip_frame_) busy_in_a_row_ = 0;
-    if (!skip_frame_ && pace_ >= 4) pace_ -= 4;  // a busy skip keeps the frame due: the next one is drawn
-    if (!skip_frame_ && !begun_) {
+    StartFrame();
+  }
+  void StartFrame() {
+    busy_in_a_row_ = 0;
+    if (pace_ >= 4) pace_ -= 4;  // a busy skip keeps a 45 frame due: the next one is drawn
+    if (!begun_) {
       BeginFrame();
       begun_ = true;
     }
@@ -1847,9 +1874,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     char header[512];
     const HcuSettings& s = hcu_settings;
     std::snprintf(header, sizeof(header), "GPU step times, swap %u: %zu steps, frame top to bottom %.3f ms (GPU work %.3f ms without the acquire wait %.3f ms), "
-                  "steps sum %.3f ms, %u reports missing or out of order\nkeys: fps_mode=%d early_submit=%d swap_images=%d clear_skip=%d shadow_direct=%d rt16=%d prepass_skip=%d depth32=%d",
+                  "steps sum %.3f ms, %u reports missing or out of order\nkeys: fps_mode=%d early_submit=%d gpu_frames=%u swap_images=%d clear_skip=%d shadow_direct=%d rt16=%d prepass_skip=%d depth32=%d",
                   swaps_, f.steps.size(), t1 > t0 ? ms(t1 - t0) : 0.0, t1 > t0 + wait ? ms(t1 - t0 - wait) : 0.0, ms(wait), ms(sum), bad,
-                  s.fps_mode, s.early_submit, s.swap_images, s.clear_skip, s.shadow_direct, s.rt16, s.prepass_skip, s.depth32);
+                  s.fps_mode, s.early_submit, n_frames_, s.swap_images, s.clear_skip, s.shadow_direct, s.rt16, s.prepass_skip, s.depth32);
     auto group_line = [&](const std::pair<std::string, Group>& e, char* out, size_t size) {
       std::snprintf(out, size, "%9.3f %5.1f%% %6u %8.3f %10llu  %s", ms(e.second.total), sum ? 100.0 * double(e.second.total) / double(sum) : 0.0,
                     e.second.count, ms(e.second.max), (unsigned long long)e.second.indices, e.first.c_str());
@@ -3092,6 +3119,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool skip_busy_ = false;  // every mode but 3: a frame the GPU has no free slot for is not drawn (NextFrame)
   bool fps45_ = false;      // mode 4: 3 of 4 frames drawn
   uint32_t pace_ = 0;       // mode 4: quarter frames due (NextFrame)
+  bool busy_pending_ = false;  // the frame's busy poll is still to be done (DecideFrame)
+  uint32_t n_frames_ = kFrames;  // frame slots in use (settings gpu_frames=2|3)
   bool skip_frame_ = false;  // this frame is not drawn (NextFrame)
   bool begun_ = true;        // frames_[frame_] is ready for recording (BeginFrame ran)
   uint32_t drawn_frames_ = 0, busy_skips_ = 0, busy_in_a_row_ = 0;
