@@ -80,6 +80,8 @@ COUNT=$(git_src rev-list --count HEAD 2>/dev/null || echo 0)
 SHA=$(git_src rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
 DIRTY=$(git_src -c core.autocrlf=true status --porcelain --untracked-files=no 2>/dev/null | grep -q . && echo "+" || true)
 VERSION="0.$COUNT.$SHA$DIRTY"
+# A flavour NRO names itself in hbmenu and in every log line that carries the version.
+case " $* " in *" -DHCU_NO_VOLATILE=ON "*) VERSION="$VERSION-novol" ;; esac
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
@@ -94,7 +96,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"
