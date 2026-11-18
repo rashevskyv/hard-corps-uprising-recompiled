@@ -24,6 +24,7 @@
 #define REX_NX_METER_IMPL  // the real meter entry points, not the header's weak defaults
 #include <rex/chrono/clock.h>
 #include <rex/hook.h>
+#include <rex/nx_hook_counter.h>  // rex/hook.h includes it only with HCU_NX_METER
 
 #include "settings_menu.h"
 
