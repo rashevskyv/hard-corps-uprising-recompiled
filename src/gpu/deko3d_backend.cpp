@@ -691,7 +691,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       std::memcpy(descriptors_.cpu + sampler_desc_offset_ + i * sizeof(DkSamplerDescriptor), &sd, sizeof(sd));
     }
     // The swapchain on the default window.
-    for (uint32_t i = 0; i < kSwapImages; i++) {
+    const uint32_t swap_images = hcu_settings.swap_images == 2 ? 2 : kSwapImages;  // settings swap_images=2: the old setup
+    for (uint32_t i = 0; i < swap_images; i++) {
       HostImage* img = CreateImage(kPresentWidth, kPresentHeight, DkImageFormat_RGBA8_Unorm,
                                    DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_HwCompression, false);
       if (!img) { Log("swapchain image %u failed", i); return false; }
@@ -699,7 +700,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       swap_image_ptrs_[i] = &img->image;
     }
     DkSwapchainMaker sm;
-    dkSwapchainMakerDefaults(&sm, device_, nwindowGetDefault(), swap_image_ptrs_, kSwapImages);
+    dkSwapchainMakerDefaults(&sm, device_, nwindowGetDefault(), swap_image_ptrs_, swap_images);
+    Log("swapchain: %u images", swap_images);
     swapchain_ = dkSwapchainCreate(&sm);
     if (!swapchain_) { Log("dkSwapchainCreate failed"); return false; }
     shader_dir_ = REXCVAR_GET(deko3d_shader_dir);
@@ -1845,9 +1847,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     char header[512];
     const HcuSettings& s = hcu_settings;
     std::snprintf(header, sizeof(header), "GPU step times, swap %u: %zu steps, frame top to bottom %.3f ms (GPU work %.3f ms without the acquire wait %.3f ms), "
-                  "steps sum %.3f ms, %u reports missing or out of order\nkeys: fps_mode=%d early_submit=%d clear_skip=%d shadow_direct=%d rt16=%d prepass_skip=%d depth32=%d",
+                  "steps sum %.3f ms, %u reports missing or out of order\nkeys: fps_mode=%d early_submit=%d swap_images=%d clear_skip=%d shadow_direct=%d rt16=%d prepass_skip=%d depth32=%d",
                   swaps_, f.steps.size(), t1 > t0 ? ms(t1 - t0) : 0.0, t1 > t0 + wait ? ms(t1 - t0 - wait) : 0.0, ms(wait), ms(sum), bad,
-                  s.fps_mode, s.early_submit, s.clear_skip, s.shadow_direct, s.rt16, s.prepass_skip, s.depth32);
+                  s.fps_mode, s.early_submit, s.swap_images, s.clear_skip, s.shadow_direct, s.rt16, s.prepass_skip, s.depth32);
     auto group_line = [&](const std::pair<std::string, Group>& e, char* out, size_t size) {
       std::snprintf(out, size, "%9.3f %5.1f%% %6u %8.3f %10llu  %s", ms(e.second.total), sum ? 100.0 * double(e.second.total) / double(sum) : 0.0,
                     e.second.count, ms(e.second.max), (unsigned long long)e.second.indices, e.first.c_str());
