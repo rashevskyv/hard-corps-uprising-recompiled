@@ -57,6 +57,14 @@ set_property(SOURCE switch/hcu_nx_main.cpp ${HCU_SWITCH_HOST}/input/nx_input_dri
 foreach(_t hcu hcu_recomp)
     target_compile_options(${_t} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-ffp-contract=off;-fno-strict-aliasing>")
 endforeach()
+# Item 9 of docs/bible-checklist.md: guest loads and stores without volatile, loop barriers at the guest loops that need
+# them (switch/build-base.sh runs the base's tools/pch_no_volatile.py and tools/loop_barriers.py on the tree). OFF
+# (default): HCU_KEEP_VOLATILE, the code as before. ON: the base's "optimised" flavour (masseffect-nx: +15-20 % fps);
+# a risk of a hang at a guest wait that the barriers miss, so an A/B NRO first.
+option(HCU_NO_VOLATILE "Guest loads and stores without volatile (with the loop barriers)" OFF)
+if(NOT HCU_NO_VOLATILE)
+    target_compile_definitions(hcu_recomp PRIVATE HCU_KEEP_VOLATILE)
+endif()
 # Item 15 of docs/bible-checklist.md: link-time optimisation (the base's BANJO_SWITCH_LTO and BANJO_SWITCH_SDK_OPT,
 # app/CMakeLists.txt of the base). The game code, HCU's code, the GPU plugin (deko3d) and the SDK runtime are compiled
 # to GIMPLE and optimised as one program at the link, which repeats -ffp-contract=off and -fno-strict-aliasing (the

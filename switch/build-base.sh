@@ -33,7 +33,8 @@ fi
 # Codegen, then the store cards (tools/store_cards.py of the base renames the stores outside the stack to their
 # card-marking forms; the deko3d renderer reads the cards). Again whenever the manifest, its config, the CLI or the
 # cards tool changed.
-CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$CLI" "$BASE/tools/store_cards.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
+CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$CLI" "$BASE/tools/store_cards.py" \
+    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
 if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.hcu-codegen-stamp" 2>/dev/null)" != "$CG_STAMP" ]; then
     rm -rf "$SRC/generated"
     (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1) \
@@ -47,10 +48,26 @@ if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.
     if cat "$SRC"/generated/default/*.cpp | grep '__sync_bool_compare_and_swap' | grep -vq 'REX_CARD(ea);$'; then
         echo "a CAS without its store card (switch/build-base.sh)"; exit 1
     fi
+    # Item 9 of docs/bible-checklist.md: guest loads and stores without volatile, with the loop barriers they need
+    # (the base's tools; without the barriers GCC turns a guest polling loop into a branch to itself). The cmake option
+    # HCU_NO_VOLATILE picks the flavour: OFF (default) defines HCU_KEEP_VOLATILE, which gives back volatile and empties
+    # the barriers, so the default NRO compiles the code as before and both NROs come from this one tree.
+    PCH=$(ls "$SRC"/generated/default/*_pch.h)
+    python3 "$BASE/tools/pch_no_volatile.py" "$PCH" > "$ROOT/loop-barriers.log" 2>&1 \
+        || { cat "$ROOT/loop-barriers.log"; exit 1; }
+    python3 "$BASE/tools/loop_barriers.py" "$SRC/generated/default" >> "$ROOT/loop-barriers.log" 2>&1 \
+        || { cat "$ROOT/loop-barriers.log"; exit 1; }
+    # After the tools (pch_no_volatile.py skips a pch that already names REX_GUEST_VOLATILE); in front of their #ifndef.
+    sed -i 's|^#define REX_RAW_ADDR(x) |#if defined(HCU_KEEP_VOLATILE)  // switch/build-base.sh: HCU_NO_VOLATILE OFF\n#define REX_GUEST_VOLATILE volatile\n#define REX_LOOP_BARRIER() ((void)0)\n#endif\n&|' "$PCH"
+    # This CLI's output is not the base's: no loop header found means the pass did not understand it.
+    grep -qE ': [1-9][0-9]* loop headers' "$ROOT/loop-barriers.log" || { cat "$ROOT/loop-barriers.log"; exit 1; }
     echo "$CG_STAMP" > "$SRC/generated/.hcu-codegen-stamp"
 fi
-# Without the cards the renderer would never see a guest write: the build stops.
+# Without the cards the renderer would never see a guest write: the build stops. The same for the flavour switch.
 PCH=$(ls "$SRC"/generated/default/*_pch.h)
+[ "$(grep -c 'HCU_KEEP_VOLATILE\|^#define REX_GUEST_VOLATILE$\|loop barrier (tools/loop_barriers.py)' "$PCH")" -ge 3 ] \
+    || { echo "no volatile switch or loop barrier macro in $PCH"; exit 1; }
+cat "$ROOT/loop-barriers.log"
 grep -q '#define REX_CARD(ea)' "$PCH" || { echo "no store cards in $PCH (tools/store_cards.py)"; exit 1; }
 # The stores left without a card (each should go through the stack pointer) and the ones with it.
 echo "stores: $(cat "$SRC"/generated/default/*.cpp | grep -oE '\b(REX_STORE_(D_)?U(8|16|32|64)|REX_STVLX|REX_STVRX|REX_STORE_(D_)?F32ANY)(_C)?\(' \
