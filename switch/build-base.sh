@@ -32,6 +32,7 @@ NO_VOLATILE=$(opt HCU_NO_VOLATILE 0 "$@")
 DIRECT_CALLS=$(opt HCU_DIRECT_CALLS 1 "$@")
 GUEST_CAS=$(opt HCU_GUEST_CAS 0 "$@")
 METER=$(opt HCU_NX_METER 0 "$@")
+FLOAT_LOADS=$(opt HCU_FLOAT_LOADS 1 "$@")
 
 CLI=$SDK/out/linux-amd64/Release/rexglue
 [ -x "$CLI" ] || { echo "no host CLI: $CLI"; exit 1; }
@@ -49,7 +50,7 @@ fi
 # card-marking forms; the deko3d renderer reads the cards). Again whenever the manifest, its config, the CLI or the
 # cards tool changed.
 CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$CLI" "$BASE/tools/store_cards.py" \
-    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$BASE/tools/guest_cas.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
+    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$BASE/tools/guest_cas.py" "$BASE/tools/float_loads.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
 if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.hcu-codegen-stamp" 2>/dev/null)" != "$CG_STAMP" ]; then
     rm -rf "$SRC/generated"
     (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1) \
@@ -83,6 +84,14 @@ if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.
     sed -i 's|^#define REX_RAW_ADDR(x) |#if defined(HCU_KEEP_VOLATILE)  // switch/build-base.sh: HCU_NO_VOLATILE OFF\n#define REX_GUEST_VOLATILE volatile\n#define REX_LOOP_BARRIER() ((void)0)\n#endif\n&|' "$PCH"
     # This CLI's output is not the base's: no loop header found means the pass did not understand it.
     grep -qE ': [1-9][0-9]* loop headers' "$ROOT/loop-barriers.log" || { cat "$ROOT/loop-barriers.log"; exit 1; }
+    # Item 11c (the base's post-codegen steps; each has a cmake option that switches it off at compile time, so every
+    # flavour comes from this one tree). tools/float_loads.py: a single-precision load as `ldr s` + `rev32` in the
+    # vector unit instead of `ldr w` + `rev` + `fmov` (the same four bytes). Its `ldr s` goes through REX_GUEST_VOLATILE
+    # like every other guest load (the base copies with memcpy: not volatile), so the default stays volatile-exact.
+    # -DHCU_FLOAT_LOADS=OFF defines REX_FLOAT_LOADS_INTEGER: the loads as before (flavour "-nofl").
+    python3 -I "$BASE/tools/float_loads.py" --gen "$SRC/generated/default" > "$ROOT/passes.log" 2>&1 \
+        || { cat "$ROOT/passes.log"; exit 1; }
+    sed -i 's|^  __builtin_memcpy(&f, p, 4);  // ldr s$|  f = *(REX_GUEST_VOLATILE const float*)p;  // ldr s (switch/build-base.sh: volatile)|' "$PCH"
     echo "$CG_STAMP" > "$SRC/generated/.hcu-codegen-stamp"
 fi
 # Item 11 of docs/bible-checklist.md (the base's post-codegen step tools/direct_calls.py): a call to a game function
@@ -114,6 +123,8 @@ PCH=$(ls "$SRC"/generated/default/*_pch.h)
 cat "$ROOT/loop-barriers.log"
 grep -q '#define REX_CARD(ea)' "$PCH" || { echo "no store cards in $PCH (tools/store_cards.py)"; exit 1; }
 grep -q '(tools/guest_cas.py)' "$PCH" || { echo "no REX_GUEST_CAS in $PCH (tools/guest_cas.py)"; exit 1; }
+grep -q '(switch/build-base.sh: volatile)$' "$PCH" || { echo "no volatile float load in $PCH (tools/float_loads.py)"; exit 1; }
+cat "$ROOT/passes.log"
 # The stores left without a card (each should go through the stack pointer) and the ones with it.
 echo "stores: $(cat "$SRC"/generated/default/*.cpp | grep -oE '\b(REX_STORE_(D_)?U(8|16|32|64)|REX_STVLX|REX_STVRX|REX_STORE_(D_)?F32ANY)(_C)?\(' \
     | sed 's/($//' | sort | uniq -c | tr '\n' ' ') CAS with card: $(cat "$SRC"/generated/default/*.cpp | grep -c 'REX_CARD(ea);$')"
@@ -130,6 +141,7 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 [ "$DIRECT_CALLS" = 0 ] && VERSION="$VERSION-nodirect"
 [ "$GUEST_CAS" = 1 ] && VERSION="$VERSION-cas"
 [ "$METER" = 1 ] && VERSION="$VERSION-meter"
+[ "$FLOAT_LOADS" = 0 ] && VERSION="$VERSION-nofl"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
@@ -144,7 +156,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"

@@ -76,6 +76,12 @@ option(HCU_GUEST_CAS "Guest compare-and-swap without the trailing dmb" OFF)
 if(NOT HCU_GUEST_CAS)
     target_compile_definitions(hcu_recomp PRIVATE REX_GUEST_CAS_LEGACY)
 endif()
+# Item 11c: the base's tools/float_loads.py (run by switch/build-base.sh). ON: a single-precision guest load as
+# `ldr s` + `rev32` (the same bits, still volatile). OFF: REX_FLOAT_LOADS_INTEGER, the integer load as before.
+option(HCU_FLOAT_LOADS "Single-precision guest loads in the vector unit" ON)
+if(NOT HCU_FLOAT_LOADS)
+    target_compile_definitions(hcu_recomp PRIVATE REX_FLOAT_LOADS_INTEGER)
+endif()
 # Item 15 of docs/bible-checklist.md: link-time optimisation (the base's BANJO_SWITCH_LTO and BANJO_SWITCH_SDK_OPT,
 # app/CMakeLists.txt of the base). The game code, HCU's code, the GPU plugin (deko3d) and the SDK runtime are compiled
 # to GIMPLE and optimised as one program at the link, which repeats -ffp-contract=off and -fno-strict-aliasing (the
