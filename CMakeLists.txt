@@ -219,6 +219,10 @@ add_executable(hcu_frame_counter_tests EXCLUDE_FROM_ALL tests/frame_counter_test
 target_include_directories(hcu_frame_counter_tests PRIVATE src)
 target_compile_definitions(hcu_frame_counter_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+# deko3d strip text tests, not part of the default build: cmake --build <dir> --target hcu_overlay_text_tests
+add_executable(hcu_overlay_text_tests EXCLUDE_FROM_ALL tests/overlay_text_tests.cpp)
+target_include_directories(hcu_overlay_text_tests PRIVATE src)
+
 # Skip intro setting tests, not part of the default build: cmake --build <dir> --target hcu_skip_intro_tests
 add_executable(hcu_skip_intro_tests EXCLUDE_FROM_ALL tests/skip_intro_tests.cpp)
 target_include_directories(hcu_skip_intro_tests PRIVATE src)

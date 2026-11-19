@@ -43,7 +43,7 @@ Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, 
 | --- | --- |
 | FRAME RATE | 30 (default), 60 SKIP WHEN BUSY, 60, 30 HALF SPEED |
 | OVERLAY | the version and performance line at the bottom of the screen: ON (default), OFF |
-| FPS COUNTER | the frame rate at the bottom of the screen: ON (default), OFF. It does not depend on OVERLAY: with OVERLAY off the frame rate is shown alone. |
+| FPS COUNTER | the frame rate at the bottom of the screen: ON (default), OFF. It does not depend on OVERLAY: with OVERLAY off the frame rate is shown alone. After the rate it shows `t <seconds> #<swap>`: the time since the first drawn frame and the swap number, the same clock and counter as the log's `swap #...` lines and the -meter build's `[nx] load t ... s, swap #...` line, so a screenshot finds its place in the log. |
 | RUMBLE | ON (default), OFF |
 | BUTTON ICONS | the button pictures in the game's prompts: SWITCH (default, our own Switch button icons), XBOX (the game's Xbox icons, with the A/B and X/Y pictures swapped so that each one shows the Switch letter of that button, as in 0.303). Applies at the next start. In `settings.txt`: `button_glyphs=switch` or `button_glyphs=xbox`. |
 | CONTROLLERS | press **A**: the console's controller applet (1 or 2 players). Pair the second controller there for local 2-player. |

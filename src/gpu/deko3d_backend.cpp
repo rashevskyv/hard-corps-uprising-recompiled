@@ -55,6 +55,7 @@
 #ifdef __SWITCH__
 #include "../frame_recorder.h"
 #endif
+#include "overlay_text.h"
 #include "ucode_hash.h"
 #include "untile_fast.h"
 
@@ -563,7 +564,7 @@ static inline uint64_t armGetSystemTickFreq() { return 1000000000ull; }
 static inline const char* rex_nx_version() { return "linux"; }
 #endif
 
-constexpr uint32_t kOverlayW = 768, kOverlayH = 20, kOverlayScale = 2;
+constexpr uint32_t kOverlayW = 1264, kOverlayH = 20, kOverlayScale = 2;  // 105 glyphs: the longest strip text fits
 
 struct Glyph {
   char ch;
@@ -638,6 +639,7 @@ constexpr Glyph kGlyphs[] = {
     {')', {8, 4, 2, 2, 2, 4, 8}},
     {'=', {0, 0, 31, 0, 31, 0, 0}},
     {'%', {24, 25, 2, 4, 8, 19, 3}},
+    {'#', {10, 10, 31, 10, 31, 10, 10}},
 };
 
 // Draws `text` in white into px (w pixels wide, RGBA8 little-endian = 0xAABBGGRR) from (x, y).
@@ -1477,6 +1479,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // short strip (overlay_w).
     {
       const uint64_t now = armGetSystemTick();
+      if (!clock_t0_) clock_t0_ = now;  // the first drawn swap: t 0 of the strip and of the [nx] load line
       if (!fps_tick_) fps_tick_ = now;
       fps_frames_++;
       if (now - fps_tick_ >= armGetSystemTickFreq()) {
@@ -1492,15 +1495,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (!overlay_[frame_]) overlay_[frame_] = CreateImage(kOverlayW, kOverlayH, DkImageFormat_RGBA8_Unorm, DkImageFlags_UsageRender, false);
       overlay = overlay_[frame_];
       if (overlay) {
-        char text[96];
-        char fps[24] = "";
-        if (fps_on) std::snprintf(fps, sizeof(fps), "%u.%u fps", fps_x10_ / 10, fps_x10_ % 10);
-        if (strip_on) {
-          std::snprintf(text, sizeof(text), "HCU %s  %s%s%s", rex_nx_version(), fps, fps_on ? "  " : "", rex_nx_meter_text);
-        } else {
-          std::snprintf(text, sizeof(text), "%s", fps);
-          overlay_w = 4 + uint32_t(std::strlen(text)) * 6 * kOverlayScale + 2;  // DrawText: from x = 4, 6 columns a glyph
-        }
+        char text[sizeof(overlay_text_)];
+        // swaps_ + 1: this frame's number in the log (swaps_ counts it after the present below).
+        ::hcu::OverlayText(text, sizeof(text), strip_on, fps_on, rex_nx_version(), fps_x10_,
+                         double(armGetSystemTick() - clock_t0_) / double(armGetSystemTickFreq()), swaps_ + 1, rex_nx_meter_text);
+        overlay_w = std::min(kOverlayW, 4 + uint32_t(std::strlen(text)) * 6 * kOverlayScale + 2);  // DrawText: from x = 4, 6 columns a glyph
         if (std::strcmp(text, overlay_text_) != 0) {
           RenderOverlayText(overlay_px_.data(), text);
           std::memcpy(overlay_text_, text, sizeof(overlay_text_));
@@ -1816,7 +1815,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // a time and a load.
   void LoadLine() {
     const uint64_t now = armGetSystemTick(), freq = armGetSystemTickFreq();
-    if (!load_t0_) load_t0_ = load_last_ = now;
+    if (!load_last_) load_last_ = now;
     load_frames_++;
     load_draws_ += frame_draws_;
     load_draws_max_ = std::max(load_draws_max_, frame_draws_);
@@ -1824,12 +1823,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     uint32_t a, b, passes;
     hcu_meter_collision(&a, &b, &passes);
     std::printf("[nx] load t %.1f s, swap #%u, fps_mode %d: %u drawn (shown) frames, draws per frame avg %.0f max %u; collision groups max %u + %u (%u passes)\n",
-                double(now - load_t0_) / double(freq), swaps_, hcu_settings.fps_mode, load_frames_, double(load_draws_) / load_frames_, load_draws_max_, a, b, passes);
+                double(now - clock_t0_) / double(freq), swaps_, hcu_settings.fps_mode, load_frames_, double(load_draws_) / load_frames_, load_draws_max_, a, b, passes);
     load_last_ = now;
     load_frames_ = load_draws_max_ = 0;
     load_draws_ = 0;
   }
-  uint64_t load_t0_ = 0, load_last_ = 0, load_draws_ = 0;
+  uint64_t load_last_ = 0, load_draws_ = 0;
   uint32_t load_frames_ = 0, load_draws_max_ = 0;
 
 #endif
@@ -3547,12 +3546,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
   HostImage* overlay_[kFrames] = {};  // the version / fps strip, one image per frame in flight
   HostImage* menu_[kFrames] = {};     // the settings menu, the same way
   std::vector<uint32_t> menu_px_ = std::vector<uint32_t>(kMenuW * kMenuH);
-  char overlay_text_[96] = {};
-  char overlay_slot_text_[kFrames][96] = {};  // the text each overlay_ image holds (uploaded on a change only)
+  char overlay_text_[112] = {};
+  char overlay_slot_text_[kFrames][112] = {};  // the text each overlay_ image holds (uploaded on a change only)
   float ramp_f_[256 * 4] = {};                // the present shader's gamma table (4096 bytes), built on a change only
   uint32_t ramp_seen_[256] = {};              // the game's 256-entry table it was built from
   bool ramp_identity_ = false, ramp_built_ = false;
-  uint64_t fps_tick_ = 0;
+  uint64_t fps_tick_ = 0, clock_t0_ = 0;  // clock_t0_: the first drawn swap's tick
   uint32_t fps_frames_ = 0, fps_x10_ = 0;
   std::vector<uint32_t> overlay_px_ = std::vector<uint32_t>(kOverlayW * kOverlayH);
   bool always_upload_ = false;
