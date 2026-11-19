@@ -446,6 +446,15 @@ void TestSwitchLockWiring() {
   CHECK(menu.find("{\"GAME\", \"1\", \"2\"}, 3,") == std::string::npos);
   CHECK(menu.find("cheat_level_a = int(v) >= 0 && int(v) <= 3") != std::string::npos);
   CHECK(menu.find("cheat_level_b = int(v) >= 0 && int(v) <= 3") != std::string::npos);
+  // The cheats are on their own page (kCheats), opened by the main page's line CHEATS; B goes back from it.
+  const size_t main_page = menu.find("const Item kItems[] = {");
+  const size_t cheat_page = menu.find("const Item kCheats[] = {");
+  CHECK(main_page != std::string::npos && cheat_page != std::string::npos && main_page < cheat_page);
+  CHECK(menu.substr(main_page, cheat_page - main_page).find("cheat_") == std::string::npos);
+  CHECK(menu.substr(main_page, cheat_page - main_page).find("{\"CHEATS\", {\">\"}") != std::string::npos);
+  CHECK(menu.find("\"GOD MODE\"", cheat_page) != std::string::npos);
+  CHECK(menu.find("\"START STAGE\"", cheat_page) != std::string::npos);
+  CHECK(menu.find("B BACK") != std::string::npos);
 
   const std::string cheats = ReadSource("cheats.cpp");
   CHECK(cheats.find("REX_HOOK_RAW(sub_8246A8B0)") != std::string::npos);
@@ -456,6 +465,15 @@ void TestSwitchLockWiring() {
   CHECK(cooldown != std::string::npos && jump != std::string::npos && cooldown < jump);
   CHECK(cheats.substr(cooldown, jump - cooldown).find("Locks") == std::string::npos);
   CHECK(cheats.substr(cooldown, jump - cooldown).find("AlignSlots") == std::string::npos);
+  // The Switch build (HCU_CHEATS) leaves the PC-only hooks out: jump, movement and super armor have no Switch key.
+  for (const char* hook : {"REX_HOOK_RAW(sub_824884C8)", "REX_HOOK_RAW(sub_82409FF0)", "REX_HOOK_RAW(sub_824B2728)"}) {
+    const size_t at = cheats.find(hook);
+    const size_t guard = cheats.rfind("#if !defined(HCU_CHEATS)", at);
+    CHECK(at != std::string::npos && guard != std::string::npos && guard > cheats.rfind("#endif", at));
+  }
+  // The start stage hook does nothing more than the call while cheat_stage and cheat_log are 0.
+  const size_t stage = cheats.find("REX_HOOK_RAW(sub_824F0BF0) {");
+  CHECK(stage != std::string::npos && cheats.find("if (hcu_settings.cheat_stage == 0 && !Log())", stage) < cheats.find("Game(base)", stage));
 }
 
 void TestNoStaleKnockbackCheat() {

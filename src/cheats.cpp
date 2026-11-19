@@ -10,8 +10,8 @@
 namespace cheats = hcu::cheats;
 
 #if defined(HCU_CHEATS)
-// Switch, -DHCU_CHEATS=ON (flavour "-cheats"): the keys are settings.txt's (src/settings_menu.h), read live; there is
-// no session menu, so the session layer only ever follows them.
+// Switch (switch/switch-base.cmake defines HCU_CHEATS; every NRO has the cheats, all keys 0 = off): the keys are
+// settings.txt's (src/settings_menu.h), read live; there is no session menu, so the session layer only follows them.
 #include <cstdio>
 
 #include "settings_menu.h"
@@ -401,6 +401,10 @@ REX_HOOK_RAW(sub_8243E768) {
 // The title / stage menu state machine. The new-game path writes G+28 (the chosen stage) and G+0 = 1.
 REX_EXTERN(__imp__sub_824F0BF0);
 REX_HOOK_RAW(sub_824F0BF0) {
+  if (hcu_settings.cheat_stage == 0 && !Log()) {
+    __imp__sub_824F0BF0(ctx, base);
+    return;
+  }
   const uint32_t g = Game(base);
   const uint32_t g0 = g ? Load32(base, g) : 0, g28 = g ? Load32(base, g + 28) : 0;
   __imp__sub_824F0BF0(ctx, base);
@@ -477,6 +481,9 @@ REX_HOOK_RAW(sub_8240D778) {
   __imp__sub_8240D778(ctx, base);
 }
 
+#if !defined(HCU_CHEATS)
+// PC only: jump height, movement speed and super armor have no Switch key, so the Switch build does not hook these
+// shared object and hit-handler functions (no cost on their hot path).
 // Obj::Jump(this, float speed, float alternate speed, float gravity), shared by every object class.
 REX_EXTERN(__imp__sub_824884C8);
 REX_HOOK_RAW(sub_824884C8) {
@@ -486,6 +493,7 @@ REX_HOOK_RAW(sub_824884C8) {
   }
   __imp__sub_824884C8(ctx, base);
 }
+#endif
 
 // Player::ArmWeaponDrop(this): the hit handler arms it, and the player script then drops the weapon.
 // Disarming it keeps the weapon and also stops the dropped item from appearing.
@@ -513,6 +521,7 @@ REX_HOOK_RAW(sub_8240E8D0) {
   __imp__sub_8240E8D0(ctx, base);
 }
 
+#if !defined(HCU_CHEATS)  // PC only (see the jump hook)
 // Script commands 4504 (set horizontal velocity) and 4503 (set velocity). Their params are the target
 // selector (0 = the script's own object) and the speed.
 namespace {
@@ -617,3 +626,4 @@ REX_HOOK_RAW(sub_824B4398) {
     ctx.r3.u64 = 0;
   }
 }
+#endif

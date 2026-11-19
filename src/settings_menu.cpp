@@ -24,6 +24,7 @@ namespace {
 std::string g_dir;
 bool g_open = false;
 int g_row = 0;
+int g_page = 0;  // 0 = SETTINGS, 1 = CHEATS
 uint32_t g_last = 0;
 
 // One menu line: its option names and how an option index maps to the settings.
@@ -51,7 +52,17 @@ const Item kItems[] = {
     // An action, not a value: the console's controller applet (1 or 2 players, full pads), for local 2-player.
     {"CONTROLLERS", {"PRESS A"}, 1, false, [] { return 0; }, [](int) { hcu_settings.pad_applet = 1; }},
 #if defined(HCU_CHEATS)
-    // The cheats of src/cheats.cpp (flavour "-cheats"): this file only sets the keys, the hooks read them (live).
+    // Opens the CHEATS page (kCheats): A, left or right.
+    {"CHEATS", {">"}, 1, false, [] { return 0; }, [](int) { g_page = 1, g_row = 0; }},
+#endif
+    // The diagnostic items (biases, shadow map, prepass, gamma, 16F targets, views, dumps, precise, strips, DXT, depth
+    // 32, texture view) left the menu for the release (git history before 2026-11-03); settings.txt still sets them.
+};
+constexpr int kCount = sizeof(kItems) / sizeof(kItems[0]);
+
+#if defined(HCU_CHEATS)
+// The CHEATS page: the keys of src/cheats.cpp. This file only sets them, the hooks read them (live). B goes back.
+const Item kCheats[] = {
     {"GOD MODE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_god; }, [](int i) { hcu_settings.cheat_god = i; }},
     {"INFINITE LIVES", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_lives; }, [](int i) { hcu_settings.cheat_lives = i; }},
     {"INFINITE HEALTH", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_health; }, [](int i) { hcu_settings.cheat_health = i; }},
@@ -66,11 +77,18 @@ const Item kItems[] = {
     {"LEVEL SLOT B", {"GAME", "0", "1", "2"}, 4, false, [] { return hcu_settings.cheat_level_b; }, [](int i) { hcu_settings.cheat_level_b = i; }},
     {"START STAGE", {"GAME", "1", "2", "3", "4", "5", "6", "7", "8"}, 9, false, [] { return hcu_settings.cheat_stage; },
      [](int i) { hcu_settings.cheat_stage = i; }},
-#endif
-    // The diagnostic items (biases, shadow map, prepass, gamma, 16F targets, views, dumps, precise, strips, DXT, depth
-    // 32, texture view) left the menu for the release (git history before 2026-11-03); settings.txt still sets them.
 };
-constexpr int kCount = sizeof(kItems) / sizeof(kItems[0]);
+constexpr int kCheatCount = sizeof(kCheats) / sizeof(kCheats[0]);
+#else
+const Item* const kCheats = nullptr;
+constexpr int kCheatCount = 0;
+#endif
+
+// The lines of the page shown: 0 = SETTINGS, 1 = CHEATS.
+const Item* Page(int& count) {
+  count = g_page ? kCheatCount : kCount;
+  return g_page ? kCheats : kItems;
+}
 
 void Save() {
   if (g_dir.empty()) return;
@@ -206,18 +224,25 @@ int hcu_menu_input(uint32_t held) {
   const uint32_t combo = HCU_MENU_LS | HCU_MENU_RS;
   if ((held & combo) == combo && (down & combo)) {
     g_open = !g_open;
+    if (g_page) g_page = 0, g_row = kCount - 1;  // the menu opens again on SETTINGS, at the CHEATS line
     if (!g_open) Save();
     return 1;
   }
   if (!g_open) return 0;
   if (down & HCU_MENU_B) {
+    if (g_page) {
+      g_page = 0, g_row = kCount - 1;  // back to the CHEATS line (the last of kItems)
+      return 1;
+    }
     g_open = false;
     Save();
     return 1;
   }
-  if (down & HCU_MENU_UP) g_row = (g_row + kCount - 1) % kCount;
-  if (down & HCU_MENU_DOWN) g_row = (g_row + 1) % kCount;
-  const Item& it = kItems[g_row];
+  int count;
+  const Item* items = Page(count);
+  if (down & HCU_MENU_UP) g_row = (g_row + count - 1) % count;
+  if (down & HCU_MENU_DOWN) g_row = (g_row + 1) % count;
+  const Item& it = items[g_row];
   const int was = it.get();
   if (down & (HCU_MENU_RIGHT | HCU_MENU_A)) it.set((was + 1) % it.count);
   if (down & HCU_MENU_LEFT) it.set((was + it.count - 1) % it.count);
@@ -229,14 +254,16 @@ int hcu_menu_input(uint32_t held) {
 }
 
 int hcu_menu_lines(char lines[][48], int max_lines) {
-  if (!g_open || max_lines < kCount + 2) return 0;  // the title, the items, the footer
+  int count;
+  const Item* items = Page(count);
+  if (!g_open || max_lines < count + 2) return 0;  // the title, the items, the footer
   int n = 0;
-  std::snprintf(lines[n++], 48, "  SETTINGS");
-  for (int i = 0; i < kCount; i++) {
-    const Item& it = kItems[i];
+  std::snprintf(lines[n++], 48, g_page ? "  CHEATS" : "  SETTINGS");
+  for (int i = 0; i < count; i++) {
+    const Item& it = items[i];
     std::snprintf(lines[n++], 48, "%c %-18s %s%s", i == g_row ? '>' : ' ', it.label, it.names[it.get()], it.at_start ? " (RESTART)" : "");
   }
-  std::snprintf(lines[n++], 48, "  B CLOSE   LEFT / RIGHT / A CHANGE");
+  std::snprintf(lines[n++], 48, g_page ? "  B BACK    LEFT / RIGHT / A CHANGE" : "  B CLOSE   LEFT / RIGHT / A CHANGE");
   return n;
 }
 

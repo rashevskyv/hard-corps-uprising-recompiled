@@ -204,7 +204,7 @@ inline double ScaledMovementSpeed(double speed, uint32_t state = 0) {
   return ScaledMovementVelocity({speed, 0.0}, state).x;
 }
 
-// Switch settings.txt keys (-DHCU_CHEATS=ON).
+// Switch settings.txt keys (HCU_CHEATS, switch/switch-base.cmake).
 // cheat_level_a / _b: 0 = the game's level, 1..3 = level 0..2 (key - 1), capped by the game's maximum.
 inline int32_t LockedLevel(int cheat_level, int32_t current, int32_t max) {
   if (cheat_level <= 0) {

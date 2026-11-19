@@ -69,7 +69,7 @@ struct HcuSettings {
                           // loaded and bound for the draws with alpha_test_enable 0 (no discard there)
   int shadow_target;      // 1 = SHADOW TARGET: the shadow cascades are cleared and drawn straight into their resolve
                           // destination (last frame's resolves predict it); the matching resolve copies nothing
-  // Cheats (src/cheats.cpp, only in a -DHCU_CHEATS=ON build, flavour "-cheats"; the menu shows them there). All 0 = off.
+  // Cheats (src/cheats.cpp, every NRO of switch/switch-base.cmake; the menu's CHEATS page). All 0 = off.
   int cheat_lives;         // the stock never falls
   int cheat_health;        // no damage
   int cheat_keep_weapons;  // a hit that leaves the player alive does not take the weapon

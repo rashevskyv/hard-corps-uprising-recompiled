@@ -38,7 +38,6 @@ INLINE_MEMCALLS=$(opt HCU_INLINE_MEMCALLS 1 "$@")
 FPCR_ONE=$(opt HCU_FPCR_ONE_MODE 0 "$@")
 DFORM=$(opt HCU_DFORM 0 "$@")  # this script's only (no CMake option): a codegen key
 RO_CONSTANTS=$(opt HCU_RO_CONSTANTS 1 "$@")
-CHEATS=$(opt HCU_CHEATS 0 "$@")
 PGO=""  # HCU_PGO is a string (empty, generate or use): the last -DHCU_PGO=... wins
 for a in "$@"; do case "$a" in -DHCU_PGO=*|-DHCU_PGO:*=*) PGO=${a##*=} ;; esac; done
 
@@ -249,7 +248,6 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 [ "$DFORM" = 1 ] && VERSION="$VERSION-dform"
 [ "$DFORM" = 1 ] && [ "$RO_CONSTANTS" = 0 ] && VERSION="$VERSION-noro"
 VERSION="$VERSION$CG_SUFFIX"
-[ "$CHEATS" = 1 ] && VERSION="$VERSION-cheats"
 # The instrumented NRO is slow (never a speed test): hbmenu and its logs must say so.
 [ "$PGO" = generate ] && VERSION="$VERSION-pgogen"
 [ "$PGO" = use ] && VERSION="$VERSION-pgo"
@@ -267,7 +265,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON -DHCU_FPCR_ONE_MODE=OFF -DHCU_RO_CONSTANTS=ON -DHCU_CHEATS=OFF -DHCU_PGO= "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON -DHCU_FPCR_ONE_MODE=OFF -DHCU_RO_CONSTANTS=ON -DHCU_PGO= "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"
@@ -282,5 +280,7 @@ MISSED=$(aarch64-none-elf-nm "$BUILD/hcu" | awk '$3 ~ /^(__imp__)?sub_8[0-9A-F]{
     | grep -vxFf "$ROOT/hooked.txt" || true)
 [ -z "$MISSED" ] || { echo "functions with a hook that direct calls skip (not in $ROOT/hooked.txt):" $MISSED; exit 1; }
 sha1sum "$BUILD"/hcu.nro
+# Without packaging/switch/icon-local.jpg (gitignored game art, switch/switch-base.cmake) hbmenu shows the default icon.
+[ -f "$SRC/packaging/switch/icon-local.jpg" ] || echo "WARNING: no packaging/switch/icon-local.jpg: the NRO has the devkitPro default icon"
 # The NACP display version holds 15 characters: hbmenu shows a flavour suffix cut ("-n"); the logs carry it whole.
 python3 "$SRC/tools/nro_nacp.py" "$BUILD/hcu.nro" "${VERSION:0:15}"
