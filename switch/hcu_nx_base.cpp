@@ -38,8 +38,8 @@ volatile bool log_flush_running = false;
 // override, or a title or global profile rate) is its own, and the game makes no pcv call for it; a module it leaves
 // ("Do not override", or sys-clk disabled) the game sets. sys-clk is asked again every 2 s, so a change in its
 // overlay takes effect. Horizon OC, sys-clk-OC or a sys-clk with an unknown IPC: the game touches no clock.
-// No clkrst session stays open: each read or set opens one session and closes it (0.399 held three for the whole run,
-// and pcv aborted with 2011-0102, out of session memory; see docs/switch.md).
+// No module session stays open (the clkrst service session does): each read or set opens one and closes it (0.399
+// held three for the whole run, and pcv aborted with 2011-0102, out of session memory; see docs/switch.md).
 struct Clock {
   const char* name;
   PcvModuleId module;

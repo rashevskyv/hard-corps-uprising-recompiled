@@ -141,9 +141,10 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   or 5) every 2 s: a module with a sys-clk override, title profile or global profile rate is sys-clk's, and the game
   makes no pcv call for it; a module in "Do not override" (or sys-clk disabled) the game sets. A change in the
   overlay takes effect at the next check. Horizon OC (`hoc:clk`), sys-clk-OC (`sysclkOC`), an unknown sys-clk API
-  or no answer: the game touches no clock. The game holds no clkrst session: each read or set opens one and closes
-  it. Why: 0.399 held three sessions for the whole run, and with sys-clk running pcv aborted (2011-0102, hipc out of
-  session memory) about 6 s into the run. Log lines: `[clock] CPU: sys-clk override 1785 -> game leaves it`,
+  or no answer: the game touches no clock. The game holds no per-module clkrst session: each read or set opens one
+  and closes it (the clkrst service session stays open from the game's first set to exit). Why: 0.399 held three
+  module sessions and the service session for the whole run, and with sys-clk running pcv aborted (2011-0102, hipc
+  out of session memory) at least 8 s after the raise. Log lines: `[clock] CPU: sys-clk override 1785 -> game leaves it`,
   `[clock] GPU: sys-clk Do not override -> game sets 768`.
 - GPU writes: the base's store cards (one byte per 4 KB page) replace the dirty-page bytes. The deko3d backend pulls
   the cards at a texture bind, a vertex copy and a resolve (`PullCards`). The shaders are the same as the old build's:
