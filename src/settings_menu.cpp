@@ -170,7 +170,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "rt16")) s.rt16 = int(v);
       else if (!std::strcmp(key, "button_glyphs")) s.button_glyphs = int(v);
       else if (!std::strcmp(key, "tex_view")) s.tex_view = int(v);  // read only (the Linux host has no pad)
-      else if (!std::strcmp(key, "clocks")) s.clocks = int(v) ? 1 : 0;  // acted on in switch_nx.cpp at start
+      else if (!std::strcmp(key, "clocks")) s.clocks = int(v) ? 1 : 0;  // acted on at start (hcu_clocks_key)
       else if (!std::strcmp(key, "audio_threads")) s.audio_threads = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "resolve_clear_key")) s.resolve_clear_key = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "trail_rearm")) s.trail_rearm = int(v) ? 1 : 0;
@@ -228,6 +228,18 @@ void hcu_settings_load(const char* dir) {
     }
     std::fclose(f);
   }
+}
+
+int hcu_clocks_key(const char* path) {
+  int on = 0;
+  if (FILE* f = std::fopen(path, "r")) {
+    char line[64];
+    int v = 0;
+    while (std::fgets(line, sizeof(line), f))
+      if (std::sscanf(line, "clocks=%d", &v) == 1) on = v != 0;
+    std::fclose(f);
+  }
+  return on;
 }
 
 int hcu_menu_input(uint32_t held) {

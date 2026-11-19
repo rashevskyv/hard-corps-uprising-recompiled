@@ -12,8 +12,11 @@
 
 #include <switch.h>
 
+#include <atomic>
+
 #include "hcu_pgo.h"
 #include "hcu_version.h"  // written by switch/build-base.sh: HCU_VERSION, HCU_BUILD_UTC, HCU_BUILD_ID
+#include "settings_menu.h"  // hcu_clocks_key
 
 extern "C" {
 // libnx (init.c): the exit; with __nx_applet_exit_mode 1 it asks the system to close the application (the base's main,
@@ -29,11 +32,176 @@ const char* const kDataDir = "sdmc:/switch/hcu";
 Thread log_flush_thread;
 volatile bool log_flush_running = false;
 
+// settings.txt clocks=1 (default 0 = stock, or what sys-clk sets): CPU 1785, GPU 768, memory 1600 MHz through clkrst,
+// as switch/host/switch_nx.cpp did in the old SDK's build (0.310 ran with them). The base never sets clocks: up to 0.398
+// this build had no clock code at all, so clocks=1 did nothing. The old rates come back on exit.
+struct Clock {
+  const char* name;
+  PcvModuleId module;
+  u32 wanted;
+  ClkrstSession session;
+  bool open;
+  u32 old;
+  u32 set;
+  bool lowered;  // keep_clocks found it below `set` at its last check
+};
+Clock clocks[] = {
+    {"CPU", PcvModuleId_CpuBus, 1785000000},
+    {"GPU", PcvModuleId_GPU, 768000000},
+    {"memory", PcvModuleId_EMC, 1600000000},
+};
+bool clkrst_up = false;
+bool sysclk = false;                    // sys-clk runs: a module its profile names goes to the profile
+std::atomic<bool> clocks_kept{false};   // raise_clocks is done: keep_clocks may read the sessions
+int keep_checks = 0;
+
+// The CPU clock as the core runs it, whatever clkrst says: 8 dependent adds per iteration (1 cycle each on the A57),
+// timed with the 19.2 MHz tick; the fastest of three runs. 2M cycles, 1.1 ms at 1785 MHz.
+u32 busy_loop_mhz() {
+  u64 best = ~0ull;
+  for (int run = 0; run < 3; run++) {
+    u64 n = 250000, x = 0;
+    const u64 t0 = armGetSystemTick();
+    asm volatile(
+        "1:\n"
+        "add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n"
+        "add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n add %0, %0, #1\n"
+        "subs %1, %1, #1\n b.ne 1b\n"
+        : "+r"(x), "+r"(n)::"cc");
+    const u64 ticks = armGetSystemTick() - t0;
+    if (ticks < best) best = ticks;
+  }
+  return best ? (u32)(250000ull * 8 * 19200000 / best / 1000000) : 0;
+}
+
+// Is another process serving this name? (sys-clk's own check.)
+bool service_running(const char* name) {
+  Handle handle;
+  const Result rc = smRegisterService(&handle, smEncodeName(name), false, 1);
+  if (R_SUCCEEDED(rc)) {
+    smUnregisterService(smEncodeName(name));
+    svcCloseHandle(handle);
+    return false;
+  }
+  return rc == MAKERESULT(21, 4);
+}
+
+// clocks=0: the rates as they are, read through sessions that are closed again (keep and restore do nothing).
+void log_stock_clocks() {
+  u32 mhz[3] = {};
+  if (hosversionAtLeast(8, 0, 0) && R_SUCCEEDED(clkrstInitialize())) {
+    for (int i = 0; i < 3; i++) {
+      ClkrstSession s;
+      u32 hz = 0;
+      if (R_SUCCEEDED(clkrstOpenSession(&s, clocks[i].module, 3))) {
+        clkrstGetClockRate(&s, &hz);
+        clkrstCloseSession(&s);
+      }
+      mhz[i] = hz / 1000000;
+    }
+    clkrstExit();
+  }
+  std::printf("[clock] settings.txt clocks=0 (or no key): not changed; CPU %u, GPU %u, memory %u MHz; busy-loop "
+              "equals %u MHz\n", mhz[0], mhz[1], mhz[2], busy_loop_mhz());
+}
+
+void raise_clocks() {
+  if (!hcu_clocks_key("sdmc:/switch/hcu/settings.txt")) {
+    log_stock_clocks();
+    return;
+  }
+  std::printf("[clock] settings.txt clocks=1 requested: CPU %u, GPU %u, memory %u MHz\n", clocks[0].wanted / 1000000,
+              clocks[1].wanted / 1000000, clocks[2].wanted / 1000000);
+  // Horizon OC puts stock rates back every tick; fighting it froze consoles (NFSU2's port).
+  if (service_running("hoc:clk")) {
+    std::printf("[clock] Horizon OC is running: the clocks are left to it (nothing set)\n");
+    return;
+  }
+  // Kefir's sys-clk sets only the modules its profile names: the game sets the others as without it.
+  sysclk = service_running("sys:clk");
+  if (sysclk) std::printf("[clock] sys-clk is running: the game sets its clocks, a sys-clk profile wins over them\n");
+  if (!hosversionAtLeast(8, 0, 0)) {
+    std::printf("[clock] firmware below 8.0.0: no clkrst, the clocks are unchanged\n");
+    return;
+  }
+  if (const Result rc = clkrstInitialize(); R_FAILED(rc)) {
+    std::printf("[clock] clkrstInitialize failed (rc 0x%X): the clocks are unchanged\n", rc);
+    return;
+  }
+  clkrst_up = true;
+  const u32 loop_before = busy_loop_mhz();
+  for (Clock& clock : clocks) {
+    if (const Result rc = clkrstOpenSession(&clock.session, clock.module, 3); R_FAILED(rc)) {
+      std::printf("[clock] %s: no clkrst session (rc 0x%X): unchanged\n", clock.name, rc);
+      continue;
+    }
+    clock.open = true;
+    clkrstGetClockRate(&clock.session, &clock.old);
+    // Never lower a rate (docked memory, or someone else's overclock).
+    const bool apply = clock.old < clock.wanted;
+    const Result rc = apply ? clkrstSetClockRate(&clock.session, clock.wanted) : 0;
+    u32 now = 0;
+    clkrstGetClockRate(&clock.session, &now);
+    clock.set = now;
+    std::printf("[clock] %s: was %u, requested %u, %s, read back %u MHz\n", clock.name, clock.old / 1000000,
+                clock.wanted / 1000000, !apply ? "not applied (already at or above)" : R_FAILED(rc) ? "REFUSED" : "applied",
+                now / 1000000);
+    if (R_FAILED(rc)) std::printf("[clock] %s: clkrstSetClockRate rc 0x%X\n", clock.name, rc);
+  }
+  std::printf("[clock] busy-loop equals %u MHz before the raise, %u MHz after it\n", loop_before, busy_loop_mhz());
+  clocks_kept.store(true, std::memory_order_release);
+}
+
+// Every 2 s (log_flush_loop): HOME, docking and sleep put the system's clocks back: set ours again. The first check
+// logs the rates 2 s after the raise (an immediate read-back can show a rate the system takes back later).
+void keep_clocks() {
+  if (!clocks_kept.load(std::memory_order_acquire)) return;
+  u32 hz[3] = {};
+  for (int i = 0; i < 3; i++) {
+    Clock& clock = clocks[i];
+    u32 now = 0;
+    if (clock.open) clkrstGetClockRate(&clock.session, &now);
+    hz[i] = now;
+    if (clock.set == 0 || now == 0 || now >= clock.set) {
+      clock.lowered = false;
+      continue;
+    }
+    // sys-clk: lower again 2 s after our re-set = its profile (it sets it every tick). The profile wins; the old rate
+    // does not come back on exit either.
+    if (sysclk && clock.lowered) {
+      std::printf("[clock] %s held at %u MHz by a sys-clk profile: left to it\n", clock.name, now / 1000000);
+      clock.set = clock.old = 0;
+      continue;
+    }
+    clock.lowered = true;
+    clkrstSetClockRate(&clock.session, clock.set);
+    std::printf("[clock] %s was put back to %u MHz: set to %u MHz again\n", clock.name, now / 1000000,
+                clock.set / 1000000);
+  }
+  if (keep_checks++ == 0) {
+    std::printf("[clock] 2 s after the raise: CPU %u, GPU %u, memory %u MHz; busy-loop equals %u MHz\n",
+                hz[0] / 1000000, hz[1] / 1000000, hz[2] / 1000000, busy_loop_mhz());
+  }
+}
+
+void restore_clocks() {
+  if (!clkrst_up) return;
+  clocks_kept.store(false, std::memory_order_release);
+  for (Clock& clock : clocks) {
+    if (!clock.open) continue;
+    if (clock.old != 0 && clock.set != clock.old) clkrstSetClockRate(&clock.session, clock.old);
+    clkrstCloseSession(&clock.session);
+  }
+  clkrstExit();
+  clkrst_up = false;
+}
+
 // The log is buffered and flushed twice a second; fsync commits it to the card (after a hang and a hard reboot, a log
-// that was only flushed ended in garbage).
+// that was only flushed ended in garbage). Every 4th pass (2 s) keeps the clocks.
 void log_flush_loop(void*) {
-  while (log_flush_running) {
+  for (unsigned pass = 1; log_flush_running; pass++) {
     svcSleepThread(500'000'000LL);
+    if (pass % 4 == 0) keep_clocks();
     std::fflush(stdout);
     fsync(fileno(stdout));
   }
@@ -64,6 +232,7 @@ extern "C" void userAppInit(void) {
   open_log();
   std::printf("[nx] Hard Corps: Uprising, version " HCU_VERSION ", built " HCU_BUILD_UTC " (ultimate base SDK)\n");
   appletSetAutoSleepDisabled(true);
+  raise_clocks();
 }
 
 extern "C" void userAppExit(void) {
@@ -75,6 +244,7 @@ extern "C" void userAppExit(void) {
     threadWaitForExit(&log_flush_thread);
     threadClose(&log_flush_thread);
   }
+  restore_clocks();
   std::fflush(stdout);
   fsync(fileno(stdout));
 }

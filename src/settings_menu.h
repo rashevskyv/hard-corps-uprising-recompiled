@@ -54,8 +54,9 @@ struct HcuSettings {
   int button_glyphs;  // BUTTON ICONS (button_glyphs=switch|xbox, or 1|0): 1 = Switch icons (our art, src/button_glyphs.cpp), 0 = the game's Xbox icons with
                       // A<->B and X<->Y swapped (read when the game opens a screen's images)
   int clocks;         // clocks=1: the game raises CPU 1785 / GPU 768 / memory 1600 MHz and keeps them (the old default);
-                      // 0 (default): the clocks are not touched (stock, or what sys-clk sets), only logged. Read by
-                      // switch_nx.cpp at start, before this struct is loaded; kept here so the menu's save keeps it
+                      // 0 (default): the clocks are not touched (stock, or what sys-clk sets), only logged. Read at
+                      // start by hcu_clocks_key (switch/hcu_nx_base.cpp; switch_nx.cpp in the old SDK's build), before
+                      // this struct is loaded; kept here so the menu's save keeps it
   int audio_threads;  // audio_threads=1 (the ultimate base's SDK only): one host thread per guest audio client
                       // (switch/sdk-edits-base.py); 0 (default): the base's one audio worker runs every client
   // The keys below are not in the initializer (0 = off) and not in the menu: settings.txt only (A/B tests).
@@ -89,6 +90,10 @@ extern HcuSettings hcu_settings;
 
 // Once, before the first frame: settings.txt in dir, then the marker files there.
 void hcu_settings_load(const char* dir);
+
+// The clocks key of the settings file at path: 1 = clocks=<non-zero>, 0 = clocks=0, no key or no file (the last line
+// wins). C stdio only: userAppInit calls it before the C++ constructors run.
+int hcu_clocks_key(const char* path);
 
 // Menu buttons (any pad layout): one bit each.
 enum { HCU_MENU_UP = 1, HCU_MENU_DOWN = 2, HCU_MENU_LEFT = 4, HCU_MENU_RIGHT = 8, HCU_MENU_A = 16, HCU_MENU_B = 32,

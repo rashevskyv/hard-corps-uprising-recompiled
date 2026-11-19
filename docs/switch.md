@@ -132,8 +132,10 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   store cards when the manifest changed, configure with the base's toolchain file, build. Under
   `D:\git\dev\renut-ref\build.lock`.
 - The base owns `main`, threads, memory and the exit. `switch/hcu_nx_base.cpp` adds the SD log, `args.txt`, the
-  console defaults of the cvars (`--wrap=main`) and the quick exit. Clocks are not changed (the base never sets them;
-  the `clocks` key of `settings.txt` does nothing in this build).
+  console defaults of the cvars (`--wrap=main`), the quick exit and the clocks: `clocks=1` in `settings.txt` sets CPU
+  1785 / GPU 768 / memory 1600 MHz through clkrst at start, sets them again every 2 s when the system lowers them, and
+  puts the old rates back on exit; default 0 only logs them (`[clock]` lines). The base itself never sets clocks (up
+  to 0.398 this build had no clock code: `clocks=1` did nothing).
 - GPU writes: the base's store cards (one byte per 4 KB page) replace the dirty-page bytes. The deko3d backend pulls
   the cards at a texture bind, a vertex copy and a resolve (`PullCards`). The shaders are the same as the old build's:
   this build copies none, the ones in `sdmc:/switch/hcu/shaders/` are used.
