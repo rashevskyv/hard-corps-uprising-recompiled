@@ -1,6 +1,7 @@
 // In-game settings menu: see settings_menu.h. Modelled on Conker's clx_menu.c (conker-lr-xbox).
 #include "settings_menu.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +27,8 @@ bool g_open = false;
 int g_row = 0;
 int g_page = 0;  // 0 = SETTINGS, 1 = CHEATS
 uint32_t g_last = 0;
+int g_stage_at_open = 0;     // cheat_stage when the menu opened
+std::atomic<int> g_jump{0};  // hcu_take_stage_jump
 
 // One menu line: its option names and how an option index maps to the settings.
 struct Item {
@@ -118,6 +121,15 @@ void Save() {
 }
 
 bool Exists(const std::string& p) { return access(p.c_str(), F_OK) == 0; }
+
+// Every close: settings.txt, and a jump when START STAGE changed to a stage while the menu was open (an edge: a
+// close without a change jumps nowhere, even with cheat_stage set).
+void Close() {
+  g_open = false;
+  Save();
+  const int stage = hcu_settings.cheat_stage;
+  if (stage != g_stage_at_open && stage != 0) g_jump.store(stage, std::memory_order_release);
+}
 
 }  // namespace
 
@@ -223,9 +235,9 @@ int hcu_menu_input(uint32_t held) {
   g_last = held;
   const uint32_t combo = HCU_MENU_LS | HCU_MENU_RS;
   if ((held & combo) == combo && (down & combo)) {
-    g_open = !g_open;
     if (g_page) g_page = 0, g_row = kCount - 1;  // the menu opens again on SETTINGS, at the CHEATS line
-    if (!g_open) Save();
+    if (g_open) Close();
+    else g_open = true, g_stage_at_open = hcu_settings.cheat_stage;
     return 1;
   }
   if (!g_open) return 0;
@@ -234,8 +246,7 @@ int hcu_menu_input(uint32_t held) {
       g_page = 0, g_row = kCount - 1;  // back to the CHEATS line (the last of kItems)
       return 1;
     }
-    g_open = false;
-    Save();
+    Close();
     return 1;
   }
   int count;
@@ -265,6 +276,10 @@ int hcu_menu_lines(char lines[][48], int max_lines) {
   }
   std::snprintf(lines[n++], 48, g_page ? "  B BACK    LEFT / RIGHT / A CHANGE" : "  B CLOSE   LEFT / RIGHT / A CHANGE");
   return n;
+}
+
+int hcu_take_stage_jump(void) {
+  return g_jump.load(std::memory_order_relaxed) ? g_jump.exchange(0, std::memory_order_acquire) : 0;
 }
 
 // The ultimate base's SDK reads settings.txt audio_threads through this (switch/sdk-edits-base.py, src/audio/audio_system.cpp).

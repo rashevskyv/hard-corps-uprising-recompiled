@@ -80,7 +80,7 @@ struct HcuSettings {
   int cheat_level_a;       // 1..3: slot A's level (+4360) is 0..2 (key - 1), locked (the game's maximum caps it);
                            // 0 = the game's
   int cheat_level_b;       // 1..3: the same for slot B (+4364)
-  int cheat_stage;         // 1..8: a new game starts at this stage
+  int cheat_stage;         // 1..8: a new game starts at this stage; a change in the menu jumps there at its close
   int cheat_god;           // lives + health + keep weapons
   int cheat_log;           // 1 = the cheat hooks log what they see ([cheat] lines; diagnostic)
 };
@@ -99,4 +99,8 @@ int hcu_menu_input(uint32_t held);
 
 // The menu text, one line per row; 0 lines = closed. The selected row is marked.
 int hcu_menu_lines(char lines[][48], int max_lines);
+
+// START STAGE as a jump: a menu close with cheat_stage changed (to 1..8) since the menu opened leaves that value here
+// (any thread). The scene switcher's hook (src/cheats.cpp) takes it once: 0 = none.
+int hcu_take_stage_jump(void);
 }

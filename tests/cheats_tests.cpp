@@ -479,6 +479,17 @@ void TestSwitchLockWiring() {
   CHECK(start != std::string::npos);
   CHECK(cheats.find("!(lr >= 0x824C1130 && lr < 0x824C1318)", start) < cheats.find("__imp__sub_824EBE98(ctx, base)", start));
   CHECK(cheats.find("Store32(base, g + 28, uint32_t(stage))", start) < cheats.find("__imp__sub_824EBE98(ctx, base)", start));
+  // The jump: the scene switcher takes it before its own code; the guards come before the first write; the stage
+  // start, then the scenes 1, 25, 26 in that order (a LIFO queue), then the scene change request.
+  const size_t jump_at = cheats.find("static void JumpToStage(");
+  const size_t hook = cheats.find("REX_HOOK_RAW(sub_824EC550) {");
+  CHECK(jump_at != std::string::npos && hook != std::string::npos);
+  CHECK(cheats.find("hcu_take_stage_jump()", hook) < cheats.find("__imp__sub_824EC550(ctx, base)", hook));
+  CHECK(cheats.find("jump dropped", jump_at) < cheats.find("Store32(base, g + 28", jump_at));
+  CHECK(cheats.find("Store32(base, g + 28", jump_at) < cheats.find("__imp__sub_824EBE98(c, base)", jump_at));
+  CHECK(cheats.find("__imp__sub_824EBE98(c, base)", jump_at) < cheats.find("{1, 25, 26}", jump_at));
+  CHECK(cheats.find("{1, 25, 26}", jump_at) < cheats.find("Store32(base, g, 1)", jump_at));
+  CHECK(cheats.find("+ 472", jump_at) > hook && cheats.find("g + 372", jump_at) > hook);
 }
 
 void TestNoStaleKnockbackCheat() {

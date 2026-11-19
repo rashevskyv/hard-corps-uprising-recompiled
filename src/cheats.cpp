@@ -14,6 +14,8 @@ namespace cheats = hcu::cheats;
 // settings.txt's (src/settings_menu.h), read live; there is no session menu, so the session layer only follows them.
 #include <cstdio>
 
+#include <rex/ppc/func.h>
+
 #include "settings_menu.h"
 
 namespace {
@@ -441,6 +443,53 @@ REX_HOOK_RAW(sub_824EBE98) {
     }
   }
   __imp__sub_824EBE98(ctx, base);
+}
+
+// START STAGE as a jump (hcu_take_stage_jump): the stage clear's sequence (sub_824C1130 at 0x824C11BC..0x824C1274),
+// less its player record and score parts (vtable +472, G+372). sub_82400B30 pushes a scene: the queue is LIFO, so the
+// order 1, 25, 26 is load-bearing.
+REX_EXTERN(__imp__sub_824035D0);
+REX_EXTERN(__imp__sub_82400B30);
+static void JumpToStage(const PPCContext& ctx, uint8_t* base, uint32_t switcher, int n) {
+  const int stage = cheats::StageIndex(n);
+  const uint32_t g = Game(base);
+  // Only in a stage (scene 1), with no scene change on its way. G+24 halfword bit 0 (word 0x10000): the mode that
+  // sub_824F3DA0 (lhz 24, clrlwi 31) and the stage start treat apart; G+40: the stage clear starts the next stage.
+  if (stage < 0 || g == 0 || Load32(base, g + 20) != 1 || Load32(base, g) != 0 || Load32(base, switcher + 12) != 0 ||
+      (Load32(base, g + 24) & 0x10000) != 0 || Load32(base, g + 40) == 0) {
+    std::printf("[cheat] jump dropped: G20=%d G0=%u G24=%08X G40=%u switcher12=%u\n",
+                g ? int(Load32(base, g + 20)) : -1, g ? Load32(base, g) : 0, g ? Load32(base, g + 24) : 0,
+                g ? Load32(base, g + 40) : 0, Load32(base, switcher + 12));
+    return;
+  }
+  const uint32_t old = Load32(base, g + 28);
+  Store32(base, g + 28, uint32_t(stage));
+  PPCContext c = ctx;
+  __imp__sub_824035D0(c, base);
+  if (const uint32_t o = Load32(base, c.r3.u32 + 56)) {
+    c = ctx;
+    c.r3.u64 = o;
+    rex::runtime::ResolveIndirectFunction(Load32(base, Load32(base, o) + 72))(c, base);
+  }
+  c = ctx;
+  __imp__sub_824EBE98(c, base);
+  for (const int scene : {1, 25, 26}) {
+    c = ctx;
+    c.r3.s64 = scene;
+    __imp__sub_82400B30(c, base);
+  }
+  Store32(base, g, 1);
+  if (Log()) {
+    std::printf("[cheat] jump: G20=%d G0=%u G28 %u -> %d queue=%u\n", int(Load32(base, g + 20)), Load32(base, g), old,
+                stage, (Load32(base, g + 8) - Load32(base, g + 4)) / 4);
+  }
+}
+
+// The scene switcher (each frame on the main guest thread, from sub_82501E18); r3: +4 the scene id, +12 the change flag.
+REX_EXTERN(__imp__sub_824EC550);
+REX_HOOK_RAW(sub_824EC550) {
+  if (const int n = hcu_take_stage_jump()) JumpToStage(ctx, base, ctx.r3.u32, n);
+  __imp__sub_824EC550(ctx, base);
 }
 #endif
 

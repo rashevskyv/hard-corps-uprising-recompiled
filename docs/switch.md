@@ -141,7 +141,8 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   `cheat_god`, `cheat_lives`, `cheat_health`, `cheat_keep_weapons`, `cheat_rapid_fire`, `cheat_stage` (1..8),
   `cheat_log`. `cheat_weapon_a` / `_b` lock slot A / B to a weapon: 1 MG, 2 Spread, 3 Ripple, 4 Heated Plasma,
   5 Laser, 6 Crush. `cheat_level_a` / `_b` lock its level: 1..3 = level 0..2 (key - 1). The locks apply every frame
-  (`src/cheats.cpp`).
+  (`src/cheats.cpp`). `cheat_stage` sets the stage of a new game; a change of START STAGE in the menu also jumps to
+  that stage when the menu closes, if a stage is being played (else the log shows `[cheat] jump dropped`).
 
 ### PGO
 

@@ -206,6 +206,14 @@ add_executable(hcu_cheats_tests EXCLUDE_FROM_ALL tests/cheats_tests.cpp)
 target_include_directories(hcu_cheats_tests PRIVATE src)
 target_compile_definitions(hcu_cheats_tests PRIVATE HCU_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+# START STAGE jump edge tests (host only: unistd.h), not part of the default build:
+# cmake --build <dir> --target hcu_settings_menu_tests
+if(NOT WIN32)
+    add_executable(hcu_settings_menu_tests EXCLUDE_FROM_ALL tests/settings_menu_tests.cpp src/settings_menu.cpp)
+    target_include_directories(hcu_settings_menu_tests PRIVATE src)
+    target_compile_definitions(hcu_settings_menu_tests PRIVATE HCU_CHEATS)
+endif()
+
 # Frame counter tests, not part of the default build: cmake --build <dir> --target hcu_frame_counter_tests
 add_executable(hcu_frame_counter_tests EXCLUDE_FROM_ALL tests/frame_counter_tests.cpp)
 target_include_directories(hcu_frame_counter_tests PRIVATE src)
