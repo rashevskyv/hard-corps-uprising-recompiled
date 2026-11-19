@@ -6,7 +6,8 @@
 #   step 2: switch/pgo-merge-base.sh <folder with banjo_pgo_*.stream> [<instrumented ELF or NRO>] [--all]
 #           (one stream, or --all for several sessions of the SAME instrumented build; with the ELF/NRO, no stream may
 #           be older than it: the base's port 122, a stream of another build loses functions on a checksum mismatch)
-#   step 3: HCU_BUILD_DIR=$SRC/out/build/switch-pgo switch/build-base.sh -DHCU_PGO=use
+#   step 3: HCU_BUILD_DIR=$SRC/out/build/switch-pgo switch/build-base.sh -DHCU_PGO=use, in an empty folder (rm -rf it
+#           first): ninja does not know an object depends on its .gcda, so a new profile would not recompile anything
 set -eu
 ROOT=${HCU_ROOT:-/root/renut-hcu}
 BASE=${HCU_BASE_DIR:-/mnt/d/git/dev/renut-ref/renut_nx_ultimate_base}
