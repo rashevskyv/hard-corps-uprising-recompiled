@@ -424,6 +424,24 @@ REX_HOOK_RAW(sub_824F0BF0) {
                 Load32(base, g + 28), hcu_settings.cheat_stage);
   }
 }
+
+// The stage start (it reads G+28 through sub_82400BA0). Its callers: the character select confirm (sub_824E3280) and
+// the stage select confirm (sub_824F3DA0) store G+28 just before the call (the local new game, which the menu hook
+// above does not see); the stage clear (sub_824C1130) calls it for the next stage and is left alone.
+REX_EXTERN(__imp__sub_824EBE98);
+REX_HOOK_RAW(sub_824EBE98) {
+  const uint32_t lr = uint32_t(ctx.lr);  // the generated code sets it before each call
+  const int stage = cheats::StageIndex(hcu_settings.cheat_stage);
+  const uint32_t g = stage >= 0 && !(lr >= 0x824C1130 && lr < 0x824C1318) ? Game(base) : 0;
+  if (g != 0) {
+    const uint32_t old = Load32(base, g + 28);
+    Store32(base, g + 28, uint32_t(stage));
+    if (Log()) {
+      std::printf("[cheat] stage lr=%08X old G28=%u new=%d\n", lr, old, stage);
+    }
+  }
+  __imp__sub_824EBE98(ctx, base);
+}
 #endif
 
 // Player::AddLife(this, float delta). Hits reach it from the shared hit handler.

@@ -474,6 +474,11 @@ void TestSwitchLockWiring() {
   // The start stage hook does nothing more than the call while cheat_stage and cheat_log are 0.
   const size_t stage = cheats.find("REX_HOOK_RAW(sub_824F0BF0) {");
   CHECK(stage != std::string::npos && cheats.find("if (hcu_settings.cheat_stage == 0 && !Log())", stage) < cheats.find("Game(base)", stage));
+  // The local new game: the stage start sets G+28 before the game reads it, except for the stage clear's call.
+  const size_t start = cheats.find("REX_HOOK_RAW(sub_824EBE98) {");
+  CHECK(start != std::string::npos);
+  CHECK(cheats.find("!(lr >= 0x824C1130 && lr < 0x824C1318)", start) < cheats.find("__imp__sub_824EBE98(ctx, base)", start));
+  CHECK(cheats.find("Store32(base, g + 28, uint32_t(stage))", start) < cheats.find("__imp__sub_824EBE98(ctx, base)", start));
 }
 
 void TestNoStaleKnockbackCheat() {
