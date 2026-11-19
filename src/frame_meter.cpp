@@ -325,3 +325,38 @@ REX_HOOK_RAW(sub_82556728) {
   __imp__sub_82556728(ctx, base);
   rex_nx_meter_leave(t0, 3, &g_ring_main_wait);
 }
+
+#if defined(HCU_NX_METER)
+// The collision pass (sub_824A9DC0, -meter flavour only): it sorts the objects into two groups on its own stack and
+// keeps only the counts in registers. Its frame is 2224 bytes: group 1 from r1+96 (up to 255 entries, to r1+1116),
+// group 2 from r1+1120 (240 entries before its register save area). The hook zeroes both arrays first (the stack
+// below r1 is free at the entry), then counts the entries the pass filled (object pointers, never 0). An early-out
+// pass (flag bit 0 of +152) fills none. Read by the deko3d backend's [nx] load line, once per second.
+namespace {
+std::atomic<uint32_t> g_collide_a{0}, g_collide_b{0}, g_collide_calls{0};
+
+uint32_t Filled(const uint8_t* base, uint32_t at, uint32_t max) {
+  uint32_t n = 0, v;
+  while (n < max && (std::memcpy(&v, base + at + 4 * n, 4), v != 0)) n++;
+  return n;
+}
+}  // namespace
+
+extern "C" void hcu_meter_collision(uint32_t* a, uint32_t* b, uint32_t* calls) {
+  *a = g_collide_a.exchange(0, std::memory_order_relaxed);
+  *b = g_collide_b.exchange(0, std::memory_order_relaxed);
+  *calls = g_collide_calls.exchange(0, std::memory_order_relaxed);
+}
+
+REX_EXTERN(__imp__sub_824A9DC0);
+REX_HOOK_RAW(sub_824A9DC0) {
+  const uint32_t frame = ctx.r1.u32 - 2224;
+  std::memset(base + frame + 96, 0, 255 * 4);
+  std::memset(base + frame + 1120, 0, 240 * 4);
+  __imp__sub_824A9DC0(ctx, base);
+  const uint32_t a = Filled(base, frame + 96, 255), b = Filled(base, frame + 1120, 240);
+  if (a > g_collide_a.load(std::memory_order_relaxed)) g_collide_a.store(a, std::memory_order_relaxed);
+  if (b > g_collide_b.load(std::memory_order_relaxed)) g_collide_b.store(b, std::memory_order_relaxed);
+  g_collide_calls.fetch_add(1, std::memory_order_relaxed);
+}
+#endif

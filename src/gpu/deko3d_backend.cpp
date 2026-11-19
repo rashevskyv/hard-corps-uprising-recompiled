@@ -546,6 +546,9 @@ DkImageSwizzle SwizzleOf(uint32_t s) {
 // viewport at the bottom-left corner. The file overlay_off next to the shader dir hides it.
 // The CPU-work meter (hcu src/frame_meter.cpp, Switch and Linux): this thread's blocked time per swap, and the strip text.
 extern "C" void rex_nx_meter_cp_swap(uint64_t block_us_total);
+#if defined(HCU_NX_METER)
+extern "C" void hcu_meter_collision(uint32_t* a, uint32_t* b, uint32_t* passes);  // src/frame_meter.cpp
+#endif
 extern "C" void rex_nx_meter_cp_frame(uint64_t block_us_total, int drawn);
 extern "C" void rex_nx_meter_present();
 extern "C" void rex_nx_meter_gpu_frame(double ms);
@@ -1786,6 +1789,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     dirty_pages_at_swap_ = dirty_pages_;
     last_drawn_swap_ = swaps_;
+#if defined(HCU_NX_METER)
+    LoadLine();
+#endif
     last_drawn_draws_ = frame_draws_;
     f.level = frame_draws_ >= 150;  // [res]: a level frame (menus draw 97 or fewer)
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
@@ -1801,6 +1807,30 @@ class Deko3dCommandProcessor : public CommandProcessor {
     NextFrame(true);
   }
 
+#if defined(HCU_NX_METER)
+  // [nx] load (the -meter flavour): once per second, the draws per drawn frame and the collision pass's largest groups
+  // (src/frame_meter.cpp), with the time since the first drawn swap, so a log segment (a [nx] menu: line, a stage) has
+  // a time and a load.
+  void LoadLine() {
+    const uint64_t now = armGetSystemTick(), freq = armGetSystemTickFreq();
+    if (!load_t0_) load_t0_ = load_last_ = now;
+    load_frames_++;
+    load_draws_ += frame_draws_;
+    load_draws_max_ = std::max(load_draws_max_, frame_draws_);
+    if (now - load_last_ < freq) return;
+    uint32_t a, b, passes;
+    hcu_meter_collision(&a, &b, &passes);
+    std::printf("[nx] load t %.1f s, swap #%u: %u drawn frames, draws per frame avg %.0f max %u; collision groups max %u + %u (%u passes)
+",
+                double(now - load_t0_) / double(freq), swaps_, load_frames_, double(load_draws_) / load_frames_, load_draws_max_, a, b, passes);
+    load_last_ = now;
+    load_frames_ = load_draws_max_ = 0;
+    load_draws_ = 0;
+  }
+  uint64_t load_t0_ = 0, load_last_ = 0, load_draws_ = 0;
+  uint32_t load_frames_ = 0, load_draws_max_ = 0;
+
+#endif
   // [res] (RESOLUTION): once, when 120 level frames have finished on the GPU: their GPU time p50, and the frames shown and
   // the game speed over the same time. Printed at native too: a run before and one after the change compare.
   void ResSample(bool level, double ms) {
