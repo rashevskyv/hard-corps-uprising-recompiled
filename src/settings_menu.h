@@ -58,6 +58,9 @@ struct HcuSettings {
                       // switch_nx.cpp at start, before this struct is loaded; kept here so the menu's save keeps it
   int audio_threads;  // audio_threads=1 (the ultimate base's SDK only): one host thread per guest audio client
                       // (switch/sdk-edits-base.py); 0 (default): the base's one audio worker runs every client
+  // The keys below are not in the initializer (0 = off) and not in the menu: settings.txt only (A/B tests).
+  int resolve_clear_key;  // 1 = a resolve clear (colour, and depth with stencil 0) leaves the clean_key of a clear of
+                          // that rect to that value, so CLEAR SKIP (clear_skip=1) can skip the next same clear (live)
 };
 
 extern HcuSettings hcu_settings;

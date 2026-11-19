@@ -2803,6 +2803,21 @@ class Deko3dCommandProcessor : public CommandProcessor {
            a1.data_format == xenos::VertexFormat::k_32_32_32_32_FLOAT && a1.offset == 3;
   }
 
+  // CLEAR SKIP keys: a clear of rect (guest pixels) to a value; never 0 (0 = "not a known clear").
+  static uint64_t ClearMix(uint64_t h, uint64_t v) { return h ^ (v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2)); }
+  static uint64_t ClearRectKey(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    return (uint64_t(x) << 48) | (uint64_t(y) << 32) | (uint64_t(w) << 16) | h;
+  }
+  static uint64_t ClearColorKey(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const float color[4]) {
+    uint32_t bits[4];
+    std::memcpy(bits, color, 16);
+    return ClearMix(ClearMix(ClearRectKey(x, y, w, h), (uint64_t(bits[0]) << 32) | bits[1]), (uint64_t(bits[2]) << 32) | bits[3]) | 1;
+  }
+  // The depth key stands for stencil 0 too: ClearDraw clears the stencil to 0.
+  static uint64_t ClearDepthKey(uint32_t x, uint32_t y, uint32_t w, uint32_t h, float z) {
+    return ClearMix(ClearRectKey(x, y, w, h), std::bit_cast<uint32_t>(z)) | 1;
+  }
+
   bool ClearDraw(uint32_t vertex_count, xenos::EdramMode mode) {
     const RegisterFile& regs = *register_file_;
     Frame& f = frames_[frame_];
@@ -2853,13 +2868,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // CLEAR SKIP (clear_skip=1): a clear of the same rect to the same value as the last one, with no draw into the
       // images since, writes what they already hold (dk_gpu_times_1: the 1280x720 colour+depth clear at the frame's start,
       // repeated before the scene after the shadow pass: 0.4 ms). A colour target and a depth target each keep their own.
-      auto mix = [](uint64_t h, uint64_t v) { return h ^ (v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2)); };
-      const uint64_t rect_key = (uint64_t(sc.x) << 48) | (uint64_t(sc.y) << 32) | (uint64_t(sc.width) << 16) | sc.height;
-      uint32_t bits[5];
-      std::memcpy(bits, color, 16);
-      std::memcpy(bits + 4, &z, 4);
-      const uint64_t color_key = mix(mix(rect_key, (uint64_t(bits[0]) << 32) | bits[1]), (uint64_t(bits[2]) << 32) | bits[3]) | 1;
-      const uint64_t depth_key = mix(rect_key, bits[4]) | 1;
+      const uint64_t color_key = ClearColorKey(sc.x, sc.y, sc.width, sc.height, color);
+      const uint64_t depth_key = ClearDepthKey(sc.x, sc.y, sc.width, sc.height, z);
       if (hcu_settings.clear_skip && (!color_img || color_img->clean_key == color_key) && (!depth_img || depth_img->clean_key == depth_key)) {
         LogOnce("clearskip", "CLEAR SKIP: first skipped clear (EDRAM %u/%u rect %ux%u, swap #%u)", color_info.color_base, depth_info.depth_base,
                 sc.width, sc.height, swaps_);
@@ -2910,10 +2920,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
         if (cx + cw > d->width) cw = d->width - cx;
         if (cy + ch > d->height) ch = d->height - cy;
         BindTargets(cmd, nullptr, d);
-        d->clean_key = 0;  // CLEAR SKIP: not tracked for resolve clears
         const DkScissor sc = HostRect(d, cx, cy, cw, ch);
         dkCmdBufSetScissors(cmd, 0, &sc, 1);
         float z = float(info.rb_depth_clear >> 8) / float(0xFFFFFF);
+        // CLEAR SKIP: not tracked for resolve clears (0), unless resolve_clear_key=1: the key of ClearDraw's clear of
+        // this rect to this depth, which also clears the stencil to 0 (another stencil value keeps 0).
+        d->clean_key = hcu_settings.resolve_clear_key && (info.rb_depth_clear & 0xFF) == 0 ? ClearDepthKey(cx, cy, cw, ch, z) : 0;
         dkCmdBufClearDepthStencil(cmd, true, z, 0xFF, info.rb_depth_clear & 0xFF);
         Step(f, "depth clear EDRAM %u rect %u,%u %ux%u", info.depth_original_base, cx, cy, cw, ch);
         char key[64];
@@ -3032,11 +3044,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     if (info.IsClearingColor()) {
       BindTargets(cmd, src, nullptr);
-      src->clean_key = 0;  // CLEAR SKIP: not tracked for resolve clears
       const DkScissor sc = HostRect(src, x, y, w, h);
       dkCmdBufSetScissors(cmd, 0, &sc, 1);
       uint32_t c = info.rb_color_clear;
       float color[4] = {((c >> 16) & 0xFF) / 255.0f, ((c >> 8) & 0xFF) / 255.0f, (c & 0xFF) / 255.0f, ((c >> 24) & 0xFF) / 255.0f};
+      // CLEAR SKIP: not tracked for resolve clears (0), unless resolve_clear_key=1: the key of ClearDraw's clear of this
+      // rect to this colour (the same float bits only: 0 and 1 match; c / 255 seldom equals a vertex colour).
+      src->clean_key = hcu_settings.resolve_clear_key ? ClearColorKey(x, y, w, h, color) : 0;
       dkCmdBufClearColor(cmd, 0, DkColorMask_RGBA, color);
       Step(f, "resolve clear EDRAM %u rect %u,%u %ux%u", info.color_edram_info.base_tiles, x, y, w, h);
     }

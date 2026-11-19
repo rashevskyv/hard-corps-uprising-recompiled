@@ -61,6 +61,8 @@ void Save() {
     const HcuSettings& s = hcu_settings;
     std::fprintf(f, "fps_mode=%d\nearly_submit=%d\ngpu_frames=%d\nswap_images=%d\nclear_skip=%d\nshadow_direct=%d\nresolution=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass_skip=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%s\nclocks=%d\naudio_threads=%d\n",
                  s.fps_mode, s.early_submit, s.gpu_frames, s.swap_images, s.clear_skip, s.shadow_direct, s.resolution, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass_skip, s.gamma, s.rt16, s.button_glyphs ? "switch" : "xbox", s.clocks, s.audio_threads);
+    // The settings.txt-only keys: written only when on, so a menu save keeps them and an old file stays as it was.
+    if (s.resolve_clear_key) std::fprintf(f, "resolve_clear_key=%d\n", s.resolve_clear_key);
     std::fclose(f);
   }
 }
@@ -108,6 +110,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "tex_view")) s.tex_view = int(v);  // read only (the Linux host has no pad)
       else if (!std::strcmp(key, "clocks")) s.clocks = int(v) ? 1 : 0;  // acted on in switch_nx.cpp at start
       else if (!std::strcmp(key, "audio_threads")) s.audio_threads = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "resolve_clear_key")) s.resolve_clear_key = int(v) ? 1 : 0;
     }
     std::fclose(f);
   }
