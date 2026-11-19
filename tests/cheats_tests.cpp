@@ -146,11 +146,15 @@ void TestJumpSpeed() {
 
 void TestSwitchKeys() {
   std::printf("switch keys: locked level, start stage\n");
+  // The key is the level + 1.
   CHECK(LockedLevel(0, 1, 2) == 1);  // 0 = the game's level
-  CHECK(LockedLevel(2, 0, 2) == 2);
-  CHECK(LockedLevel(2, 0, 1) == 1);  // capped by the game's maximum
-  CHECK(LockedLevel(1, 2, 2) == 1);  // locked: a higher level is put back too
-  CHECK(LockedLevel(2, 0, -1) == 0);
+  CHECK(LockedLevel(0, 2, 2) == 2);
+  CHECK(LockedLevel(3, 0, 2) == 2);
+  CHECK(LockedLevel(3, 0, 1) == 1);  // capped by the game's maximum
+  CHECK(LockedLevel(2, 2, 2) == 1);  // locked: a higher level (skills 8..13 give 2) is put back too
+  CHECK(LockedLevel(1, 2, 2) == 0);  // level 0 can be locked
+  CHECK(LockedLevel(1, 1, 0) == 0);
+  CHECK(LockedLevel(3, 0, -1) == 0);
   CHECK(StageIndex(0) == -1);
   CHECK(StageIndex(1) == 0);
   CHECK(StageIndex(8) == 7);
@@ -431,6 +435,29 @@ void TestSuperArmorWiring() {
   CHECK(ReadSource("cheat_menu.cpp").find("\"Super Armor\"") != std::string::npos);
 }
 
+// The Switch weapon locks: the menu names ids 1..6 in the order of the muzzle effect table (0x823C5D78) and offers
+// level 0; the locks apply in the player's update and after the skill level, not in the shot cooldown setter.
+void TestSwitchLockWiring() {
+  std::printf("switch lock wiring\n");
+  const std::string menu = ReadSource("settings_menu.cpp");
+  const std::string names = "{\"GAME\", \"MG\", \"SPREAD\", \"RIPPLE\", \"HEATED PLASMA\", \"LASER\", \"CRUSH\"}, 7,";
+  const size_t first = menu.find(names);
+  CHECK(first != std::string::npos && menu.find(names, first + 1) != std::string::npos);
+  CHECK(menu.find("{\"GAME\", \"1\", \"2\"}, 3,") == std::string::npos);
+  CHECK(menu.find("cheat_level_a = int(v) >= 0 && int(v) <= 3") != std::string::npos);
+  CHECK(menu.find("cheat_level_b = int(v) >= 0 && int(v) <= 3") != std::string::npos);
+
+  const std::string cheats = ReadSource("cheats.cpp");
+  CHECK(cheats.find("REX_HOOK_RAW(sub_8246A8B0)") != std::string::npos);
+  CHECK(cheats.find("REX_HOOK_RAW(sub_8246BD38)") != std::string::npos);
+  CHECK(cheats.find("never empty") == std::string::npos);
+  const size_t cooldown = cheats.find("REX_HOOK_RAW(sub_8240D778)");
+  const size_t jump = cheats.find("REX_HOOK_RAW(sub_824884C8)");
+  CHECK(cooldown != std::string::npos && jump != std::string::npos && cooldown < jump);
+  CHECK(cheats.substr(cooldown, jump - cooldown).find("Locks") == std::string::npos);
+  CHECK(cheats.substr(cooldown, jump - cooldown).find("AlignSlots") == std::string::npos);
+}
+
 void TestNoStaleKnockbackCheat() {
   std::printf("no stale knockback cheat\n");
   const std::string old_name = std::string("No") + "Knockback";
@@ -465,6 +492,7 @@ int main() {
   TestSessionNeverChangesSavedValues();
   TestMenuHasNoPersistencePath();
   TestSuperArmorWiring();
+  TestSwitchLockWiring();
   TestNoStaleKnockbackCheat();
   std::printf("%s: %d checks, %d failures\n", g_failures ? "FAILED" : "OK", g_checks, g_failures);
   return g_failures ? 1 : 0;

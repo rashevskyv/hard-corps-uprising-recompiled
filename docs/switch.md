@@ -137,6 +137,11 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   this build copies none, the ones in `sdmc:/switch/hcu/shaders/` are used.
 - New `settings.txt` key: `audio_threads=1` runs each audio client's callback on its own thread (the old SDK's patch);
   default 0 = the base's audio worker.
+- Cheats (only the `-DHCU_CHEATS=ON` build, flavour `-cheats`; all keys 0 = off, the settings menu shows them there):
+  `cheat_god`, `cheat_lives`, `cheat_health`, `cheat_keep_weapons`, `cheat_rapid_fire`, `cheat_stage` (1..8),
+  `cheat_log`. `cheat_weapon_a` / `_b` lock slot A / B to a weapon: 1 MG, 2 Spread, 3 Ripple, 4 Heated Plasma,
+  5 Laser, 6 Crush. `cheat_level_a` / `_b` lock its level: 1..3 = level 0..2 (key - 1). The locks apply every frame
+  (`src/cheats.cpp`).
 
 ### PGO
 

@@ -57,12 +57,13 @@ const Item kItems[] = {
     {"INFINITE HEALTH", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_health; }, [](int i) { hcu_settings.cheat_health = i; }},
     {"KEEP WEAPONS", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_keep_weapons; }, [](int i) { hcu_settings.cheat_keep_weapons = i; }},
     {"RAPID FIRE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_rapid_fire; }, [](int i) { hcu_settings.cheat_rapid_fire = i; }},
-    {"WEAPON SLOT A", {"GAME", "1", "2", "3", "4", "5", "6"}, 7, false, [] { return hcu_settings.cheat_weapon_a; },
-     [](int i) { hcu_settings.cheat_weapon_a = i; }},
-    {"LEVEL SLOT A", {"GAME", "1", "2"}, 3, false, [] { return hcu_settings.cheat_level_a; }, [](int i) { hcu_settings.cheat_level_a = i; }},
-    {"WEAPON SLOT B", {"GAME", "1", "2", "3", "4", "5", "6"}, 7, false, [] { return hcu_settings.cheat_weapon_b; },
-     [](int i) { hcu_settings.cheat_weapon_b = i; }},
-    {"LEVEL SLOT B", {"GAME", "1", "2"}, 3, false, [] { return hcu_settings.cheat_level_b; }, [](int i) { hcu_settings.cheat_level_b = i; }},
+    // Option i is the key's value i: weapon ids 1..6 (src/cheats.cpp, kWeaponOffset), level keys 1..3 = level 0..2.
+    {"WEAPON SLOT A", {"GAME", "MG", "SPREAD", "RIPPLE", "HEATED PLASMA", "LASER", "CRUSH"}, 7, false,
+     [] { return hcu_settings.cheat_weapon_a; }, [](int i) { hcu_settings.cheat_weapon_a = i; }},
+    {"LEVEL SLOT A", {"GAME", "0", "1", "2"}, 4, false, [] { return hcu_settings.cheat_level_a; }, [](int i) { hcu_settings.cheat_level_a = i; }},
+    {"WEAPON SLOT B", {"GAME", "MG", "SPREAD", "RIPPLE", "HEATED PLASMA", "LASER", "CRUSH"}, 7, false,
+     [] { return hcu_settings.cheat_weapon_b; }, [](int i) { hcu_settings.cheat_weapon_b = i; }},
+    {"LEVEL SLOT B", {"GAME", "0", "1", "2"}, 4, false, [] { return hcu_settings.cheat_level_b; }, [](int i) { hcu_settings.cheat_level_b = i; }},
     {"START STAGE", {"GAME", "1", "2", "3", "4", "5", "6", "7", "8"}, 9, false, [] { return hcu_settings.cheat_stage; },
      [](int i) { hcu_settings.cheat_stage = i; }},
 #endif
@@ -152,8 +153,8 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "cheat_rapid_fire")) s.cheat_rapid_fire = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "cheat_weapon_a")) s.cheat_weapon_a = int(v) >= 0 && int(v) <= 6 ? int(v) : 0;
       else if (!std::strcmp(key, "cheat_weapon_b")) s.cheat_weapon_b = int(v) >= 0 && int(v) <= 6 ? int(v) : 0;
-      else if (!std::strcmp(key, "cheat_level_a")) s.cheat_level_a = int(v) >= 0 && int(v) <= 2 ? int(v) : 0;
-      else if (!std::strcmp(key, "cheat_level_b")) s.cheat_level_b = int(v) >= 0 && int(v) <= 2 ? int(v) : 0;
+      else if (!std::strcmp(key, "cheat_level_a")) s.cheat_level_a = int(v) >= 0 && int(v) <= 3 ? int(v) : 0;
+      else if (!std::strcmp(key, "cheat_level_b")) s.cheat_level_b = int(v) >= 0 && int(v) <= 3 ? int(v) : 0;
       else if (!std::strcmp(key, "cheat_stage")) s.cheat_stage = int(v) >= 0 && int(v) <= 8 ? int(v) : 0;
       else if (!std::strcmp(key, "cheat_god")) s.cheat_god = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "cheat_log")) s.cheat_log = int(v) ? 1 : 0;

@@ -149,7 +149,9 @@ namespace {
 // +28 the stage index (sub_824F0BF0 writes it at a new game), +136 * player the saved player records.
 constexpr uint32_t kGamePointer = 0x82CB96B4;
 constexpr uint32_t kSlotOffset = 4347;      // byte: the current weapon slot, 0 or 1
-constexpr uint32_t kWeaponOffset = 4352;    // word per slot: the weapon id (0 = none)
+// word per slot: the weapon id, 0 = none, 1 MG, 2 Spread, 3 Ripple, 4 Heated Plasma, 5 Laser, 6 Crush (the muzzle
+// effect table 0x823C5D78 of sub_82453A50)
+constexpr uint32_t kWeaponOffset = 4352;
 constexpr uint32_t kLevelOffset = 4360;     // word per slot: the weapon level
 constexpr uint32_t kMaxLevelOffset = 4368;  // word: the highest level
 
@@ -174,7 +176,7 @@ int Skill(const PPCContext& ctx, uint8_t* base, uint32_t self, int n) {
   return c.r3.s32;
 }
 
-// The lock of slot 0 (A) and 1 (B): weapon id 1..6 and level 1..2, 0 = the game's.
+// The lock of slot 0 (A) and 1 (B): weapon id 1..6 and the level key 1..3 (level 0..2), 0 = the game's.
 uint32_t WantId(uint32_t slot) {
   return uint32_t(slot == 0 ? hcu_settings.cheat_weapon_a : hcu_settings.cheat_weapon_b);
 }
@@ -231,11 +233,9 @@ void LogLife(const uint8_t* base, uint32_t object) {
   }
 }
 
-// At each shot cooldown tick of a player (not HT): the locked slots get their id and level back. When the current
-// slot changed, the game's weapon set-up (sub_8246BD38, as after a pick-up) runs for it.
-void AlignSlots(const PPCContext& ctx, uint8_t* base, uint32_t self) {
-  const uint32_t current = CurrentSlot(base, self);
-  bool current_changed = false;
+// The locked slots get their id and level back. True when a word changed; `new_id`: the id of the current slot did.
+bool StoreLocks(uint8_t* base, uint32_t self, uint32_t current, bool& new_id) {
+  bool changed = false;
   for (uint32_t slot = 0; slot < 2; ++slot) {
     if (!Locked(slot)) {
       continue;
@@ -245,21 +245,37 @@ void AlignSlots(const PPCContext& ctx, uint8_t* base, uint32_t self) {
     const int32_t level = id == 0 ? int32_t(Load32(base, level_addr))
                                   : cheats::LockedLevel(WantLevel(slot), int32_t(Load32(base, level_addr)),
                                                         int32_t(Load32(base, self + kMaxLevelOffset)));
-    if (Load32(base, id_addr) != id || int32_t(Load32(base, level_addr)) != level) {
+    if (Load32(base, id_addr) != id) {
       Store32(base, id_addr, id);
+      new_id |= slot == current;
+      changed = true;
+    }
+    if (int32_t(Load32(base, level_addr)) != level) {
       Store32(base, level_addr, uint32_t(level));
-      current_changed |= slot == current;
+      changed = true;
     }
   }
-  if (!current_changed) {
+  return changed;
+}
+
+// A player (not HT; the caller checks): the locked slots get their id and level back. A new id in the current slot
+// gets the game's level for it first (sub_8246BD38, as after a pick-up: skills 1..6 give level 1, skills 8..13 level
+// 2), then a locked level is put back over it.
+void AlignSlots(const PPCContext& ctx, uint8_t* base, uint32_t self) {
+  const uint32_t current = CurrentSlot(base, self);
+  bool new_id = false;
+  if (!StoreLocks(base, self, current, new_id)) {
     return;
   }
-  PPCContext c = ctx;
-  c.r3.u64 = self;
-  c.r4.s64 = int8_t(Load32(base, self + kWeaponOffset + 4 * current));
-  t_in_setup = true;
-  __imp__sub_8246BD38(c, base);
-  t_in_setup = false;
+  if (new_id) {
+    PPCContext c = ctx;
+    c.r3.u64 = self;
+    c.r4.s64 = int8_t(Load32(base, self + kWeaponOffset + 4 * current));
+    t_in_setup = true;
+    __imp__sub_8246BD38(c, base);
+    t_in_setup = false;
+    StoreLocks(base, self, current, new_id);
+  }
   if (Log()) {
     std::printf("[cheat] slots locked:");
     LogSlots(base, self);
@@ -267,7 +283,30 @@ void AlignSlots(const PPCContext& ctx, uint8_t* base, uint32_t self) {
   }
 }
 
+// At a hook's entry or after a call (the guest stack below r1 is free there): a player, not HT, while a key locks a
+// slot.
+void ApplyLocks(const PPCContext& ctx, uint8_t* base, uint32_t self) {
+  if (AnyLock() && !t_in_setup && IsPlayer(base, self) && !HasNoWeapons(ctx, base, self)) {
+    AlignSlots(ctx, base, self);
+  }
+}
+
 }  // namespace
+
+// Player::Update (vtable +4; it counts the shot cooldown down): the locks every frame, before the player acts.
+REX_EXTERN(__imp__sub_8246A8B0);
+REX_HOOK_RAW(sub_8246A8B0) {
+  ApplyLocks(ctx, base, ctx.r3.u32);
+  __imp__sub_8246A8B0(ctx, base);
+}
+
+// Player::ApplyWeaponSkillLevel(this, id): the current slot's level to 1 (skills 1..6) or 2 (skills 8..13) for this
+// id; the pick-up and the start weapons call it. A locked level is put back after it.
+REX_HOOK_RAW(sub_8246BD38) {
+  const uint32_t self = ctx.r3.u32;
+  __imp__sub_8246BD38(ctx, base);
+  ApplyLocks(ctx, base, self);
+}
 
 // Player::GiveWeapon(this, id), the pick-up: another id fills the current slot at level 0, the same id raises the
 // level. Ignored for a locked current slot, except the same id while its level is the game's.
@@ -305,10 +344,12 @@ REX_HOOK_RAW(sub_8240E0D0) {
 }
 
 // Player::GiveStartWeapons(this): each empty slot gets the weapon of the first start-weapon skill (60..65: ids 1, 2,
-// 5, 6, 3, 4) the player has. Logged only (a locked slot is never empty).
+// 5, 6, 3, 4) the player has; a slot with a weapon gets its skill level (sub_8246BD38). The locks go in first, so a
+// locked slot is not empty here and the pick-up hook has no start weapon to refuse.
 REX_EXTERN(__imp__sub_82473D48);
 REX_HOOK_RAW(sub_82473D48) {
   const uint32_t self = ctx.r3.u32;
+  ApplyLocks(ctx, base, self);
   const bool player = IsPlayer(base, self);
   if (Log()) {
     const uint32_t g = Game(base);
@@ -433,16 +474,7 @@ REX_HOOK_RAW(sub_8240D778) {
       IsPlayer(base, ctx.r3.u32)) {
     ctx.r4.s64 = cheats::RapidFireCooldown(ctx.r4.s16, g_rapid_fire_carry);
   }
-#if defined(HCU_CHEATS)
-  // The per-frame countdown reaches this setter too: the tick of the locked weapon slots. A leaf: r1 is unchanged.
-  const uint32_t self = ctx.r3.u32;
   __imp__sub_8240D778(ctx, base);
-  if (AnyLock() && !t_in_setup && IsPlayer(base, self) && !HasNoWeapons(ctx, base, self)) {
-    AlignSlots(ctx, base, self);
-  }
-#else
-  __imp__sub_8240D778(ctx, base);
-#endif
 }
 
 // Obj::Jump(this, float speed, float alternate speed, float gravity), shared by every object class.
