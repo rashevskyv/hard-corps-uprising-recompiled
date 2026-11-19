@@ -36,6 +36,8 @@ FLOAT_LOADS=$(opt HCU_FLOAT_LOADS 1 "$@")
 COLD_TRAPS=$(opt HCU_COLD_TRAPS 1 "$@")
 INLINE_MEMCALLS=$(opt HCU_INLINE_MEMCALLS 1 "$@")
 FPCR_ONE=$(opt HCU_FPCR_ONE_MODE 0 "$@")
+DFORM=$(opt HCU_DFORM 0 "$@")  # this script's only (no CMake option): a codegen key
+RO_CONSTANTS=$(opt HCU_RO_CONSTANTS 1 "$@")
 PGO=""  # HCU_PGO is a string (empty, generate or use): the last -DHCU_PGO=... wins
 for a in "$@"; do case "$a" in -DHCU_PGO=*|-DHCU_PGO:*=*) PGO=${a##*=} ;; esac; done
 
@@ -50,19 +52,34 @@ python3 "$SRC/switch/sdk-edits-base.py" "$SDK" > "$ROOT/sdk-edits.log"
 if [ -n "$(git -C "$SDK" status --porcelain --untracked-files=no)" ]; then
     echo "the SDK edits changed $SDK (commit them there first):"; git -C "$SDK" status --short --untracked-files=no; exit 1
 fi
+# -DHCU_DFORM=ON: the base's codegen key dform_disp_split (the base sets it): a D-form access passes the register and
+# the displacement apart (base + zext(rA) + D; the old form wraps rA + D at 32 bits), so neighbouring accesses share
+# one add. NOT exact only for an access whose rA + D crosses 2^32 (0xFFFFxxxx+ or a negative offset from a near-null
+# pointer, a guest fault on the 360 too). Its own generated tree: the key goes into the rsync'd manifest copy (the
+# rsync above puts the original back every run), so the stamp below re-runs the codegen at each change of the flavour.
+[ "$DFORM" = 1 ] && echo 'dform_disp_split = true  # switch/build-base.sh -DHCU_DFORM=ON' >> "$SRC/hard_corps_uprising_manifest.toml"
 
 # Codegen, then the store cards (tools/store_cards.py of the base renames the stores outside the stack to their
 # card-marking forms; the deko3d renderer reads the cards). Again whenever the manifest, its config, the CLI or the
 # cards tool changed.
 CG_STAMP=$(cat "$SRC/hard_corps_uprising_manifest.toml" "$SRC"/config/*.toml "$CLI" "$BASE/tools/store_cards.py" \
-    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$BASE/tools/guest_cas.py" "$BASE/tools/float_loads.py" "$BASE/tools/pch_cold_traps.py" "$BASE/tools/inline_memcalls.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
+    "$BASE/tools/pch_no_volatile.py" "$BASE/tools/loop_barriers.py" "$BASE/tools/guest_cas.py" "$BASE/tools/float_loads.py" "$BASE/tools/pch_cold_traps.py" "$BASE/tools/inline_memcalls.py" "$BASE/tools/ro_constants.py" "$SRC/switch/build-base.sh" | sha1sum | cut -c1-40)
 if [ ! -f "$SRC/generated/default/sources.cmake" ] || [ "$(cat "$SRC/generated/.hcu-codegen-stamp" 2>/dev/null)" != "$CG_STAMP" ]; then
     rm -rf "$SRC/generated"
-    (cd "$SRC" && "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml > "$ROOT/codegen.log" 2>&1) \
-        || { tail -20 "$ROOT/codegen.log"; exit 1; }
+    (cd "$SRC" && REXGLUE_DUMP_IMAGE="$ROOT/hcu_image.bin" "$CLI" codegen --ignore-stamp hard_corps_uprising_manifest.toml \
+        > "$ROOT/codegen.log" 2>&1) || { tail -20 "$ROOT/codegen.log"; exit 1; }
+    : > "$ROOT/passes.log"
+    # Item 11c-4 (the base's tools/ro_constants.py; it reads only the D-form loads, so only the -DHCU_DFORM=ON tree):
+    # the loads from the image's read-only data (.rdata) become REX_RO_* with the bytes there, the XEX's import records
+    # excepted (--xex: the loader writes them). Exact while the game never writes its .rdata (read-only on the 360).
+    # The cmake option HCU_RO_CONSTANTS=OFF (REX_RO_CONSTANTS_OFF) loads them as before. Before float_loads.py.
+    if [ "$DFORM" = 1 ]; then
+        python3 -I "$BASE/tools/ro_constants.py" --gen "$SRC/generated/default" --image "$ROOT/hcu_image.bin" \
+            --xex "$SRC/game/extracted/default.xex" >> "$ROOT/passes.log" 2>&1 || { cat "$ROOT/passes.log"; exit 1; }
+    fi
     # Item 11c (the base's tools/float_loads.py; why and the switch: below, at its volatile edit). Before the store
     # cards: its test "a float was just stored to this address" knows only the plain store names, not the card ones.
-    python3 -I "$BASE/tools/float_loads.py" --gen "$SRC/generated/default" > "$ROOT/passes.log" 2>&1 \
+    python3 -I "$BASE/tools/float_loads.py" --gen "$SRC/generated/default" >> "$ROOT/passes.log" 2>&1 \
         || { cat "$ROOT/passes.log"; exit 1; }
     python3 "$BASE/tools/store_cards.py" --gen "$SRC/generated/default" > "$ROOT/store-cards.log" 2>&1 \
         || { tail -20 "$ROOT/store-cards.log"; exit 1; }
@@ -145,6 +162,12 @@ grep -q '(tools/guest_cas.py)' "$PCH" || { echo "no REX_GUEST_CAS in $PCH (tools
 grep -q '(switch/build-base.sh: volatile)$' "$PCH" || { echo "no volatile float load in $PCH (tools/float_loads.py)"; exit 1; }
 grep -q '(tools/pch_cold_traps.py)' "$PCH" || { echo "no cold ppc_trap in $PCH (tools/pch_cold_traps.py)"; exit 1; }
 grep -q '(tools/inline_memcalls.py)' "$PCH" || { echo "no inline memcpy in $PCH (tools/inline_memcalls.py)"; exit 1; }
+if [ "$DFORM" = 1 ]; then
+    grep -q '^#define REX_ADDR_D(r, d)' "$PCH" || { echo "no D-form macros in $PCH (dform_disp_split)"; exit 1; }
+    grep -q '(tools/ro_constants.py)' "$PCH" || { echo "no REX_RO_* macros in $PCH (tools/ro_constants.py)"; exit 1; }
+    echo "D-form accesses: $(cat "$SRC"/generated/default/*.cpp | grep -oE '\bREX_(LOAD|STORE)_D_' | wc -l)," \
+         "read-only constants: $(cat "$SRC"/generated/default/*.cpp | grep -oE '\bREX_RO_(U8|U16|U32|U64|V128)\(' | wc -l)"
+fi
 cat "$ROOT/passes.log"
 # The stores left without a card (each should go through the stack pointer) and the ones with it.
 echo "stores: $(cat "$SRC"/generated/default/*.cpp | grep -oE '\b(REX_STORE_(D_)?U(8|16|32|64)|REX_STVLX|REX_STVRX|REX_STORE_(D_)?F32ANY)(_C)?\(' \
@@ -166,6 +189,8 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 [ "$COLD_TRAPS" = 0 ] && VERSION="$VERSION-notrap"
 [ "$INLINE_MEMCALLS" = 0 ] && VERSION="$VERSION-nomc"
 [ "$FPCR_ONE" = 1 ] && VERSION="$VERSION-fpcr1"
+[ "$DFORM" = 1 ] && VERSION="$VERSION-dform"
+[ "$DFORM" = 1 ] && [ "$RO_CONSTANTS" = 0 ] && VERSION="$VERSION-noro"
 # The instrumented NRO is slow (never a speed test): hbmenu and its logs must say so.
 [ "$PGO" = generate ] && VERSION="$VERSION-pgogen"
 [ "$PGO" = use ] && VERSION="$VERSION-pgo"
@@ -183,7 +208,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON -DHCU_FPCR_ONE_MODE=OFF -DHCU_PGO= "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON -DHCU_FPCR_ONE_MODE=OFF -DHCU_RO_CONSTANTS=ON -DHCU_PGO= "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"

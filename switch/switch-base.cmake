@@ -103,6 +103,13 @@ option(HCU_INLINE_MEMCALLS "Constant-size memcpy / memset of the game inline" ON
 if(NOT HCU_INLINE_MEMCALLS)
     target_compile_definitions(hcu_recomp PRIVATE REX_INLINE_MEMCALLS_OFF)
 endif()
+# Item 11c-4: the base's tools/ro_constants.py (switch/build-base.sh runs it only in the -DHCU_DFORM=ON tree; the
+# default tree has no REX_RO_* site). ON: a load from .rdata is the constant found there. OFF: REX_RO_CONSTANTS_OFF,
+# the guest load as before.
+option(HCU_RO_CONSTANTS "Loads from the game's read-only data as constants (only in the dform tree)" ON)
+if(NOT HCU_RO_CONSTANTS)
+    target_compile_definitions(hcu_recomp PRIVATE REX_RO_CONSTANTS_OFF)
+endif()
 # Item 15 of docs/bible-checklist.md: link-time optimisation (the base's BANJO_SWITCH_LTO and BANJO_SWITCH_SDK_OPT,
 # app/CMakeLists.txt of the base). The game code, HCU's code, the GPU plugin (deko3d) and the SDK runtime are compiled
 # to GIMPLE and optimised as one program at the link, which repeats -ffp-contract=off and -fno-strict-aliasing (the
