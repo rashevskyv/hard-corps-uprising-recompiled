@@ -90,42 +90,10 @@ sha1sum "$BUILD"/hcu.nro 2>/dev/null || true
 # What hbmenu will show; the NACP version must be this build's (nx_create_nro ignored it until 0.55).
 python3 "$SRC/tools/nro_nacp.py" "$BUILD/hcu.nro" "$VERSION"
 
-# --- deko3d renderer staging (shared with cvhd-recomp): the present shaders and the game's shaders as
-# DKSH next to the NRO in $BUILD/stage/ (switch/eden-deko3d.ps1 copies it to Eden's SD). The game's
-# shaders come from the trace backend's --dump_shaders directory ($HCU_SHADER_DUMPS, default
-# /root/hcu/shaders_trace) through tools/xenos2glsl.py + uam.
+# --- deko3d renderer staging: the NRO, the marker and the shaders (switch/stage-shaders.sh) in $BUILD/stage/. The game's
+# shaders come from the trace backend's --dump_shaders directory ($HCU_SHADER_DUMPS, default /root/hcu/shaders_trace).
 STAGE=$BUILD/stage
-rm -rf "$STAGE"
-mkdir -p "$STAGE/shaders"
-for s in vert frag; do
-    uam -s $s -o "$STAGE/shaders/present.$s.dksh" "$SRC/src/gpu/shaders/present.$s"
-done
-SHADER_DUMPS=${HCU_SHADER_DUMPS:-$ROOT/shaders_trace}
-if [ -d "$SHADER_DUMPS" ]; then
-    rm -rf "$BUILD/glsl" "$BUILD/glsl_np" "$BUILD/glsl_na"
-    python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl" --check --precise
-    # The vertex shaders without precise outputs, staged as shader_<hash>.vert.np.dksh (the zfix file's "noprecise").
-    python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl_np" --check
-    # The Linux test host reads the GLSL from here (--deko3d_shader_dir=$BUILD/glsl/), the present pair too.
-    for s in vert frag; do cp "$SRC/src/gpu/shaders/present.$s" "$BUILD/glsl/present.$s.glsl"; done
-    for f in "$BUILD"/glsl/*.glsl.dksh; do
-        [ -f "$f" ] || continue
-        b=$(basename "$f" .glsl.dksh)
-        cp "$f" "$STAGE/shaders/$b.dksh"
-    done
-    for f in "$BUILD"/glsl_np/*.vert.glsl.dksh; do
-        [ -f "$f" ] || continue
-        cp "$f" "$STAGE/shaders/$(basename "$f" .glsl.dksh).np.dksh"
-    done
-    # ALPHA VARIANTS (settings.txt alpha_variants=1): the pixel shaders without the alpha test, staged as
-    # shader_<hash>.frag.na.dksh, only where the GLSL differs (a shader with colour outputs).
-    python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl_na" --check --no-alpha-test
-    for f in "$BUILD"/glsl_na/*.frag.glsl.dksh; do
-        [ -f "$f" ] || continue
-        b=$(basename "$f" .glsl.dksh)
-        cmp -s "$BUILD/glsl_na/$b.glsl" "$BUILD/glsl/$b.glsl" || cp "$f" "$STAGE/shaders/$b.na.dksh"
-    done
-fi
+"$SRC/switch/stage-shaders.sh" "$STAGE" "$BUILD" "${HCU_SHADER_DUMPS:-$ROOT/shaders_trace}"
 cp "$BUILD/hcu.nro" "$STAGE/hcu.nro"
 touch "$STAGE/deko3d"
 echo "stage: $STAGE ($(ls "$STAGE/shaders" | wc -l) shaders)"

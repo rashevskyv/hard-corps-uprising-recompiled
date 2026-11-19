@@ -71,7 +71,7 @@ Both end with `sdmc:/switch/hcu/user/0000000000000000/58410A18/00000002/<content
 - The ReXGlue SDK v0.10.0 source with `patches/rexglue-sdk` (the common and `.linux` patches) applied, then `switch/sdk-edits.py` and `switch/sdk-edits-hcu.py` (the Switch host layer; `build.sh` applies them). The SDK's host CLI built for Linux (`cmake --preset linux-amd64`, target `rexglue`).
 - An NVK (mesa-switch) `libvulkan.a` for the Switch (the executable links it; the renderer in use is deko3d).
 - Your own extracted game files in `game/extracted/` (never committed; the recompiled C++ is generated from your `default.xex`).
-- The game's shader microcode: the backend writes every shader it lacks to `sdmc:/switch/hcu/shaders/missing/`. Put those files into the dump folder (`HCU_SHADER_DUMPS`) and build again: `tools/xenos2glsl.py` and `uam` translate them into `out/build/switch/stage/shaders/`.
+- The game's shader microcode: the backend writes every shader it lacks to `sdmc:/switch/hcu/shaders/missing/`. `switch/fetch-missing-shaders.sh <console IP>` puts those files into the dump folder (`HCU_SHADER_DUMPS`); build again and `switch/stage-shaders.sh` (`tools/xenos2glsl.py`, `uam`) translates them into `<build dir>/stage/shaders/`.
 
 The paths are variables at the top of `switch/build.sh` (`HCU_ROOT`, `REXSDK_DIR`, `NVK_SDK`, `HCU_SHADER_DUMPS`). The hbmenu icon is the game's own title image (`packaging/switch/icon-local.jpg`, not in the repository); without it the NRO gets the devkitPro default icon. Details and the port's history: [docs/switch.md](docs/switch.md).
 

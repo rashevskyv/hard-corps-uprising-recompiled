@@ -76,8 +76,10 @@ The backend is cvhd-recomp's (`src/gpu/deko3d_backend.cpp`, docs/native-renderer
 shared through `switch/sync-cvhd.sh` (now at 7a52b68; `switch/cvhd-local.patch` holds the HCU changes, regenerate it with
 `bash switch/make-local-patch.sh`; the generic fixes are in `docs/for-cvhd-gh/`). The file `sdmc:/switch/hcu/deko3d` selects it. Shaders: the backend
 dumps the ucode of each shader without a DKSH into `sdmc:/switch/hcu/shaders/missing/`;
-`switch/eden-deko3d.ps1` copies them to `/root/hcu/shaders_trace/`, and the next `switch/build.sh`
-translates them (`tools/xenos2glsl.py`, uam) into `out/build/switch/stage/shaders/`.
+`switch/fetch-missing-shaders.sh <console IP>` (or `switch/eden-deko3d.ps1` for Eden) copies them to `/root/hcu/shaders_trace/`,
+and the next `switch/build-base.sh` (or `switch/build.sh`) translates them (`switch/stage-shaders.sh`: `tools/xenos2glsl.py`,
+uam) into `<build dir>/stage/shaders/`. `switch/build-base.sh` also stages every pixel shader of the game files and the XEX
+image (`tools/shader_scan.py`); vertex shaders come only from dumps (the D3D runtime binds them to each vertex declaration).
 
 Eden: `powershell -File switch/eden-deko3d.ps1 -Seconds 150 -Every 25 [-Keys "160:M"]` (Eden keys: C = A,
 X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screenshots and logs in

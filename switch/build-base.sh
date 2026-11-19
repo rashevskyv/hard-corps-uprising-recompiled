@@ -284,3 +284,13 @@ sha1sum "$BUILD"/hcu.nro
 [ -f "$SRC/packaging/switch/icon-local.jpg" ] || echo "WARNING: no packaging/switch/icon-local.jpg: the NRO has the devkitPro default icon"
 # The NACP display version holds 15 characters: hbmenu shows a flavour suffix cut ("-n"); the logs carry it whole.
 python3 "$SRC/tools/nro_nacp.py" "$BUILD/hcu.nro" "${VERSION:0:15}"
+# The shaders (switch/stage-shaders.sh) in $BUILD/stage/shaders/, for sdmc:/switch/hcu/shaders/: the console's and the
+# trace backend's dumps ($HCU_SHADER_DUMPS; switch/fetch-missing-shaders.sh adds the console's missing/) and every shader
+# tools/shader_scan.py finds in the game files and the XEX image (all pixel shaders; vertex shaders only from dumps).
+# The XEX image is the codegen's (REXGLUE_DUMP_IMAGE above), written whenever the codegen runs.
+IMAGE=()
+[ -f "$ROOT/hcu_image.bin" ] && IMAGE=(--image "$ROOT/hcu_image.bin")
+python3 -I "$SRC/tools/shader_scan.py" --game "$SRC/game/extracted" "${IMAGE[@]}" --sdk "$SDK" \
+    --out "$BUILD/shader_scan" > "$BUILD/shader_scan.log" 2>&1 || { tail -20 "$BUILD/shader_scan.log"; exit 1; }
+tail -1 "$BUILD/shader_scan.log"
+"$SRC/switch/stage-shaders.sh" "$BUILD/stage" "$BUILD" "${HCU_SHADER_DUMPS:-/root/hcu/shaders_trace}" "$BUILD/shader_scan"
