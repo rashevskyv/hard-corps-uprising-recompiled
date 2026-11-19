@@ -35,6 +35,8 @@ METER=$(opt HCU_NX_METER 0 "$@")
 FLOAT_LOADS=$(opt HCU_FLOAT_LOADS 1 "$@")
 COLD_TRAPS=$(opt HCU_COLD_TRAPS 1 "$@")
 INLINE_MEMCALLS=$(opt HCU_INLINE_MEMCALLS 1 "$@")
+PGO=""  # HCU_PGO is a string (empty, generate or use): the last -DHCU_PGO=... wins
+for a in "$@"; do case "$a" in -DHCU_PGO=*|-DHCU_PGO:*=*) PGO=${a##*=} ;; esac; done
 
 CLI=$SDK/out/linux-amd64/Release/rexglue
 [ -x "$CLI" ] || { echo "no host CLI: $CLI"; exit 1; }
@@ -162,6 +164,9 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 [ "$FLOAT_LOADS" = 0 ] && VERSION="$VERSION-nofl"
 [ "$COLD_TRAPS" = 0 ] && VERSION="$VERSION-notrap"
 [ "$INLINE_MEMCALLS" = 0 ] && VERSION="$VERSION-nomc"
+# The instrumented NRO is slow (never a speed test): hbmenu and its logs must say so.
+[ "$PGO" = generate ] && VERSION="$VERSION-pgogen"
+[ "$PGO" = use ] && VERSION="$VERSION-pgo"
 STAMP=$(date -u +%Y-%m-%dT%H:%MZ)
 BUILD_ID="$VERSION-${STAMP//[-:]/}"
 mkdir -p "$BUILD"
@@ -176,7 +181,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON -DHCU_PGO= "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"
