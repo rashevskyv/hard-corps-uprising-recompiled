@@ -1820,8 +1820,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (now - load_last_ < freq) return;
     uint32_t a, b, passes;
     hcu_meter_collision(&a, &b, &passes);
-    std::printf("[nx] load t %.1f s, swap #%u: %u drawn frames, draws per frame avg %.0f max %u; collision groups max %u + %u (%u passes)
-",
+    std::printf("[nx] load t %.1f s, swap #%u: %u drawn frames, draws per frame avg %.0f max %u; collision groups max %u + %u (%u passes)\n",
                 double(now - load_t0_) / double(freq), swaps_, load_frames_, double(load_draws_) / load_frames_, load_draws_max_, a, b, passes);
     load_last_ = now;
     load_frames_ = load_draws_max_ = 0;
