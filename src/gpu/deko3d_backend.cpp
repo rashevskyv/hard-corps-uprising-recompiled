@@ -1452,6 +1452,14 @@ class Deko3dCommandProcessor : public CommandProcessor {
     {
       char lines[kMenuLines][48];
       const int n = hcu_menu_lines(lines, kMenuLines);
+      // TRAIL REARM (trail_rearm=1): closing the settings menu starts the GPU trail again (a boss scene's step times).
+      if (hcu_settings.trail_rearm && menu_was_open_ && !n) {
+        trail_ = true;
+        trail_frames_ = 0;
+        trail_rearmed_ = true;
+        Log("GPU trail on again (settings menu closed, trail_rearm=1): frames 20 and 60 -> dk_gpu_times_2/3.txt");
+      }
+      menu_was_open_ = n > 0;
       size_t longest = 0;
       for (int i = 0; i < n; i++) longest = std::max(longest, std::strlen(lines[i]));
       menu_w = std::min(kMenuW, 24 + uint32_t(longest) * 6 * kOverlayScale);  // DrawText: from x = 12, 6 columns a glyph
@@ -1967,7 +1975,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   // The kept step times to the log and to dk_gpu_times_<ordinal>.txt, once: when the trail goes off (after the measured
   // frames, so no card write falls into them) or, before that, when the backend goes down.
   void SaveStepTimes() {
-    for (uint32_t ordinal = 0; ordinal < 2; ordinal++) {
+    for (uint32_t ordinal = 0; ordinal < 4; ordinal++) {
       StepTimes& s = step_times_[ordinal];
       if (s.file.empty()) continue;
       std::fputs(s.log.c_str(), stdout);
@@ -2025,9 +2033,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
       // (the console's menus draw 97 or fewer, a level 235-438; the first swap has 132 clears and 76 resolves, so draws count).
       // Frames 20 and 60 keep their step times in memory; the log lines and the files are written once, at "GPU trail
       // off". The fps before and after that line gives the trail's own cost. A trail later in the level needs a switch for it.
-      if (trail_ && std::count_if(f.steps.begin(), f.steps.end(), [](const std::string& s) { return s.starts_with("draw "); }) >= 150) {
+      // A re-armed trail (trail_rearm=1) counts every frame (a boss scene may draw fewer than 150) into ordinals 2 and 3.
+      if (trail_ && (trail_rearmed_ || std::count_if(f.steps.begin(), f.steps.end(), [](const std::string& s) { return s.starts_with("draw "); }) >= 150)) {
         ++trail_frames_;
-        if (finished && (trail_frames_ == 20 || trail_frames_ == 60)) KeepStepTimes(f, trail_frames_ == 20 ? 0 : 1);
+        if (finished && (trail_frames_ == 20 || trail_frames_ == 60)) KeepStepTimes(f, (trail_rearmed_ ? 2 : 0) + (trail_frames_ == 20 ? 0 : 1));
         if (trail_frames_ == 100) {
           trail_ = false;
           Log("GPU trail off: 100 frames of 150+ draws finished");
@@ -3190,8 +3199,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool trail_ = false;
 #endif
   uint32_t trail_frames_ = 0;
+  bool trail_rearmed_ = false;  // TRAIL REARM: the trail runs again after a settings menu close
+  bool menu_was_open_ = false;
   struct StepTimes { std::string log, file; };  // KeepStepTimes -> SaveStepTimes: the log lines and the file text
-  StepTimes step_times_[2];
+  StepTimes step_times_[4];  // 0, 1: the first level frames; 2, 3: a re-armed trail
   uint32_t sampler_desc_offset_ = 0;
   Frame frames_[kFrames];
   uint32_t frame_ = 0;

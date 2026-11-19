@@ -61,6 +61,8 @@ struct HcuSettings {
   // The keys below are not in the initializer (0 = off) and not in the menu: settings.txt only (A/B tests).
   int resolve_clear_key;  // 1 = a resolve clear (colour, and depth with stencil 0) leaves the clean_key of a clear of
                           // that rect to that value, so CLEAR SKIP (clear_skip=1) can skip the next same clear (live)
+  int trail_rearm;        // 1 = each close of the settings menu starts the GPU step trail again: frames 20 and 60 after
+                          // it go to dk_gpu_times_2.txt and _3.txt (a boss scene; no 150-draw threshold)
 };
 
 extern HcuSettings hcu_settings;
