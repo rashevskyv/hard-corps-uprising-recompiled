@@ -2472,7 +2472,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
   // SHADOW TARGET (shadow_target=1): the shadow pass draws straight into its resolve destination. Last frame's depth
   // resolves (plans_prev_, by their order in the frame) predict where the EDRAM depth rect goes; a clear of that EDRAM
-  // image inside the predicted rect starts an alias: the clears, and the depth-only draws once the clears tile the rect,
+  // image that starts inside the predicted rect starts an alias: the clears (their rows below the rect stay on the EDRAM
+  // image), and the depth-only draws once the clears tile the rect,
   // go into the destination at the offset, and the resolve that matches the plan copies nothing (dk_gpu_times_1 of 0.339:
   // three resolves, 1.67 ms). Any other use of the EDRAM image while the alias holds its rect (ShadowFlush) first copies
   // the rect back and replays the recorded clears, so a wrong prediction costs a copy, not a wrong picture.
@@ -2481,13 +2482,22 @@ class Deko3dCommandProcessor : public CommandProcessor {
   static bool Inside(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const ShadowRegion& r) {
     return x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
   }
-  // The clears tile the rect: each inside it (checked when recorded), pairwise disjoint, and their areas sum to its area.
+  // A clear that starts inside the rect and may run past its bottom (HCU clears 704 rows before the 640-row cascade 3):
+  // `in` = its rows inside the rect.
+  static bool Fits(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const ShadowRegion& r, uint32_t& in) {
+    if (x < r.x || x + w > r.x + r.w || y < r.y || y >= r.y + r.h || !w || !h) return false;
+    in = std::min(y + h, r.y + r.h) - y;
+    return true;
+  }
+  // The clears, cut to the rect, tile it: pairwise disjoint, and their areas sum to its area.
   static bool Covered(const ShadowClearRec* c, uint32_t n, const ShadowRegion& r) {
     uint64_t a = 0;
+    auto bottom = [&r](const ShadowClearRec& k) { return std::min(k.y + k.h, r.y + r.h); };
     for (uint32_t i = 0; i < n; i++) {
-      a += uint64_t(c[i].w) * c[i].h;
+      if (c[i].x < r.x || c[i].x + c[i].w > r.x + r.w || c[i].y < r.y || c[i].y >= r.y + r.h) return false;
+      a += uint64_t(c[i].w) * (bottom(c[i]) - c[i].y);
       for (uint32_t j = 0; j < i; j++)
-        if (c[i].x < c[j].x + c[j].w && c[j].x < c[i].x + c[i].w && c[i].y < c[j].y + c[j].h && c[j].y < c[i].y + c[i].h) return false;
+        if (c[i].x < c[j].x + c[j].w && c[j].x < c[i].x + c[i].w && c[i].y < bottom(c[j]) && c[j].y < bottom(c[i])) return false;
     }
     return a == uint64_t(r.w) * r.h;
   }
@@ -2505,13 +2515,20 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufCopyImage(cmd, &sv, &sr, &dv, &dr, 0);
     dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
   }
-  void ShadowClearInto(Frame& f, uint32_t x, uint32_t y, uint32_t w, uint32_t h, float z) {
+  // The clear's first `in` rows go into the texture; the rows below the rect (if any) are cleared on the EDRAM image.
+  void ShadowClearInto(Frame& f, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t in, float z) {
     const ShadowRegion& r = sa_.r;
     BindTargets(f.cmdbuf, nullptr, r.dd);
-    const DkScissor sc{x + r.ox, y + r.oy, w, h};
+    const DkScissor sc{x + r.ox, y + r.oy, w, in};
     dkCmdBufSetScissors(f.cmdbuf, 0, &sc, 1);
     dkCmdBufClearDepthStencil(f.cmdbuf, true, z, 0xFF, 0);
     r.dd->clean_key = 0;
+    if (in < h) {
+      BindTargets(f.cmdbuf, nullptr, sa_.edram);
+      const DkScissor below{x, y + in, w, h - in};
+      dkCmdBufSetScissors(f.cmdbuf, 0, &below, 1);
+      dkCmdBufClearDepthStencil(f.cmdbuf, true, z, 0xFF, 0);
+    }
     frame_st_redirects_++;
     clears_++;
     frame_clears_++;
@@ -2555,12 +2572,13 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     const uint32_t n = uint32_t(plans_cur_.size());
     const DepthPlan* p = n < plans_prev_.size() && plans_prev_[n].edram_base == e->edram_base && plans_prev_[n].pitch == e->edram_pitch ? &plans_prev_[n] : nullptr;
-    if (a.edram == e && a.phase != 2 && a.ordinal == n && Inside(x, y, w, h, a.r)) {
+    uint32_t in = 0;
+    if (a.edram == e && a.phase != 2 && a.ordinal == n && Fits(x, y, w, h, a.r, in)) {
       if (a.phase == 0) {
         if (a.n_clears == 4) { ShadowFlush(f, "five clears"); return false; }
         a.clears[a.n_clears++] = {x, y, w, h, z};
       }
-      ShadowClearInto(f, x, y, w, h, z);
+      ShadowClearInto(f, x, y, w, h, in, z);
       return true;
     }
     ShadowRegion r{};
@@ -2571,7 +2589,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
           p->dy + p->h <= dd->height)
         r = {dd, p->dest_base, p->x, p->y, p->w, p->h, p->dx - p->x, p->dy - p->y};
     }
-    if (!r.dd || !Inside(x, y, w, h, r)) {
+    if (!r.dd || !Fits(x, y, w, h, r, in)) {
       if (a.edram == e && a.phase == 2 && Inside(x, y, w, h, a.r) && a.n_clears < 4) {
         // A clear after the resolve, outside any plan: made on the EDRAM image and recorded; once such clears tile the
         // rect, the texture no longer holds anything of the EDRAM image (HCU clears the rect again after the last cascade).
@@ -2612,7 +2630,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     e->clean_key = 0;
     LogOnce("sttarget", "SHADOW TARGET: first alias: EDRAM %u pitch %u rect %u,%u %ux%u -> %08X at %u,%u (plan %u, swap #%u)", e->edram_base, e->edram_pitch,
             r.x, r.y, r.w, r.h, r.dd_base, r.x + r.ox, r.y + r.oy, n, swaps_ + 1);
-    ShadowClearInto(f, x, y, w, h, z);
+    ShadowClearInto(f, x, y, w, h, in, z);
     return true;
   }
 
