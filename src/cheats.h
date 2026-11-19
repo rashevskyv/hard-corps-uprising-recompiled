@@ -204,4 +204,19 @@ inline double ScaledMovementSpeed(double speed, uint32_t state = 0) {
   return ScaledMovementVelocity({speed, 0.0}, state).x;
 }
 
+// Switch settings.txt keys (-DHCU_CHEATS=ON).
+// cheat_level_a / _b: 0 = the game's level, 1..2 = this level, capped by the game's maximum.
+inline int32_t LockedLevel(int cheat_level, int32_t current, int32_t max) {
+  if (cheat_level <= 0) {
+    return current;
+  }
+  const int32_t top = max < 0 ? 0 : max;
+  return cheat_level < top ? cheat_level : top;
+}
+
+// cheat_stage 1..8 is the game's stage index 0..7 (G+28); anything else is -1 (the game's choice).
+inline int StageIndex(int cheat_stage) {
+  return cheat_stage >= 1 && cheat_stage <= 8 ? cheat_stage - 1 : -1;
+}
+
 }  // namespace hcu::cheats

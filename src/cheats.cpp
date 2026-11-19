@@ -3,12 +3,41 @@
 #include <cstdint>
 #include <cstring>
 
-#include <rex/cvar.h>
 #include <rex/hook.h>
 
 #include "cheats.h"
 
 namespace cheats = hcu::cheats;
+
+#if defined(HCU_CHEATS)
+// Switch, -DHCU_CHEATS=ON (flavour "-cheats"): the keys are settings.txt's (src/settings_menu.h), read live; there is
+// no session menu, so the session layer only ever follows them.
+#include <cstdio>
+
+#include "settings_menu.h"
+
+namespace {
+
+bool SavedValue(cheats::Cheat cheat) {
+  using cheats::Cheat;
+  const HcuSettings& s = hcu_settings;
+  switch (cheat) {
+    case Cheat::Health:
+      return s.cheat_health || s.cheat_god;
+    case Cheat::Lives:
+      return s.cheat_lives || s.cheat_god;
+    case Cheat::RapidFire:
+      return s.cheat_rapid_fire;
+    case Cheat::KeepWeapons:
+      return s.cheat_keep_weapons || s.cheat_god;
+    default:
+      return false;
+  }
+}
+
+}  // namespace
+#else
+#include <rex/cvar.h>
 
 REXCVAR_DEFINE_BOOL(hcu_cheat_health, false, "HCU/Cheats", "Infinite health");
 REXCVAR_DEFINE_BOOL(hcu_cheat_lives, false, "HCU/Cheats", "Infinite lives");
@@ -19,19 +48,6 @@ REXCVAR_DEFINE_BOOL(hcu_cheat_movement_speed, false, "HCU/Cheats", "Movement spe
 REXCVAR_DEFINE_BOOL(hcu_cheat_super_armor, false, "HCU/Cheats", "Super armor");
 
 namespace {
-
-constexpr uint32_t kLifeOffset = 4152;
-constexpr uint32_t kStockOffset = 4320;
-constexpr uint32_t kStateOffset = 284;
-
-thread_local bool t_in_shot_cooldown_command = false;
-thread_local uint32_t t_locomotion_target = 0;
-thread_local uint32_t t_locomotion_state = 0;
-thread_local uint32_t t_armored_victim = 0;
-uint32_t g_rapid_fire_carry = 0;
-
-cheats::SessionCheats g_session;
-cheats::HitGrace g_hit_grace;
 
 bool SavedValue(cheats::Cheat cheat) {
   using cheats::Cheat;
@@ -53,6 +69,24 @@ bool SavedValue(cheats::Cheat cheat) {
   }
   return false;
 }
+
+}  // namespace
+#endif
+
+namespace {
+
+constexpr uint32_t kLifeOffset = 4152;
+constexpr uint32_t kStockOffset = 4320;
+constexpr uint32_t kStateOffset = 284;
+
+thread_local bool t_in_shot_cooldown_command = false;
+thread_local uint32_t t_locomotion_target = 0;
+thread_local uint32_t t_locomotion_state = 0;
+thread_local uint32_t t_armored_victim = 0;
+uint32_t g_rapid_fire_carry = 0;
+
+cheats::SessionCheats g_session;
+cheats::HitGrace g_hit_grace;
 
 uint32_t Load32(const uint8_t* base, uint32_t addr) {
   uint32_t value;
@@ -102,6 +136,250 @@ void ToggleForSession(Cheat cheat) {
 }
 
 }  // namespace hcu::cheats
+
+#if defined(HCU_CHEATS)
+// The Switch-only cheats: the locked weapon slots, the start stage, and the cheat_log diagnostics.
+REX_EXTERN(__imp__sub_824738A0);
+REX_EXTERN(__imp__sub_8246AEA0);
+REX_EXTERN(__imp__sub_8246BD38);
+
+namespace {
+
+// G, the game's global record: +0 the scene change request, +24 the mode bits (bit 2: skills from the player),
+// +28 the stage index (sub_824F0BF0 writes it at a new game), +136 * player the saved player records.
+constexpr uint32_t kGamePointer = 0x82CB96B4;
+constexpr uint32_t kSlotOffset = 4347;      // byte: the current weapon slot, 0 or 1
+constexpr uint32_t kWeaponOffset = 4352;    // word per slot: the weapon id (0 = none)
+constexpr uint32_t kLevelOffset = 4360;     // word per slot: the weapon level
+constexpr uint32_t kMaxLevelOffset = 4368;  // word: the highest level
+
+// Inside the game's weapon set-up that the lock runs: its own calls of the hooks below are not acted on.
+thread_local bool t_in_setup = false;
+
+bool Log() {
+  return hcu_settings.cheat_log != 0;
+}
+
+uint32_t Game(const uint8_t* base) {
+  return Load32(base, kGamePointer);
+}
+
+// Player::HasSkill(this, n), called on a copy of the context: the caller's registers stay as they are. Only at the
+// entry of a hook, where the guest stack below r1 is free.
+int Skill(const PPCContext& ctx, uint8_t* base, uint32_t self, int n) {
+  PPCContext c = ctx;
+  c.r3.u64 = self;
+  c.r4.s64 = n;
+  __imp__sub_824738A0(c, base);
+  return c.r3.s32;
+}
+
+// The lock of slot 0 (A) and 1 (B): weapon id 1..6 and level 1..2, 0 = the game's.
+uint32_t WantId(uint32_t slot) {
+  return uint32_t(slot == 0 ? hcu_settings.cheat_weapon_a : hcu_settings.cheat_weapon_b);
+}
+
+int WantLevel(uint32_t slot) {
+  return slot == 0 ? hcu_settings.cheat_level_a : hcu_settings.cheat_level_b;
+}
+
+bool Locked(uint32_t slot) {
+  return WantId(slot) != 0 || WantLevel(slot) != 0;
+}
+
+bool AnyLock() {
+  return Locked(0) || Locked(1);
+}
+
+// The player's current slot, or 2 for a value the game never uses.
+uint32_t CurrentSlot(const uint8_t* base, uint32_t self) {
+  const uint32_t slot = base[self + kSlotOffset];
+  return slot <= 1 ? slot : 2;
+}
+
+// Player::HasNoWeapons (vtable +4584, sub_8246AEA0: the character HT, who carries none): the lock leaves HT alone.
+// On a copy of the context, at a hook's entry or after a leaf: the guest stack below r1 is free there.
+bool HasNoWeapons(const PPCContext& ctx, uint8_t* base, uint32_t self) {
+  PPCContext c = ctx;
+  c.r3.u64 = self;
+  __imp__sub_8246AEA0(c, base);
+  return c.r3.u32 != 0;
+}
+
+// A player whose current slot holds a locked weapon (or level, with `level_too`), not HT.
+bool LockedPlayerSlot(const PPCContext& ctx, uint8_t* base, uint32_t self, bool level_too) {
+  if (t_in_setup || !IsPlayer(base, self)) {
+    return false;
+  }
+  const uint32_t slot = CurrentSlot(base, self);
+  return slot <= 1 && (WantId(slot) != 0 || (level_too && WantLevel(slot) != 0)) && !HasNoWeapons(ctx, base, self);
+}
+
+void LogSlots(const uint8_t* base, uint32_t self) {
+  std::printf(" slot=%d ids=%d,%d levels=%d,%d max=%d", int8_t(base[self + kSlotOffset]),
+              int32_t(Load32(base, self + kWeaponOffset)), int32_t(Load32(base, self + kWeaponOffset + 4)),
+              int32_t(Load32(base, self + kLevelOffset)), int32_t(Load32(base, self + kLevelOffset + 4)),
+              int32_t(Load32(base, self + kMaxLevelOffset)));
+}
+
+void LogLife(const uint8_t* base, uint32_t object) {
+  if (IsPlayer(base, object)) {
+    std::printf(" player=%08X life=%g", object, LoadFloat(base, object + kLifeOffset));
+    LogSlots(base, object);
+  } else {
+    std::printf(" object=%08X (not the player)", object);
+  }
+}
+
+// At each shot cooldown tick of a player (not HT): the locked slots get their id and level back. When the current
+// slot changed, the game's weapon set-up (sub_8246BD38, as after a pick-up) runs for it.
+void AlignSlots(const PPCContext& ctx, uint8_t* base, uint32_t self) {
+  const uint32_t current = CurrentSlot(base, self);
+  bool current_changed = false;
+  for (uint32_t slot = 0; slot < 2; ++slot) {
+    if (!Locked(slot)) {
+      continue;
+    }
+    const uint32_t id_addr = self + kWeaponOffset + 4 * slot, level_addr = self + kLevelOffset + 4 * slot;
+    const uint32_t id = WantId(slot) != 0 ? WantId(slot) : Load32(base, id_addr);
+    const int32_t level = id == 0 ? int32_t(Load32(base, level_addr))
+                                  : cheats::LockedLevel(WantLevel(slot), int32_t(Load32(base, level_addr)),
+                                                        int32_t(Load32(base, self + kMaxLevelOffset)));
+    if (Load32(base, id_addr) != id || int32_t(Load32(base, level_addr)) != level) {
+      Store32(base, id_addr, id);
+      Store32(base, level_addr, uint32_t(level));
+      current_changed |= slot == current;
+    }
+  }
+  if (!current_changed) {
+    return;
+  }
+  PPCContext c = ctx;
+  c.r3.u64 = self;
+  c.r4.s64 = int8_t(Load32(base, self + kWeaponOffset + 4 * current));
+  t_in_setup = true;
+  __imp__sub_8246BD38(c, base);
+  t_in_setup = false;
+  if (Log()) {
+    std::printf("[cheat] slots locked:");
+    LogSlots(base, self);
+    std::printf("\n");
+  }
+}
+
+}  // namespace
+
+// Player::GiveWeapon(this, id), the pick-up: another id fills the current slot at level 0, the same id raises the
+// level. Ignored for a locked current slot, except the same id while its level is the game's.
+REX_EXTERN(__imp__sub_8246BC20);
+REX_HOOK_RAW(sub_8246BC20) {
+  const uint32_t self = ctx.r3.u32;
+  if (LockedPlayerSlot(ctx, base, self, false)) {
+    const uint32_t slot = CurrentSlot(base, self);
+    if (ctx.r4.u32 != WantId(slot) || WantLevel(slot) != 0) {
+      if (Log()) {
+        std::printf("[cheat] pick-up of %d ignored (lr=%08X)\n", ctx.r4.s32, uint32_t(ctx.lr));
+      }
+      return;
+    }
+  }
+  __imp__sub_8246BC20(ctx, base);
+}
+
+// Player::ClearWeapon (vtable +4824): the current slot's id to 0. Not for a locked slot.
+REX_EXTERN(__imp__sub_8240DF68);
+REX_HOOK_RAW(sub_8240DF68) {
+  if (LockedPlayerSlot(ctx, base, ctx.r3.u32, false)) {
+    return;
+  }
+  __imp__sub_8240DF68(ctx, base);
+}
+
+// Player::ClearLevel (vtable +4840): the current slot's level to 0. Not for a locked slot (weapon or level).
+REX_EXTERN(__imp__sub_8240E0D0);
+REX_HOOK_RAW(sub_8240E0D0) {
+  if (LockedPlayerSlot(ctx, base, ctx.r3.u32, true)) {
+    return;
+  }
+  __imp__sub_8240E0D0(ctx, base);
+}
+
+// Player::GiveStartWeapons(this): each empty slot gets the weapon of the first start-weapon skill (60..65: ids 1, 2,
+// 5, 6, 3, 4) the player has. Logged only (a locked slot is never empty).
+REX_EXTERN(__imp__sub_82473D48);
+REX_HOOK_RAW(sub_82473D48) {
+  const uint32_t self = ctx.r3.u32;
+  const bool player = IsPlayer(base, self);
+  if (Log()) {
+    const uint32_t g = Game(base);
+    std::printf("[cheat] start weapons lr=%08X G=%08X", uint32_t(ctx.lr), g);
+    if (g != 0) {
+      std::printf(" G0=%u G24=%08X G28=%u", Load32(base, g), Load32(base, g + 24), Load32(base, g + 28));
+    }
+    if (player) {
+      char skills[32] = {};
+      for (int n = 1; n <= 13; ++n) skills[n - 1] = Skill(ctx, base, self, n) ? '1' : '0';
+      skills[13] = '/';
+      for (int n = 60; n <= 65; ++n) skills[14 + n - 60] = Skill(ctx, base, self, n) ? '1' : '0';
+      std::printf(" skills1-13/60-65=%s before:", skills);
+      LogSlots(base, self);
+    }
+    std::printf("\n");
+  }
+  __imp__sub_82473D48(ctx, base);
+  if (Log() && player) {
+    std::printf("[cheat] start weapons after:");
+    LogSlots(base, self);
+    std::printf("\n");
+  }
+}
+
+// Script commands that clear the target's current weapon (vtable +4824) and its level (+4840): logged only.
+REX_EXTERN(__imp__sub_8243E648);
+REX_HOOK_RAW(sub_8243E648) {
+  const uint32_t lr = uint32_t(ctx.lr), owner = Load32(base, ctx.r3.u32 + 4);
+  __imp__sub_8243E648(ctx, base);
+  if (Log()) {
+    std::printf("[cheat] clear weapon command lr=%08X", lr);
+    LogLife(base, owner);
+    std::printf("\n");
+  }
+}
+
+REX_EXTERN(__imp__sub_8243E768);
+REX_HOOK_RAW(sub_8243E768) {
+  const uint32_t lr = uint32_t(ctx.lr), owner = Load32(base, ctx.r3.u32 + 4);
+  __imp__sub_8243E768(ctx, base);
+  if (Log()) {
+    std::printf("[cheat] clear level command lr=%08X", lr);
+    LogLife(base, owner);
+    std::printf("\n");
+  }
+}
+
+// The title / stage menu state machine. The new-game path writes G+28 (the chosen stage) and G+0 = 1.
+REX_EXTERN(__imp__sub_824F0BF0);
+REX_HOOK_RAW(sub_824F0BF0) {
+  const uint32_t g = Game(base);
+  const uint32_t g0 = g ? Load32(base, g) : 0, g28 = g ? Load32(base, g + 28) : 0;
+  __imp__sub_824F0BF0(ctx, base);
+  if (g == 0 || Game(base) != g) {
+    return;
+  }
+  const uint32_t a0 = Load32(base, g), a28 = Load32(base, g + 28);
+  if ((g0 == 1 || a0 != 1) && a28 == g28) {
+    return;  // no scene request and no stage written in this call
+  }
+  const int stage = cheats::StageIndex(hcu_settings.cheat_stage);
+  if (stage >= 0) {
+    Store32(base, g + 28, uint32_t(stage));
+  }
+  if (Log()) {
+    std::printf("[cheat] menu: G0 %u -> %u, G28 %u -> %u, now %u (cheat_stage=%d)\n", g0, a0, g28, a28,
+                Load32(base, g + 28), hcu_settings.cheat_stage);
+  }
+}
+#endif
 
 // Player::AddLife(this, float delta). Hits reach it from the shared hit handler.
 REX_EXTERN(__imp__sub_8240D8D0);
@@ -155,7 +433,16 @@ REX_HOOK_RAW(sub_8240D778) {
       IsPlayer(base, ctx.r3.u32)) {
     ctx.r4.s64 = cheats::RapidFireCooldown(ctx.r4.s16, g_rapid_fire_carry);
   }
+#if defined(HCU_CHEATS)
+  // The per-frame countdown reaches this setter too: the tick of the locked weapon slots. A leaf: r1 is unchanged.
+  const uint32_t self = ctx.r3.u32;
   __imp__sub_8240D778(ctx, base);
+  if (AnyLock() && !t_in_setup && IsPlayer(base, self) && !HasNoWeapons(ctx, base, self)) {
+    AlignSlots(ctx, base, self);
+  }
+#else
+  __imp__sub_8240D778(ctx, base);
+#endif
 }
 
 // Obj::Jump(this, float speed, float alternate speed, float gravity), shared by every object class.
@@ -174,6 +461,18 @@ REX_EXTERN(__imp__sub_8240E8D0);
 REX_EXTERN(__imp__sub_8240E8E0);
 REX_HOOK_RAW(sub_8240E8D0) {
   const uint32_t self = ctx.r3.u32;
+#if defined(HCU_CHEATS)
+  if (Log()) {
+    std::printf("[cheat] arm weapon drop lr=%08X", uint32_t(ctx.lr));
+    LogLife(base, self);
+    std::printf("\n");
+  }
+  // A locked current slot is never dropped (the flag +4521 stays clear).
+  if (LockedPlayerSlot(ctx, base, self, false)) {
+    __imp__sub_8240E8E0(ctx, base);
+    return;
+  }
+#endif
   if (cheats::Enabled(cheats::Cheat::KeepWeapons) && IsPlayer(base, self) &&
       cheats::KeepsWeaponOnHit(std::bit_cast<float>(Load32(base, self + kLifeOffset)))) {
     __imp__sub_8240E8E0(ctx, base);

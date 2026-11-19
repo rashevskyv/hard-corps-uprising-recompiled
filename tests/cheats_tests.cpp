@@ -144,6 +144,19 @@ void TestJumpSpeed() {
   CHECK(SimulatedApex(2.0 * 2.7, kGravity) / SimulatedApex(2.7, kGravity) > 3.5);
 }
 
+void TestSwitchKeys() {
+  std::printf("switch keys: locked level, start stage\n");
+  CHECK(LockedLevel(0, 1, 2) == 1);  // 0 = the game's level
+  CHECK(LockedLevel(2, 0, 2) == 2);
+  CHECK(LockedLevel(2, 0, 1) == 1);  // capped by the game's maximum
+  CHECK(LockedLevel(1, 2, 2) == 1);  // locked: a higher level is put back too
+  CHECK(LockedLevel(2, 0, -1) == 0);
+  CHECK(StageIndex(0) == -1);
+  CHECK(StageIndex(1) == 0);
+  CHECK(StageIndex(8) == 7);
+  CHECK(StageIndex(9) == -1);
+}
+
 void TestKeepsWeaponOnHit() {
   std::printf("keep weapon on hit\n");
   CHECK(KeepsWeaponOnHit(12500.0f));
@@ -442,6 +455,7 @@ int main() {
   TestRapidFireCooldown();
   TestJumpSpeed();
   TestKeepsWeaponOnHit();
+  TestSwitchKeys();
   TestMovementSpeed();
   TestRunSpeed();
   TestSuperArmor();

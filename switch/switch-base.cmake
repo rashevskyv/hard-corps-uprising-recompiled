@@ -60,6 +60,14 @@ add_executable(hcu
     src/frame_recorder.cpp
     ${HCU_SWITCH_HOST}/input/nx_input_driver.cpp
 )
+# HCU_CHEATS: the cheats of src/cheats.cpp (lives, health, keep weapons, rapid fire, locked weapon slots, start stage),
+# switched by settings.txt keys and the settings menu (src/settings_menu.cpp shows them only here). OFF by default; ON is
+# the flavour "-cheats" (switch/build-base.sh). Its hooks change the game only while a key is on.
+option(HCU_CHEATS "The cheat hooks of src/cheats.cpp (settings.txt keys cheat_*)" OFF)
+if(HCU_CHEATS)
+    target_sources(hcu PRIVATE src/cheats.cpp)
+    target_compile_definitions(hcu PRIVATE HCU_CHEATS)
+endif()
 rexglue_setup_target(hcu GPU_PLUGINS xenos)
 # The pad driver's header lives with HCU's old host layer, whose include folder also replaces system headers (dlfcn.h,
 # endian.h, switch_compat.h): only the files that need the header get it, and only its own subfolder's path.

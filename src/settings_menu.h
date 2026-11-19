@@ -69,6 +69,18 @@ struct HcuSettings {
                           // loaded and bound for the draws with alpha_test_enable 0 (no discard there)
   int shadow_target;      // 1 = SHADOW TARGET: the shadow cascades are cleared and drawn straight into their resolve
                           // destination (last frame's resolves predict it); the matching resolve copies nothing
+  // Cheats (src/cheats.cpp, only in a -DHCU_CHEATS=ON build, flavour "-cheats"; the menu shows them there). All 0 = off.
+  int cheat_lives;         // the stock never falls
+  int cheat_health;        // no damage
+  int cheat_keep_weapons;  // a hit that leaves the player alive does not take the weapon
+  int cheat_rapid_fire;    // the shot cooldown of the player's script is halved
+  int cheat_weapon_a;      // 1..6: slot A (+4352) holds this weapon id, locked: no pick-up, drop or reset changes it
+  int cheat_weapon_b;      // 1..6: the same for slot B (+4356)
+  int cheat_level_a;       // 1..2: slot A's level (+4360), locked (the game's maximum caps it); 0 = the game's
+  int cheat_level_b;       // 1..2: the same for slot B (+4364)
+  int cheat_stage;         // 1..8: a new game starts at this stage
+  int cheat_god;           // lives + health + keep weapons
+  int cheat_log;           // 1 = the cheat hooks log what they see ([cheat] lines; diagnostic)
 };
 
 extern HcuSettings hcu_settings;

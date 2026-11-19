@@ -50,6 +50,22 @@ const Item kItems[] = {
     {"BUTTON ICONS", {"XBOX", "SWITCH"}, 2, true, [] { return hcu_settings.button_glyphs; }, [](int i) { hcu_settings.button_glyphs = i; }},
     // An action, not a value: the console's controller applet (1 or 2 players, full pads), for local 2-player.
     {"CONTROLLERS", {"PRESS A"}, 1, false, [] { return 0; }, [](int) { hcu_settings.pad_applet = 1; }},
+#if defined(HCU_CHEATS)
+    // The cheats of src/cheats.cpp (flavour "-cheats"): this file only sets the keys, the hooks read them (live).
+    {"GOD MODE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_god; }, [](int i) { hcu_settings.cheat_god = i; }},
+    {"INFINITE LIVES", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_lives; }, [](int i) { hcu_settings.cheat_lives = i; }},
+    {"INFINITE HEALTH", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_health; }, [](int i) { hcu_settings.cheat_health = i; }},
+    {"KEEP WEAPONS", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_keep_weapons; }, [](int i) { hcu_settings.cheat_keep_weapons = i; }},
+    {"RAPID FIRE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.cheat_rapid_fire; }, [](int i) { hcu_settings.cheat_rapid_fire = i; }},
+    {"WEAPON SLOT A", {"GAME", "1", "2", "3", "4", "5", "6"}, 7, false, [] { return hcu_settings.cheat_weapon_a; },
+     [](int i) { hcu_settings.cheat_weapon_a = i; }},
+    {"LEVEL SLOT A", {"GAME", "1", "2"}, 3, false, [] { return hcu_settings.cheat_level_a; }, [](int i) { hcu_settings.cheat_level_a = i; }},
+    {"WEAPON SLOT B", {"GAME", "1", "2", "3", "4", "5", "6"}, 7, false, [] { return hcu_settings.cheat_weapon_b; },
+     [](int i) { hcu_settings.cheat_weapon_b = i; }},
+    {"LEVEL SLOT B", {"GAME", "1", "2"}, 3, false, [] { return hcu_settings.cheat_level_b; }, [](int i) { hcu_settings.cheat_level_b = i; }},
+    {"START STAGE", {"GAME", "1", "2", "3", "4", "5", "6", "7", "8"}, 9, false, [] { return hcu_settings.cheat_stage; },
+     [](int i) { hcu_settings.cheat_stage = i; }},
+#endif
     // The diagnostic items (biases, shadow map, prepass, gamma, 16F targets, views, dumps, precise, strips, DXT, depth
     // 32, texture view) left the menu for the release (git history before 2026-11-03); settings.txt still sets them.
 };
@@ -67,6 +83,17 @@ void Save() {
     if (s.cull) std::fprintf(f, "cull=%d\n", s.cull);
     if (s.alpha_variants) std::fprintf(f, "alpha_variants=%d\n", s.alpha_variants);
     if (s.shadow_target) std::fprintf(f, "shadow_target=%d\n", s.shadow_target);
+    if (s.cheat_lives) std::fprintf(f, "cheat_lives=%d\n", s.cheat_lives);
+    if (s.cheat_health) std::fprintf(f, "cheat_health=%d\n", s.cheat_health);
+    if (s.cheat_keep_weapons) std::fprintf(f, "cheat_keep_weapons=%d\n", s.cheat_keep_weapons);
+    if (s.cheat_rapid_fire) std::fprintf(f, "cheat_rapid_fire=%d\n", s.cheat_rapid_fire);
+    if (s.cheat_weapon_a) std::fprintf(f, "cheat_weapon_a=%d\n", s.cheat_weapon_a);
+    if (s.cheat_weapon_b) std::fprintf(f, "cheat_weapon_b=%d\n", s.cheat_weapon_b);
+    if (s.cheat_level_a) std::fprintf(f, "cheat_level_a=%d\n", s.cheat_level_a);
+    if (s.cheat_level_b) std::fprintf(f, "cheat_level_b=%d\n", s.cheat_level_b);
+    if (s.cheat_stage) std::fprintf(f, "cheat_stage=%d\n", s.cheat_stage);
+    if (s.cheat_god) std::fprintf(f, "cheat_god=%d\n", s.cheat_god);
+    if (s.cheat_log) std::fprintf(f, "cheat_log=%d\n", s.cheat_log);
     std::fclose(f);
   }
 }
@@ -119,6 +146,17 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "cull")) s.cull = int(v) == 1 || int(v) == 2 ? int(v) : 0;
       else if (!std::strcmp(key, "alpha_variants")) s.alpha_variants = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "shadow_target")) s.shadow_target = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "cheat_lives")) s.cheat_lives = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "cheat_health")) s.cheat_health = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "cheat_keep_weapons")) s.cheat_keep_weapons = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "cheat_rapid_fire")) s.cheat_rapid_fire = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "cheat_weapon_a")) s.cheat_weapon_a = int(v) >= 0 && int(v) <= 6 ? int(v) : 0;
+      else if (!std::strcmp(key, "cheat_weapon_b")) s.cheat_weapon_b = int(v) >= 0 && int(v) <= 6 ? int(v) : 0;
+      else if (!std::strcmp(key, "cheat_level_a")) s.cheat_level_a = int(v) >= 0 && int(v) <= 2 ? int(v) : 0;
+      else if (!std::strcmp(key, "cheat_level_b")) s.cheat_level_b = int(v) >= 0 && int(v) <= 2 ? int(v) : 0;
+      else if (!std::strcmp(key, "cheat_stage")) s.cheat_stage = int(v) >= 0 && int(v) <= 8 ? int(v) : 0;
+      else if (!std::strcmp(key, "cheat_god")) s.cheat_god = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "cheat_log")) s.cheat_log = int(v) ? 1 : 0;
     }
     std::fclose(f);
   }
