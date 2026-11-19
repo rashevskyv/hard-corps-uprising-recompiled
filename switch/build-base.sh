@@ -90,6 +90,9 @@ CG_KEYS=(
     # vector code (or nothing) follows (fp_mode_lookahead_past_branch stays the generator's default, true). HCU with
     # -fpm -fpc: switches off 17657 -> 14834, any-mode sites 797 -> 8318 (past_branch false: 17584 and 1005).
     "HCU_FP_LOOKAHEAD   fp_mode_lookahead   fpl     fp"
+    # A float copied through a register (lfs, then stfs of it) in VMX mode keeps its bits: no conversion, no mode. HCU
+    # with -fpm -fpc -fpl: 309 copy loads, 120 copy stores; switches off 14834 -> 14833.
+    "HCU_FP_COPY_PAIRS  fp_copy_pairs       fpp     fp"
 )
 # The lookahead acts only with fp_moves_modeless or fp_compares_modeless (the generator's context.cpp): alone it would
 # be the default code under another name.
