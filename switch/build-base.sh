@@ -86,7 +86,15 @@ CG_KEYS=(
     # fcfid / fctiwz / fctidz / fsel switch no mode; fcmpu / fcmpo / frsp in VMX mode any-mode. HCU: switches off
     # 22774 -> 22753; 183 any-mode compares (fsel's GeZeroAnyMode).
     "HCU_FP_COMPARES    fp_compares_modeless fpc    fp"
+    # Before a switch, the generator looks at the next instruction that needs a mode and takes the any-mode form when
+    # vector code (or nothing) follows (fp_mode_lookahead_past_branch stays the generator's default, true). HCU with
+    # -fpm -fpc: switches off 17657 -> 14834, any-mode sites 797 -> 8318 (past_branch false: 17584 and 1005).
+    "HCU_FP_LOOKAHEAD   fp_mode_lookahead   fpl     fp"
 )
+# The lookahead acts only with fp_moves_modeless or fp_compares_modeless (the generator's context.cpp): alone it would
+# be the default code under another name.
+[ "$(opt HCU_FP_LOOKAHEAD 0 "$@")" = 1 ] && [ "$(opt HCU_FP_MOVES 0 "$@")$(opt HCU_FP_COMPARES 0 "$@")" = 00 ] \
+    && { echo "-DHCU_FP_LOOKAHEAD=ON needs -DHCU_FP_MOVES=ON or -DHCU_FP_COMPARES=ON"; exit 1; }
 CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
 CG_SUFFIX=""
 for k in "${CG_KEYS[@]}"; do
