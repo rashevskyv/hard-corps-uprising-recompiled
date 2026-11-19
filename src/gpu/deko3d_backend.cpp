@@ -1385,6 +1385,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         speed_long_ += long_swap;
       }
       speed_prev_level_ = level;
+      swap_dt_ = swap_tick_ ? now - swap_tick_ : 0;
       swap_tick_ = now;
     }
     if (Skipping()) {
@@ -1820,8 +1821,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     if (now - load_last_ < freq) return;
     uint32_t a, b, passes;
     hcu_meter_collision(&a, &b, &passes);
-    std::printf("[nx] load t %.1f s, swap #%u: %u drawn frames, draws per frame avg %.0f max %u; collision groups max %u + %u (%u passes)\n",
-                double(now - load_t0_) / double(freq), swaps_, load_frames_, double(load_draws_) / load_frames_, load_draws_max_, a, b, passes);
+    std::printf("[nx] load t %.1f s, swap #%u, fps_mode %d: %u drawn (shown) frames, draws per frame avg %.0f max %u; collision groups max %u + %u (%u passes)\n",
+                double(now - load_t0_) / double(freq), swaps_, hcu_settings.fps_mode, load_frames_, double(load_draws_) / load_frames_, load_draws_max_, a, b, passes);
     load_last_ = now;
     load_frames_ = load_draws_max_ = 0;
     load_draws_ = 0;
@@ -1869,9 +1870,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     drawn_frames_ = busy_skips_ = cp_skips_ = 0;
   }
 
-  // Whether the next frame is drawn. 60 and 30: every frame. 30skip: not the frame after a drawn one, and not one the GPU
-  // has no free frame slot for yet (its fence is still pending): that frame is skipped too instead of waiting, so the
-  // guest never waits for the GPU (the game keeps its speed, fewer frames are shown). 60skip: only the busy skip.
+  // Whether the next frame is drawn. 60 and 30: every frame. 30skip: a frame whose swap is due on the 30 Hz clock (below),
+  // and not one the GPU has no free frame slot for yet (its fence is still pending): that frame is skipped too instead of
+  // waiting, so the guest never waits for the GPU (the game keeps its speed, fewer frames are shown). 60skip: only the
+  // busy skip.
   void NextFrame(bool drawn) {
     skip_frame_ = false;
 #ifdef __SWITCH__
@@ -1885,10 +1887,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // channel for its error (deko3d gpu_error.cpp): a fault then puts the queue in its error state (the exit above, with
     // the fault in the log from libdeko3dd) and signals every fence. Console 0.273: a fault under 60skip was 300 busy
     // polls of 0 in a row (the picture frozen), found only by the first wait with a timeout.
-    // A 30 Hz scene (two guest swaps in a row over kLongSwapMs apart: the movies) is not halved again to 15 frames a
-    // second: the frame after a drawn one is drawn too. One long interval is not enough (a drawn frame's acquire can
-    // delay one swap of a 60 Hz scene).
-    if (skip_odd_frames_ && drawn && long_swaps_ < 2) {
+    // A 30 Hz scene (the movies) is not halved again to 15 frames a second: its swaps are due on the 30 Hz clock.
+    if (skip_odd_frames_ && !Due30(drawn)) {
       skip_frame_ = true;
     } else if (skip_busy_ && drawn && cp_slow_) {
       // CP SKIP: recording the frame just drawn took the command processor over a guest frame (16.7 ms of draws and
@@ -1902,6 +1902,18 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // (an 18 ms GPU frame finishes ~1.3 ms after the next swap), so every second frame was skipped: 60 -> 40 shown.
     busy_pending_ = !skip_frame_ && skip_busy_;
     if (!skip_frame_ && !busy_pending_) StartFrame();
+  }
+  // 30skip (fps_mode 0): a clock of 33.3 ms steps. Each drawn swap moves the due time one step on, but never to less
+  // than 21.3 ms after that swap (a step minus 12 ms of catch-up: a late frame is made up only in part). The next frame
+  // is drawn when its swap, predicted as this swap plus the last guest interval, is at most 2.3 ms before the due time.
+  // So two frames in a row are drawn only when the guest's frames are over 19 ms (under 52.6 fps). Host simulation
+  // (+-0.9 ms jitter): a 60 fps guest shows 30, gaps 31.8-33.9 ms (as the old parity rule); 55-59 fps: half of them,
+  // evenly; 46 fps: 28.5 (parity: 23), gaps 20-44 ms; a 30 Hz scene (the movies): every frame.
+  bool Due30(bool drawn) {
+    const uint64_t freq = armGetSystemTickFreq(), step = freq / 30, tolerance = freq * 23 / 10000;
+    const uint64_t earliest = swap_tick_ + step - freq * 12 / 1000;
+    if (drawn) due30_ = std::max(due30_ + step, earliest);
+    return swap_tick_ + swap_dt_ + tolerance >= due30_;
   }
   // At the frame's first draw, copy or swap (the only entry points that record): the busy poll NextFrame left pending.
   void DecideFrame() {
@@ -1954,11 +1966,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
     skip_busy_ = busy;
     fps45_ = f45;
     pace_ = 0;
+    due30_ = 0;
 #ifdef __SWITCH__
     dkSwapchainSetSwapInterval(swapchain_, interval);
 #endif
     std::printf("[nx] gpu: swap interval %u, %s (%s) from swap #%u\n", interval,
-                skip ? "every second frame drawn" : f45 ? "3 of 4 frames drawn" : "every frame drawn",
+                skip ? "a frame every 33.3 ms drawn" : f45 ? "3 of 4 frames drawn" : "every frame drawn",
                 skip ? "30, busy skip" : interval == 2 ? "30 fps cap, half speed" : f45 ? "45, busy skip" : "60, busy skip", swaps_);
   }
 
@@ -3611,6 +3624,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool skip_odd_frames_ = false;
   bool skip_busy_ = false;  // every mode but 3: a frame the GPU has no free slot for is not drawn (NextFrame)
   bool fps45_ = false;      // mode 4: 3 of 4 frames drawn
+  uint64_t due30_ = 0;      // mode 0: the tick the next drawn frame is due at (Due30); 0 = now
+  uint64_t swap_dt_ = 0;    // the ticks between the last two guest swaps
   uint32_t pace_ = 0;       // mode 4: quarter frames due (NextFrame)
   bool busy_pending_ = false;  // the frame's busy poll is still to be done (DecideFrame)
   uint64_t cp_us_at_start_ = 0;  // us_draw_ + us_copy_ when the frame started (CP SKIP)
