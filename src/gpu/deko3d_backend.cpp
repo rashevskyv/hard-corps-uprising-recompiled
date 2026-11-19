@@ -289,6 +289,21 @@ struct HostImage {
   uint32_t scale = 8, host_w = 0, host_h = 0;
 };
 
+// SHADOW TARGET (shadow_target=1, Deko3dCommandProcessor::ShadowClear): a depth resolve of last frame (the plan), a rect of
+// an EDRAM depth image held in a destination image at an offset, a clear made there, and the alias of one EDRAM image.
+struct DepthPlan { uint32_t edram_base, pitch, x, y, w, h, dest_base, dx, dy; };
+struct ShadowRegion { HostImage* dd = nullptr; uint32_t dd_base = 0, x = 0, y = 0, w = 0, h = 0, ox = 0, oy = 0; };
+struct ShadowClearRec { uint32_t x, y, w, h; float z; };
+struct ShadowAlias {
+  HostImage* edram = nullptr;  // null = no alias
+  ShadowRegion r;              // the predicted rect of `edram` (r.x..) and where it is in r.dd (+ r.ox, r.oy)
+  ShadowRegion prev;           // open: an older alias whose rect is still in the texture (copied back on a fallback)
+  int phase = 0;               // 0 = open (clears only), 1 = drawing, 2 = resolved (the EDRAM rect is stale until cleared)
+  uint32_t ordinal = 0;        // the plan's index (depth resolves before it in the frame)
+  ShadowClearRec clears[4]{};  // open: the clears that went into r.dd; resolved: the clears made on `edram` since
+  uint32_t n_clears = 0;
+};
+
 // Microseconds spent in a scope, added to a counter (the 60-swap log prints the per-frame averages: CPU recording
 // time against the waits for the GPU tells a CPU-bound frame from a GPU-bound one).
 struct ScopedUs {
@@ -1046,9 +1061,22 @@ class Deko3dCommandProcessor : public CommandProcessor {
       frame_skipped_++;
       return true;
     }
-    BindTargets(cmd, color, depth);
+    // SHADOW TARGET: a depth-only draw of the open alias goes into the texture once its clears tile the rect; any other
+    // draw on that EDRAM image takes the rect back first.
+    HostImage* depth_rt = depth;
+    if (sa_.edram && depth == sa_.edram) {
+      if (!color && sa_.phase != 2 && sa_.ordinal == plans_cur_.size() && (sa_.phase == 1 || Covered(sa_.clears, sa_.n_clears, sa_.r)) && RegionLive(sa_.r)) {
+        if (sa_.phase == 0) { sa_.phase = 1; sa_.prev = {}; }
+        depth_rt = sa_.r.dd;
+        frame_st_redirects_++;
+      } else {
+        ShadowFlush(f, color ? "draw with colour" : "draw");
+      }
+    }
+    BindTargets(cmd, color, depth_rt);
     if (color) color->clean_key = 0;  // CLEAR SKIP: a draw may write them
     if (depth) depth->clean_key = 0;
+    if (depth_rt != depth) depth_rt->clean_key = 0;
     uint32_t target_w = color ? color->width : depth->width;
     uint32_t target_h = color ? color->height : depth->height;
 
@@ -1061,14 +1089,23 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // RESOLUTION: the viewport and scissor are in guest pixels (the NDC constants stay guest), then scaled to the image.
     HostImage* const target = color ? color : depth;
     const float k = float(target->scale) / 8.f;
-    DkViewport vp{float(vi.xy_offset[0]) * k, float(vi.xy_offset[1]) * k, float(vi.xy_extent[0]) * k, float(vi.xy_extent[1]) * k, vi.z_min, vi.z_max};
+    // SHADOW TARGET: the viewport and scissor stay the EDRAM image's (the NDC constants too), moved by the offset.
+    const float st_ox = depth_rt != depth ? float(sa_.r.ox) : 0.f, st_oy = depth_rt != depth ? float(sa_.r.oy) : 0.f;
+    DkViewport vp{(float(vi.xy_offset[0]) + st_ox) * k, (float(vi.xy_offset[1]) + st_oy) * k, float(vi.xy_extent[0]) * k, float(vi.xy_extent[1]) * k, vi.z_min, vi.z_max};
     dkCmdBufSetViewports(cmd, 0, &vp, 1);
     draw_util::Scissor sc;
     draw_util::GetScissor(regs, sc, true);
     DkScissor scissor{sc.offset[0], sc.offset[1], sc.extent[0], sc.extent[1]};
     if (scissor.x + scissor.width > target_w) scissor.width = scissor.x < target_w ? target_w - scissor.x : 0;
     if (scissor.y + scissor.height > target_h) scissor.height = scissor.y < target_h ? target_h - scissor.y : 0;
-    scissor = HostRect(target, scissor.x, scissor.y, scissor.width, scissor.height);
+    if (depth_rt != depth) {
+      // Only the plan's rect: a draw outside it would write over another cascade's rows of the texture.
+      const ShadowRegion& r = sa_.r;
+      const uint32_t x0 = std::max(scissor.x, r.x), y0 = std::max(scissor.y, r.y);
+      const uint32_t x1 = std::min(scissor.x + scissor.width, r.x + r.w), y1 = std::min(scissor.y + scissor.height, r.y + r.h);
+      scissor = {x0 + r.ox, y0 + r.oy, x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0};
+    }
+    scissor = HostRect(depth_rt != depth ? depth_rt : target, scissor.x, scissor.y, scissor.width, scissor.height);
     dkCmdBufSetScissors(cmd, 0, &scissor, 1);
 
     // Fixed-function state.
@@ -1725,6 +1762,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
           f.data.used >> 10, frame_vtx_bytes_ >> 10, frame_vtx_reused_ >> 10, frame_uniform_reuses_, frame_uniform_sets_, f.staging.used >> 10, image_count_,
           images_.used >> 20, image_flips_);
       if (hcu_settings.alpha_variants) Log("swap #%u: ALPHA VARIANTS: %u of %u draws took the pixel shader without the alpha test", swaps_, frame_no_alpha_, frame_draws_);
+      if (hcu_settings.shadow_target)
+        Log("swap #%u: SHADOW TARGET: %u clears and draws into the texture, %u resolves in place, %u fallbacks (%u plans)", swaps_, frame_st_redirects_,
+            frame_st_skipped_, frame_st_fallbacks_, uint32_t(plans_cur_.size()));
       // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
       // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
       uint32_t n = swaps_ <= 3 ? 1 : 60;  // drawn frames since the last line
@@ -1741,6 +1781,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
     f.level = frame_draws_ >= 150;  // [res]: a level frame (menus draw 97 or fewer)
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
     frame_no_alpha_ = 0;
+    frame_st_redirects_ = frame_st_skipped_ = frame_st_fallbacks_ = 0;
+    plans_prev_.swap(plans_cur_);  // SHADOW TARGET: this frame's depth resolves predict the next frame's
+    plans_cur_.clear();
     frame_vtx_reused_ = frame_uniform_sets_ = frame_uniform_reuses_ = 0;
     frame_ = (frame_ + 1) % n_frames_;
     begun_ = false;
@@ -2427,6 +2470,152 @@ class Deko3dCommandProcessor : public CommandProcessor {
     return img;
   }
 
+  // SHADOW TARGET (shadow_target=1): the shadow pass draws straight into its resolve destination. Last frame's depth
+  // resolves (plans_prev_, by their order in the frame) predict where the EDRAM depth rect goes; a clear of that EDRAM
+  // image inside the predicted rect starts an alias: the clears, and the depth-only draws once the clears tile the rect,
+  // go into the destination at the offset, and the resolve that matches the plan copies nothing (dk_gpu_times_1 of 0.339:
+  // three resolves, 1.67 ms). Any other use of the EDRAM image while the alias holds its rect (ShadowFlush) first copies
+  // the rect back and replays the recorded clears, so a wrong prediction costs a copy, not a wrong picture.
+  // ponytail: one alias at a time (HCU has one shadow EDRAM target); a receiver that sampled the destination between a
+  // cascade's clear and its resolve would see the new rows early (not seen in HCU's trail: the receivers come after).
+  static bool Inside(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const ShadowRegion& r) {
+    return x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
+  }
+  // The clears tile the rect: each inside it (checked when recorded), pairwise disjoint, and their areas sum to its area.
+  static bool Covered(const ShadowClearRec* c, uint32_t n, const ShadowRegion& r) {
+    uint64_t a = 0;
+    for (uint32_t i = 0; i < n; i++) {
+      a += uint64_t(c[i].w) * c[i].h;
+      for (uint32_t j = 0; j < i; j++)
+        if (c[i].x < c[j].x + c[j].w && c[j].x < c[i].x + c[i].w && c[i].y < c[j].y + c[j].h && c[j].y < c[i].y + c[i].h) return false;
+    }
+    return a == uint64_t(r.w) * r.h;
+  }
+  // The destination is still the image at its guest address (GuestImage may have replaced it).
+  bool RegionLive(const ShadowRegion& g) {
+    auto it = guest_images_.find(g.dd_base);
+    return g.dd && it != guest_images_.end() && it->second == g.dd;
+  }
+  static void CopyRect(DkCmdBuf cmd, HostImage* s, uint32_t sx, uint32_t sy, HostImage* d, uint32_t dx, uint32_t dy, uint32_t w, uint32_t h) {
+    DkImageView sv, dv;
+    dkImageViewDefaults(&sv, &s->image);
+    dkImageViewDefaults(&dv, &d->image);
+    DkImageRect sr{sx, sy, 0, w, h, 1}, dr{dx, dy, 0, w, h, 1};
+    dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+    dkCmdBufCopyImage(cmd, &sv, &sr, &dv, &dr, 0);
+    dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+  }
+  void ShadowClearInto(Frame& f, uint32_t x, uint32_t y, uint32_t w, uint32_t h, float z) {
+    const ShadowRegion& r = sa_.r;
+    BindTargets(f.cmdbuf, nullptr, r.dd);
+    const DkScissor sc{x + r.ox, y + r.oy, w, h};
+    dkCmdBufSetScissors(f.cmdbuf, 0, &sc, 1);
+    dkCmdBufClearDepthStencil(f.cmdbuf, true, z, 0xFF, 0);
+    r.dd->clean_key = 0;
+    frame_st_redirects_++;
+    clears_++;
+    frame_clears_++;
+    Step(f, "clear EDRAM depth=%u rect %u,%u %ux%u -> SHADOW TARGET %08X at %u,%u", sa_.edram->edram_base, x, y, w, h, r.dd_base, x + r.ox, y + r.oy);
+  }
+  // The EDRAM image gets its rect back (and the clears recorded on it are made again); the alias ends.
+  void ShadowFlush(Frame& f, const char* why) {
+    ShadowAlias& a = sa_;
+    HostImage* e = a.edram;
+    if (!e) return;
+    a.edram = nullptr;
+    frame_st_fallbacks_++;
+    LogOnce("stflush", "SHADOW TARGET: first fallback (%s): EDRAM %u rect %u,%u %ux%u back from %08X (phase %d, swap #%u)", why, e->edram_base, a.r.x, a.r.y,
+            a.r.w, a.r.h, a.r.dd_base, a.phase, swaps_ + 1);
+    Step(f, "SHADOW TARGET fallback (%s): EDRAM %u rect %u,%u %ux%u", why, e->edram_base, a.r.x, a.r.y, a.r.w, a.r.h);
+    // Open (no draw yet): the rect is the EDRAM image's own, or an older alias's that is still in the texture.
+    const ShadowRegion& g = a.phase == 0 ? a.prev : a.r;
+    if (g.dd) {
+      if (RegionLive(g)) CopyRect(f.cmdbuf, g.dd, g.x + g.ox, g.y + g.oy, e, g.x, g.y, g.w, g.h);
+      else LogOnce("stlost", "SHADOW TARGET: the image at %08X was replaced: EDRAM %u rect %u,%u %ux%u lost", g.dd_base, e->edram_base, g.x, g.y, g.w, g.h);
+    }
+    // Open: the clears that went into the texture. Resolved: the clears made on the EDRAM image after the resolve,
+    // which the copy above wrote over. Drawing: none (the copy holds them).
+    if (a.phase != 1 && a.n_clears) {
+      BindTargets(f.cmdbuf, nullptr, e);
+      for (uint32_t i = 0; i < a.n_clears; i++) {
+        const ShadowClearRec& c = a.clears[i];
+        const DkScissor sc{c.x, c.y, c.w, c.h};
+        dkCmdBufSetScissors(f.cmdbuf, 0, &sc, 1);
+        dkCmdBufClearDepthStencil(f.cmdbuf, true, c.z, 0xFF, 0);
+      }
+    }
+    e->clean_key = 0;
+  }
+  // A depth-only clear of EDRAM image e (rect in its pixels): true = it went into the shadow texture (the caller clears nothing).
+  bool ShadowClear(Frame& f, HostImage* e, bool with_color, uint32_t x, uint32_t y, uint32_t w, uint32_t h, float z) {
+    ShadowAlias& a = sa_;
+    if (with_color) {
+      if (a.edram == e) ShadowFlush(f, "clear with colour");
+      return false;
+    }
+    const uint32_t n = uint32_t(plans_cur_.size());
+    const DepthPlan* p = n < plans_prev_.size() && plans_prev_[n].edram_base == e->edram_base && plans_prev_[n].pitch == e->edram_pitch ? &plans_prev_[n] : nullptr;
+    if (a.edram == e && a.phase != 2 && a.ordinal == n && Inside(x, y, w, h, a.r)) {
+      if (a.phase == 0) {
+        if (a.n_clears == 4) { ShadowFlush(f, "five clears"); return false; }
+        a.clears[a.n_clears++] = {x, y, w, h, z};
+      }
+      ShadowClearInto(f, x, y, w, h, z);
+      return true;
+    }
+    ShadowRegion r{};
+    if (p) {
+      auto it = guest_images_.find(p->dest_base);
+      HostImage* dd = it != guest_images_.end() ? it->second : nullptr;
+      if (dd && dd->format == g_depth_fmt && dd->scale == 8 && e->scale == 8 && p->dx >= p->x && p->dy >= p->y && p->dx + p->w <= dd->width &&
+          p->dy + p->h <= dd->height)
+        r = {dd, p->dest_base, p->x, p->y, p->w, p->h, p->dx - p->x, p->dy - p->y};
+    }
+    if (!r.dd || !Inside(x, y, w, h, r)) {
+      if (a.edram == e && a.phase == 2 && Inside(x, y, w, h, a.r) && a.n_clears < 4) {
+        // A clear after the resolve, outside any plan: made on the EDRAM image and recorded; once such clears tile the
+        // rect, the texture no longer holds anything of the EDRAM image (HCU clears the rect again after the last cascade).
+        a.clears[a.n_clears++] = {x, y, w, h, z};
+        if (Covered(a.clears, a.n_clears, a.r)) a.edram = nullptr;
+      } else if (a.edram == e) {
+        ShadowFlush(f, "clear outside the plan");
+      }
+      return false;
+    }
+    ShadowRegion prev{};
+    if (a.edram == e) {
+      // The older alias (resolved: the EDRAM rect is still in the texture). Kept as `prev` for a fallback while the new one
+      // is open, unless its rect in the texture is the new one's, or clears were made on top of it.
+      const bool overlap = a.r.dd == r.dd && a.r.x + a.r.ox < r.x + r.ox + r.w && r.x + r.ox < a.r.x + a.r.ox + a.r.w &&
+                           a.r.y + a.r.oy < r.y + r.oy + r.h && r.y + r.oy < a.r.y + a.r.oy + a.r.h;
+      if (a.phase != 2 || a.n_clears || overlap || !RegionLive(a.r)) {
+        ShadowFlush(f, "new plan");
+      } else if (a.r.x == r.x && a.r.y == r.y && a.r.w == r.w && a.r.h > r.h) {
+        // The rows below the new rect (HCU: cascade 3 is 640 rows, cascade 2 was 704) go back now.
+        CopyRect(f.cmdbuf, a.r.dd, a.r.x + a.r.ox, a.r.y + a.r.oy + r.h, e, a.r.x, a.r.y + r.h, a.r.w, a.r.h - r.h);
+        prev = a.r;
+      } else if (Inside(a.r.x, a.r.y, a.r.w, a.r.h, r)) {
+        prev = a.r;
+      } else {
+        ShadowFlush(f, "new plan elsewhere");
+      }
+    } else if (a.edram) {
+      ShadowFlush(f, "another EDRAM image");
+    }
+    a = ShadowAlias{};
+    a.edram = e;
+    a.r = r;
+    a.prev = prev;
+    a.ordinal = n;
+    a.clears[0] = {x, y, w, h, z};
+    a.n_clears = 1;
+    e->clean_key = 0;
+    LogOnce("sttarget", "SHADOW TARGET: first alias: EDRAM %u pitch %u rect %u,%u %ux%u -> %08X at %u,%u (plan %u, swap #%u)", e->edram_base, e->edram_pitch,
+            r.x, r.y, r.w, r.h, r.dd_base, r.x + r.ox, r.y + r.oy, n, swaps_ + 1);
+    ShadowClearInto(f, x, y, w, h, z);
+    return true;
+  }
+
   // HCU's shadow maps: three cascades are resolved to three addresses (a tile row of 32 apart in the
   // memory of one 2048x2048 texture) and sampled as that one texture. Each resolve made its own depth
   // image at its own address; the texture takes the ones resolved after its own contents at their rows.
@@ -2903,6 +3092,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (sc.x >= w || sc.y >= h) continue;
       if (sc.x + sc.width > w) sc.width = w - sc.x;
       if (sc.y + sc.height > h) sc.height = h - sc.y;
+      if (hcu_settings.shadow_target && depth_img && ShadowClear(f, depth_img, color_img != nullptr, sc.x, sc.y, sc.width, sc.height, z)) continue;
       // CLEAR SKIP (clear_skip=1): a clear of the same rect to the same value as the last one, with no draw into the
       // images since, writes what they already hold (dk_gpu_times_1: the 1280x720 colour+depth clear at the frame's start,
       // repeated before the scene after the shadow pass: 0.4 ms). A colour target and a depth target each keep their own.
@@ -2957,6 +3147,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (d && cx < d->width && cy < d->height) {
         if (cx + cw > d->width) cw = d->width - cx;
         if (cy + ch > d->height) ch = d->height - cy;
+        if (sa_.edram == d) ShadowFlush(f, "resolve clear");
         BindTargets(cmd, nullptr, d);
         const DkScissor sc = HostRect(d, cx, cy, cw, ch);
         dkCmdBufSetScissors(cmd, 0, &sc, 1);
@@ -3015,7 +3206,27 @@ class Deko3dCommandProcessor : public CommandProcessor {
       if (y + h > dsrc->height) h = y < dsrc->height ? dsrc->height - y : 0;
       if (dx + w > dd->width) w = dx < dd->width ? dd->width - dx : 0;
       if (dy + h > dd->height) h = dy < dd->height ? dd->height - dy : 0;
-      if (w && h) {
+      // SHADOW TARGET: the resolve the alias predicted finds its draws in the destination already: no copy, only the
+      // barrier the copy gave before the receivers sample it. Another resolve of that EDRAM image (or into that
+      // destination) takes the rect back first. Each resolve is the next frame's plan.
+      bool st_done = false;
+      if (sa_.edram && (sa_.edram == dsrc || sa_.r.dd == dd)) {
+        const ShadowRegion& r = sa_.r;
+        if (sa_.edram == dsrc && sa_.phase != 2 && sa_.ordinal == plans_cur_.size() && r.dd == dd && x == r.x && y == r.y && w == r.w && h == r.h &&
+            dx == x + r.ox && dy == y + r.oy && (sa_.phase == 1 || Covered(sa_.clears, sa_.n_clears, r)) && RegionLive(r)) {
+          sa_.phase = 2;
+          sa_.n_clears = 0;
+          sa_.prev = {};
+          st_done = true;
+          frame_st_skipped_++;
+          dkCmdBufBarrier(cmd, DkBarrier_Full, DkInvalidateFlags_Image);
+          Step(f, "depth resolve EDRAM %u rect %u,%u %ux%u -> %08X: in place (SHADOW TARGET)", info.depth_original_base, x, y, w, h, info.copy_dest_base);
+        } else {
+          ShadowFlush(f, "resolve");
+        }
+      }
+      if (hcu_settings.shadow_target) plans_cur_.push_back({dsrc->edram_base, dsrc->edram_pitch, x, y, w, h, dd->guest_base, dx, dy});
+      if (w && h && !st_done) {
         DkImageView sv, dv;
         dkImageViewDefaults(&sv, &dsrc->image);
         dkImageViewDefaults(&dv, &dd->image);
@@ -3368,6 +3579,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint64_t upload_bytes_ = 0;
   uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0, frame_shadow_biased_ = 0;
   uint32_t frame_no_alpha_ = 0;  // ALPHA VARIANTS: draws with the pixel shader without the alpha test
+  // SHADOW TARGET (ShadowClear): last frame's and this frame's depth resolves, the alias, and the per-frame counts.
+  std::vector<DepthPlan> plans_prev_, plans_cur_;
+  ShadowAlias sa_;
+  uint32_t frame_st_redirects_ = 0, frame_st_skipped_ = 0, frame_st_fallbacks_ = 0;
   uint32_t frame_vtx_reused_ = 0;  // vertex bytes bound from a copy this frame made already (vtx_copies_)
   // BindUniforms: the frame (incremented in BeginFrame; the shaders' constant copies and the system constants' copy
   // are valid in that frame's data ring only), the last system constants, and the uniform buffers bound and reused.

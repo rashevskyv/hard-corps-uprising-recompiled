@@ -67,6 +67,8 @@ struct HcuSettings {
                           // cull_back with face 0 = CCW front; 2 = the same with the other winding (A/B of the Y flip)
   int alpha_variants;     // 1 = at start, the pixel shaders without the alpha test (shader_<hash>.frag.na.dksh) are
                           // loaded and bound for the draws with alpha_test_enable 0 (no discard there)
+  int shadow_target;      // 1 = SHADOW TARGET: the shadow cascades are cleared and drawn straight into their resolve
+                          // destination (last frame's resolves predict it); the matching resolve copies nothing
 };
 
 extern HcuSettings hcu_settings;

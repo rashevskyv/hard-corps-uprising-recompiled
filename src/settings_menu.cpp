@@ -66,6 +66,7 @@ void Save() {
     if (s.trail_rearm) std::fprintf(f, "trail_rearm=%d\n", s.trail_rearm);
     if (s.cull) std::fprintf(f, "cull=%d\n", s.cull);
     if (s.alpha_variants) std::fprintf(f, "alpha_variants=%d\n", s.alpha_variants);
+    if (s.shadow_target) std::fprintf(f, "shadow_target=%d\n", s.shadow_target);
     std::fclose(f);
   }
 }
@@ -117,6 +118,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "trail_rearm")) s.trail_rearm = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "cull")) s.cull = int(v) == 1 || int(v) == 2 ? int(v) : 0;
       else if (!std::strcmp(key, "alpha_variants")) s.alpha_variants = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "shadow_target")) s.shadow_target = int(v) ? 1 : 0;
     }
     std::fclose(f);
   }
