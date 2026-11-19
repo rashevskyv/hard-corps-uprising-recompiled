@@ -61,6 +61,8 @@ fi
 # The base's other codegen keys (its app/renut_config.toml sets them all), each a -D option of this script only, default
 # OFF: ON puts the key into the manifest copy, as HCU_DFORM, and its suffix on the version. Class "exact": the same
 # values as the default code (read in the base's builders); -DHCU_CG_EXACT=ON turns on every "exact" key ("-cgx").
+# Class "lock": the same values, but the code no longer takes a lock the default code takes (exact only under the
+# hypothesis written at the key). Only "exact" keys are in -cgx; the others take their own option and suffix.
 # The audit of each is in docs/bible-checklist.md (step 4b).
 #   option              manifest key        suffix  class
 CG_KEYS=(
@@ -68,6 +70,10 @@ CG_KEYS=(
     "HCU_ROTATE_SHIFTS  rotate_word_shifts  rot     exact"  # rlwinm / rlwimi, mask mb <= me, as the plain shift (sdk/tests/rotate_word_test.cpp)
     "HCU_DIV_INLINE     div_inline          div     exact"  # divw(u) / divd(u) as sdiv / udiv: 0 for a zero divisor and INT_MIN / -1, as before
     "HCU_FCTIWZ_INLINE  fctiwz_inline       fwz     exact"  # fctiwz as fcvtzs + NaN select: simde's range test gives the same saturation
+    # mfmsr / mtmsrd: no global lock around the guest's 1499 lwarx ... stwcx. regions (each one reservation, ALU
+    # operations and one CAS: the CAS alone is atomic). HYPOTHESIS: no host code takes global_critical_region to guard
+    # these guest words (checked: the DPC list and the threading exports only).
+    "HCU_SKIP_MSR       skip_msr            msr     lock"
 )
 CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
 CG_SUFFIX=""
