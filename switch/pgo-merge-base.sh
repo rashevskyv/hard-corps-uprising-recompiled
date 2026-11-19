@@ -24,8 +24,10 @@ if [ -n "$GEN" ]; then
     for f in "${files[@]}"; do [ "$f" -nt "$GEN" ] || { echo "$f is older than the instrumented build $GEN"; exit 1; }; done
 fi
 mkdir -p "$OUT"
-ls "$OUT"/*.gcda > /dev/null 2>&1 && { echo "$OUT already has .gcda files: move them aside (merge-stream adds)"; exit 1; }
+g=("$OUT"/*.gcda)  # nullglob: an empty array when there is none (a bare `ls "$OUT"/*.gcda` would list the folder)
+[ ${#g[@]} -eq 0 ] || { echo "$OUT already has .gcda files: move them aside (merge-stream adds)"; exit 1; }
 for f in "${files[@]}"; do "$TOOL" merge-stream "$f"; done
-ls "$OUT"/*.gcda > /dev/null 2>&1 || { echo "no .gcda in $OUT after the merge: the streams name another folder"; exit 1; }
+g=("$OUT"/*.gcda)
+[ ${#g[@]} -gt 0 ] || { echo "no .gcda in $OUT after the merge: the streams name another folder"; exit 1; }
 python3 "$BASE/tools/pgo_summary.py" "$OUT" "${#files[@]}"
-echo "$(ls "$OUT"/*.gcda | wc -l) .gcda files in $OUT"
+echo "${#g[@]} .gcda files in $OUT"
