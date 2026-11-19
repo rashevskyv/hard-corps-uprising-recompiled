@@ -93,11 +93,17 @@ CG_KEYS=(
     # A float copied through a register (lfs, then stfs of it) in VMX mode keeps its bits: no conversion, no mode. HCU
     # with -fpm -fpc -fpl: 309 copy loads, 120 copy stores; switches off 14834 -> 14833.
     "HCU_FP_COPY_PAIRS  fp_copy_pairs       fpp     fp"
+    # With the copy pairs: also a store of loaded bits whatever the mode and through fneg / fabs / fnabs in place.
+    # HCU with -fpm -fpc -fpl -fpp: copy loads 309 -> 8132, copy stores 120 -> 11448, switches off 14833 -> 13713.
+    "HCU_FP_COPY_FWD    fp_copy_forwarding  fpf     fp"
 )
 # The lookahead acts only with fp_moves_modeless or fp_compares_modeless (the generator's context.cpp): alone it would
 # be the default code under another name.
 [ "$(opt HCU_FP_LOOKAHEAD 0 "$@")" = 1 ] && [ "$(opt HCU_FP_MOVES 0 "$@")$(opt HCU_FP_COMPARES 0 "$@")" = 00 ] \
     && { echo "-DHCU_FP_LOOKAHEAD=ON needs -DHCU_FP_MOVES=ON or -DHCU_FP_COMPARES=ON"; exit 1; }
+# Copy forwarding acts only with the copy pairs (the generator's config.h).
+[ "$(opt HCU_FP_COPY_FWD 0 "$@")" = 1 ] && [ "$(opt HCU_FP_COPY_PAIRS 0 "$@")" = 0 ] \
+    && { echo "-DHCU_FP_COPY_FWD=ON needs -DHCU_FP_COPY_PAIRS=ON"; exit 1; }
 CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
 CG_SUFFIX=""
 for k in "${CG_KEYS[@]}"; do
