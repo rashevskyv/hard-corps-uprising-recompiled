@@ -1071,6 +1071,22 @@ class Deko3dCommandProcessor : public CommandProcessor {
     bool z_biased = false, shadow_biased = false;
     dkRasterizerStateDefaults(&rs);
     rs.cullMode = DkFace_None;  // TODO(cull): cull_front/cull_back once the winding is verified on a picture
+    // CULL (cull=1 or 2; 0 = the line above): the guest's cull_front / cull_back for triangles and quads (not points,
+    // lines or HCU's rectangle lists, whose 4th vertex the geometry shader makes). The Y flip of the viewport (NDC y
+    // negated, then deko3d's +1-to-the-bottom-row viewport) leaves the picture upright, so the screen winding is the
+    // 360's. HYPOTHESIS: deko3d counts it on the screen like Vulkan and Direct3D, then face 0 (CCW front, as the SDK's
+    // D3D12 and Vulkan backends read it) is DkFrontFace_CCW: cull=1. cull=2 takes the other winding, for the A/B (the
+    // wrong one culls the visible side: whole meshes go missing). frontFace also picks the stencil face of a draw.
+    if (hcu_settings.cull && !rects && prim != DkPrimitive_Points && prim != DkPrimitive_Lines && prim != DkPrimitive_LineStrip &&
+        prim != DkPrimitive_LineLoop) {
+      const bool ccw = (su.face == 0) == (hcu_settings.cull == 1);
+      rs.frontFace = ccw ? DkFrontFace_CCW : DkFrontFace_CW;
+      rs.cullMode = DkFace(uint32_t(su.cull_front ? DkFace_Front : DkFace_None) | uint32_t(su.cull_back ? DkFace_Back : DkFace_None));
+      if (rs.cullMode != DkFace_None)
+        LogOnce(kKeyCull | uint64_t(su.cull_front) | uint64_t(su.cull_back) << 1 | uint64_t(su.face) << 2,
+                "CULL (cull=%d): first draw with cull_front %u cull_back %u face %u -> front %s (VS %016llX, swap #%u)", hcu_settings.cull,
+                uint32_t(su.cull_front), uint32_t(su.cull_back), uint32_t(su.face), ccw ? "CCW" : "CW", (unsigned long long)vs->ucode_data_hash(), swaps_);
+    }
     rs.fillRectangleEnable = rects && !use_gs;
     if (su.poly_offset_front_enable || su.poly_offset_back_enable || su.poly_offset_para_enable) {
       // Not applied yet: logged to see whether HCU uses it (the shadow pass would).
@@ -3175,7 +3191,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
   static constexpr uint64_t kKeyDepthFmt = 0xD1ull << 56, kKeyPolyOff = 0xD2ull << 56, kKeyClip = 0xD3ull << 56,
                             kKeyColourBias = 0xD4ull << 56, kKeyShadowBias = 0xD5ull << 56, kKeyBlendConst = 0xD6ull << 56,
-                            kKeyStencil = 0xD7ull << 56;
+                            kKeyStencil = 0xD7ull << 56, kKeyCull = 0xD8ull << 56;
   // Two words into one key (the fields do not fit in 56 bits).
   static uint64_t MixKey(uint64_t a, uint64_t b) { return (a * 0x9E3779B97F4A7C15ull ^ b) * 0xC2B2AE3D27D4EB4Full; }
   void LogV(const char* fmt, va_list ap) {

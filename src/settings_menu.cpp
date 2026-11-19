@@ -64,6 +64,7 @@ void Save() {
     // The settings.txt-only keys: written only when on, so a menu save keeps them and an old file stays as it was.
     if (s.resolve_clear_key) std::fprintf(f, "resolve_clear_key=%d\n", s.resolve_clear_key);
     if (s.trail_rearm) std::fprintf(f, "trail_rearm=%d\n", s.trail_rearm);
+    if (s.cull) std::fprintf(f, "cull=%d\n", s.cull);
     std::fclose(f);
   }
 }
@@ -113,6 +114,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "audio_threads")) s.audio_threads = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "resolve_clear_key")) s.resolve_clear_key = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "trail_rearm")) s.trail_rearm = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "cull")) s.cull = int(v) == 1 || int(v) == 2 ? int(v) : 0;
     }
     std::fclose(f);
   }

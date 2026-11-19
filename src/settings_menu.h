@@ -63,6 +63,8 @@ struct HcuSettings {
                           // that rect to that value, so CLEAR SKIP (clear_skip=1) can skip the next same clear (live)
   int trail_rearm;        // 1 = each close of the settings menu starts the GPU step trail again: frames 20 and 60 after
                           // it go to dk_gpu_times_2.txt and _3.txt (a boss scene; no 150-draw threshold)
+  int cull;               // CULL (at each draw): 0 = no culling (the verified picture); 1 = the guest's cull_front /
+                          // cull_back with face 0 = CCW front; 2 = the same with the other winding (A/B of the Y flip)
 };
 
 extern HcuSettings hcu_settings;
