@@ -26,6 +26,15 @@ option(HCU_NX_METER "The CPU-work meter's counters in the SDK (diagnostic)" OFF)
 if(HCU_NX_METER)
     add_compile_definitions(HCU_NX_METER)
 endif()
+# CG-13 (the base's BLUR_FPCR_ONE_MODE, ON in the base's Switch build): the host's flush mode stays on for all guest
+# code (rex/ppc/context.h of the SDK), so the game code's switches of the mode write no `msr fpcr` after a thread's
+# first. NOT bit-exact: the Xenon's scalar FPU keeps denormals, this flushes them as its VMX unit does. OFF by default
+# (HCU stays exact); flavour "-fpcr1" (switch/build-base.sh). The whole build gets it before the SDK is added: the SDK
+# runtime and the generated code share the inline functions of context.h. A PGO profile of the other mode does not fit.
+option(HCU_FPCR_ONE_MODE "CG-13: one FPU flush mode for all guest code (scalar denormals flushed, not bit-exact)" OFF)
+if(HCU_FPCR_ONE_MODE)
+    add_compile_definitions(REX_FPCR_ONE_MODE)
+endif()
 # No rexglue target: the cross build cannot run the host CLI, and a codegen re-run inside the build would drop the
 # store cards (tools/store_cards.py of the base). switch/build-base.sh runs codegen and the cards before the build.
 set(REXGLUE_HOST_TARGET hcu)
