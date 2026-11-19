@@ -66,6 +66,7 @@ fi
 CG_KEYS=(
     "HCU_DCBT_PREFETCH  dcbt_prefetch       dcbt    exact"  # dcbt / dcbtst as the host's prefetch: a hint, no value
     "HCU_ROTATE_SHIFTS  rotate_word_shifts  rot     exact"  # rlwinm / rlwimi, mask mb <= me, as the plain shift (sdk/tests/rotate_word_test.cpp)
+    "HCU_DIV_INLINE     div_inline          div     exact"  # divw(u) / divd(u) as sdiv / udiv: 0 for a zero divisor and INT_MIN / -1, as before
 )
 CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
 CG_SUFFIX=""
