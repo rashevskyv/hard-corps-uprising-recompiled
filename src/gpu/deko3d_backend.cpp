@@ -1385,7 +1385,9 @@ class Deko3dCommandProcessor : public CommandProcessor {
         speed_long_ += long_swap;
       }
       speed_prev_level_ = level;
-      swap_dt_ = swap_tick_ ? now - swap_tick_ : 0;
+      // Due30's prediction: the average of the last two guest intervals (one interval's jitter drew two frames in a row).
+      swap_dt_ = swap_prev_ ? (now - swap_prev_) / 2 : swap_tick_ ? now - swap_tick_ : 0;
+      swap_prev_ = swap_tick_;
       swap_tick_ = now;
     }
     if (Skipping()) {
@@ -1905,10 +1907,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
   }
   // 30skip (fps_mode 0): a clock of 33.3 ms steps. Each drawn swap moves the due time one step on, but never to less
   // than 21.3 ms after that swap (a step minus 12 ms of catch-up: a late frame is made up only in part). The next frame
-  // is drawn when its swap, predicted as this swap plus the last guest interval, is at most 2.3 ms before the due time.
-  // So two frames in a row are drawn only when the guest's frames are over 19 ms (under 52.6 fps). Host simulation
-  // (+-0.9 ms jitter): a 60 fps guest shows 30, gaps 31.8-33.9 ms (as the old parity rule); 55-59 fps: half of them,
-  // evenly; 46 fps: 28.5 (parity: 23), gaps 20-44 ms; a 30 Hz scene (the movies): every frame.
+  // is drawn when its swap, predicted as this swap plus the average of the last two guest intervals, is at most 2.3 ms
+  // before the due time.
+  // So two frames in a row are drawn only when the guest's frames are over 19 ms (under 52.6 fps). Host simulation:
+  // a 60 fps guest shows 30, gaps 31.6-35.1 ms (+-0.9 ms jitter) or 29.5-37.2 ms (+-2 ms), never two in a row; 57 fps:
+  // 28.5, evenly at +-0.9 ms (93 pairs in 6000 frames at +-2 ms); 46 fps: 28.9 (parity: 23), gaps 18-47 ms; a 30 Hz
+  // scene (the movies): every frame.
   bool Due30(bool drawn) {
     const uint64_t freq = armGetSystemTickFreq(), step = freq / 30, tolerance = freq * 23 / 10000;
     const uint64_t earliest = swap_tick_ + step - freq * 12 / 1000;
@@ -3625,7 +3629,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
   bool skip_busy_ = false;  // every mode but 3: a frame the GPU has no free slot for is not drawn (NextFrame)
   bool fps45_ = false;      // mode 4: 3 of 4 frames drawn
   uint64_t due30_ = 0;      // mode 0: the tick the next drawn frame is due at (Due30); 0 = now
-  uint64_t swap_dt_ = 0;    // the ticks between the last two guest swaps
+  uint64_t swap_dt_ = 0;    // the guest's swap interval: the average of the last two (Due30)
+  uint64_t swap_prev_ = 0;  // the IssueSwap before swap_tick_
   uint32_t pace_ = 0;       // mode 4: quarter frames due (NextFrame)
   bool busy_pending_ = false;  // the frame's busy poll is still to be done (DecideFrame)
   uint64_t cp_us_at_start_ = 0;  // us_draw_ + us_copy_ when the frame started (CP SKIP)
