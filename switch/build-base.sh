@@ -63,6 +63,8 @@ fi
 # values as the default code (read in the base's builders); -DHCU_CG_EXACT=ON turns on every "exact" key ("-cgx").
 # Class "lock": the same values, but the code no longer takes a lock the default code takes (exact only under the
 # hypothesis written at the key). Class "fix": other values than the default code, the ones the 360 gives.
+# Class "fp": fewer flush-mode switches through the SDK's any-mode float helpers (rex/ppc/diet_ops.h: the result of
+# the flush-off mode in either mode, a cold path for a denormal), exact by the base's design, NOT proven for HCU.
 # Only "exact" keys are in -cgx; the others take their own option and suffix.
 # The audit of each is in docs/bible-checklist.md (step 4b).
 #   option              manifest key        suffix  class
@@ -78,6 +80,9 @@ CG_KEYS=(
     # fctiw / fctid (598 sites) as frinti + fcvtzs: a tie rounds to even in the current mode, as on the 360; the default
     # code (simde's portable conversion) rounds it away from zero. CHANGES those results, toward the 360's.
     "HCU_FCTI_INLINE    fcti_inline         fcti    fix"
+    # Float moves (lfd / stfd, fmr, fneg, fabs ...) switch no mode; lfs / stfs in VMX mode convert any-mode. HCU's
+    # census (codegen only): switches off 22774 -> 17836, on 386 -> 253; 597 any-mode helpers.
+    "HCU_FP_MOVES       fp_moves_modeless   fpm     fp"
 )
 CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
 CG_SUFFIX=""
