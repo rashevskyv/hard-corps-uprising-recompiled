@@ -62,7 +62,8 @@ fi
 # OFF: ON puts the key into the manifest copy, as HCU_DFORM, and its suffix on the version. Class "exact": the same
 # values as the default code (read in the base's builders); -DHCU_CG_EXACT=ON turns on every "exact" key ("-cgx").
 # Class "lock": the same values, but the code no longer takes a lock the default code takes (exact only under the
-# hypothesis written at the key). Only "exact" keys are in -cgx; the others take their own option and suffix.
+# hypothesis written at the key). Class "fix": other values than the default code, the ones the 360 gives.
+# Only "exact" keys are in -cgx; the others take their own option and suffix.
 # The audit of each is in docs/bible-checklist.md (step 4b).
 #   option              manifest key        suffix  class
 CG_KEYS=(
@@ -74,6 +75,9 @@ CG_KEYS=(
     # operations and one CAS: the CAS alone is atomic). HYPOTHESIS: no host code takes global_critical_region to guard
     # these guest words (checked: the DPC list and the threading exports only).
     "HCU_SKIP_MSR       skip_msr            msr     lock"
+    # fctiw / fctid (598 sites) as frinti + fcvtzs: a tie rounds to even in the current mode, as on the 360; the default
+    # code (simde's portable conversion) rounds it away from zero. CHANGES those results, toward the 360's.
+    "HCU_FCTI_INLINE    fcti_inline         fcti    fix"
 )
 CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
 CG_SUFFIX=""
