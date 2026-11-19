@@ -17,6 +17,7 @@
 #include "hcu_pgo.h"
 #include "hcu_version.h"  // written by switch/build-base.sh: HCU_VERSION, HCU_BUILD_UTC, HCU_BUILD_ID
 #include "settings_menu.h"  // hcu_clocks_key
+#include "sysclk_owner.h"
 
 extern "C" {
 // libnx (init.c): the exit; with __nx_applet_exit_mode 1 it asks the system to close the application (the base's main,
@@ -32,27 +33,34 @@ const char* const kDataDir = "sdmc:/switch/hcu";
 Thread log_flush_thread;
 volatile bool log_flush_running = false;
 
-// settings.txt clocks=1 (default 0 = stock, or what sys-clk sets): CPU 1785, GPU 768, memory 1600 MHz through clkrst,
-// as switch/host/switch_nx.cpp did in the old SDK's build (0.310 ran with them). The base never sets clocks: up to 0.398
-// this build had no clock code at all, so clocks=1 did nothing. The old rates come back on exit.
+// settings.txt clocks=1 (default 0: the game touches no clock): CPU 1785, GPU 768, memory 1600 MHz through clkrst,
+// as switch/host/switch_nx.cpp did in the old SDK's build. sys-clk has priority, per module: a module it sets (an
+// override, or a title or global profile rate) is its own, and the game makes no pcv call for it; a module it leaves
+// ("Do not override", or sys-clk disabled) the game sets. sys-clk is asked again every 2 s, so a change in its
+// overlay takes effect. Horizon OC, sys-clk-OC or a sys-clk with an unknown IPC: the game touches no clock.
+// No clkrst session stays open: each read or set opens one session and closes it (0.399 held three for the whole run,
+// and pcv aborted with 2011-0102, out of session memory; see docs/switch.md).
 struct Clock {
   const char* name;
   PcvModuleId module;
   u32 wanted;
-  ClkrstSession session;
-  bool open;
-  u32 old;
-  u32 set;
-  bool lowered;  // keep_clocks found it below `set` at its last check
+  u32 old = 0;      // the rate before the game's set, put back on exit; 0 = nothing to put back
+  u32 set = 0;      // the rate the game holds (read back after its set); 0 = the game does not hold the module
+  u32 owner = ~0u;  // sys-clk's rate for it, Hz; 0 = left to the game; ~0u = not asked yet
+  u32 skip = 0;     // checks to skip (back-off after a re-set or a failed set)
+  u32 wait = 1;     // the next back-off: 1, 2, 4, 8, 16 checks (2 to 32 s)
 };
-Clock clocks[] = {
+constinit Clock clocks[] = {  // userAppInit runs before the C++ constructors
     {"CPU", PcvModuleId_CpuBus, 1785000000},
     {"GPU", PcvModuleId_GPU, 768000000},
     {"memory", PcvModuleId_EMC, 1600000000},
 };
+constexpr u32 kNoAnswer = 1;            // owner: sys-clk did not answer, so the module is left alone
 bool clkrst_up = false;
-bool sysclk = false;                    // sys-clk runs: a module its profile names goes to the profile
-std::atomic<bool> clocks_kept{false};   // raise_clocks is done: keep_clocks may read the sessions
+Service sysclk_srv;                     // sys-clk's IPC (trusted API): asked before every pcv call
+bool sysclk = false;
+bool sysclk_silent = false;             // the last question got no answer (logged once)
+std::atomic<bool> clocks_on{false};     // raise_clocks is done: keep_clocks may run
 int keep_checks = 0;
 
 // The CPU clock as the core runs it, whatever clkrst says: 8 dependent adds per iteration (1 cycle each on the A57),
@@ -74,126 +82,233 @@ u32 busy_loop_mhz() {
   return best ? (u32)(250000ull * 8 * 19200000 / best / 1000000) : 0;
 }
 
-// Is another process serving this name? (sys-clk's own check.)
-bool service_running(const char* name) {
+// Is another process serving this name? sys-clk's own check (sysclkIpcRunning): registering the name fails with
+// 0x815 (already registered) while the owner runs, and changes nothing for it. 0 = nobody serves it (our registration
+// is taken back at once); any other rc = cannot tell. smGetService is not usable for this: sm holds the request until
+// the name is registered, so it would hang without sys-clk.
+constexpr Result kAlreadyRegistered = MAKERESULT(21, 4);
+Result service_probe(const char* name) {
   Handle handle;
   const Result rc = smRegisterService(&handle, smEncodeName(name), false, 1);
   if (R_SUCCEEDED(rc)) {
     smUnregisterService(smEncodeName(name));
     svcCloseHandle(handle);
-    return false;
   }
-  return rc == MAKERESULT(21, 4);
+  return rc;
 }
 
-// clocks=0: the rates as they are, read through sessions that are closed again (keep and restore do nothing).
-void log_stock_clocks() {
-  u32 mhz[3] = {};
-  if (hosversionAtLeast(8, 0, 0) && R_SUCCEEDED(clkrstInitialize())) {
-    for (int i = 0; i < 3; i++) {
-      ClkrstSession s;
-      u32 hz = 0;
-      if (R_SUCCEEDED(clkrstOpenSession(&s, clocks[i].module, 3))) {
-        clkrstGetClockRate(&s, &hz);
-        clkrstCloseSession(&s);
-      }
-      mhz[i] = hz / 1000000;
-    }
-    clkrstExit();
+// Horizon OC and sys-clk-OC: their rates are not asked, so the game touches no clock while one runs.
+bool other_clock_tool(const char* name, const char* who) {
+  const Result rc = service_probe(name);
+  if (R_SUCCEEDED(rc)) return false;
+  if (rc == kAlreadyRegistered) {
+    std::printf("[clock] %s is running: the game does not touch clocks\n", who);
+  } else {
+    std::printf("[clock] cannot tell whether %s runs (sm rc 0x%X): the game does not touch clocks\n", who, rc);
   }
-  std::printf("[clock] settings.txt clocks=0 (or no key): not changed; CPU %u, GPU %u, memory %u MHz; busy-loop "
-              "equals %u MHz\n", mhz[0], mhz[1], mhz[2], busy_loop_mhz());
+  return true;
+}
+
+// sys-clk's rate for each module now (Hz, 0 = left to the game) and the rates it last read. Three IPC calls to sys-clk,
+// none to pcv. No answer: every module counts as sys-clk's.
+void ask_sysclk(u32 owner[3], u32 seen[3], const char* why[3]) {
+  using namespace hcu_sysclk;
+  Context c{};
+  Profiles title{}, own{}, global{};
+  u64 pid = 0;
+  svcGetInfo(&pid, InfoType_ProgramId, CUR_PROCESS_HANDLE, 0);
+  const u64 global_tid = kGlobalTid;
+  Result rc = serviceDispatchOut(&sysclk_srv, kGetCurrentContext, c);
+  if (R_SUCCEEDED(rc)) rc = serviceDispatchInOut(&sysclk_srv, kGetProfiles, c.applicationId, title);
+  // sys-clk learns the title on its next poll: until then its context can name the title before ours.
+  if (R_SUCCEEDED(rc) && pid != c.applicationId) rc = serviceDispatchInOut(&sysclk_srv, kGetProfiles, pid, own);
+  if (R_SUCCEEDED(rc)) rc = serviceDispatchInOut(&sysclk_srv, kGetProfiles, global_tid, global);
+  if (R_FAILED(rc)) {
+    if (!sysclk_silent) std::printf("[clock] sys-clk does not answer (rc 0x%X): the game leaves every clock\n", rc);
+    sysclk_silent = true;
+    for (int i = 0; i < 3; i++) owner[i] = kNoAnswer, seen[i] = 0, why[i] = "no answer";
+    return;
+  }
+  sysclk_silent = false;
+  for (int i = 0; i < 3; i++) {
+    const u32 a = target_hz(c, title, global, i), b = target_hz(c, own, global, i);
+    owner[i] = a > b ? a : b;
+    seen[i] = c.freqs[i];
+    why[i] = !c.enabled ? "disabled" : c.overrideFreqs[i] ? "override" : owner[i] ? "profile" : "Do not override";
+  }
+}
+
+// One clkrst session for one module, closed again. `to` != 0: set it when the rate is below `to`.
+// Returns the rate read back (0 = no session); *before = the rate before the set.
+u32 pcv_rate(const Clock& clock, u32 to, u32* before = nullptr, Result* set_rc = nullptr) {
+  if (!clkrst_up) {
+    if (const Result rc = clkrstInitialize(); R_FAILED(rc)) {
+      std::printf("[clock] clkrstInitialize failed (rc 0x%X): the clocks are unchanged\n", rc);
+      return 0;
+    }
+    clkrst_up = true;
+  }
+  ClkrstSession s;
+  if (const Result rc = clkrstOpenSession(&s, clock.module, 3); R_FAILED(rc)) {
+    std::printf("[clock] %s: no clkrst session (rc 0x%X)\n", clock.name, rc);
+    return 0;
+  }
+  u32 hz = 0;
+  clkrstGetClockRate(&s, &hz);
+  if (before) *before = hz;
+  if (to && hz < to) {
+    const Result rc = clkrstSetClockRate(&s, to);
+    if (set_rc) *set_rc = rc;
+    clkrstGetClockRate(&s, &hz);
+  }
+  clkrstCloseSession(&s);
+  return hz;
+}
+
+void back_off(Clock& clock) {
+  clock.skip = clock.wait;
+  if (clock.wait < 16) clock.wait *= 2;
+}
+
+// The game takes a module: never lower a rate (docked memory, or someone else's overclock).
+void take(Clock& clock) {
+  u32 before = 0;
+  Result rc = 0;
+  const u32 now = pcv_rate(clock, clock.wanted, &before, &rc);
+  if (now == 0) {
+    back_off(clock);
+    return;
+  }
+  clock.old = before;
+  clock.set = now;
+  std::printf("[clock] %s: was %u, requested %u, %s, read back %u MHz\n", clock.name, before / 1000000,
+              clock.wanted / 1000000,
+              before >= clock.wanted ? "not applied (already at or above)" : R_FAILED(rc) ? "REFUSED" : "applied",
+              now / 1000000);
+  if (R_FAILED(rc)) std::printf("[clock] %s: clkrstSetClockRate rc 0x%X\n", clock.name, rc);
+}
+
+// One pass: sys-clk's choice per module (asked every time), then the game's set, or its check of a module it holds.
+// HOME, docking and sleep put the system's rates back: a module below the game's rate is set again, then the next
+// check waits twice as long (up to 32 s). A rate at or above the game's is never set again.
+void clock_pass(u32 now_out[3]) {
+  u32 owner[3] = {}, seen[3] = {};
+  const char* why[3] = {};
+  if (sysclk) ask_sysclk(owner, seen, why);
+  for (int i = 0; i < 3; i++) {
+    Clock& clock = clocks[i];
+    now_out[i] = seen[i];
+    if (sysclk && owner[i] != clock.owner) {
+      if (owner[i] == kNoAnswer) {
+        std::printf("[clock] %s: no answer from sys-clk -> game leaves it\n", clock.name);
+      } else if (owner[i]) {
+        std::printf("[clock] %s: sys-clk %s %u -> game leaves it\n", clock.name, why[i], owner[i] / 1000000);
+      } else {
+        std::printf("[clock] %s: sys-clk %s -> game sets %u\n", clock.name, why[i], clock.wanted / 1000000);
+      }
+      clock.owner = owner[i];
+      clock.skip = 0;
+      clock.wait = 1;
+    }
+    if (owner[i]) {  // sys-clk's: handed back without a set, and not put back on exit
+      clock.set = clock.old = 0;
+      continue;
+    }
+    if (clock.skip) {
+      clock.skip--;
+      continue;
+    }
+    if (clock.set == 0) {
+      take(clock);
+      now_out[i] = clock.set;
+      continue;
+    }
+    const u32 now = seen[i] ? seen[i] : pcv_rate(clock, 0);
+    now_out[i] = now;
+    if (now == 0 || now >= clock.set) continue;
+    const u32 again = pcv_rate(clock, clock.set);
+    std::printf("[clock] %s was put back to %u MHz: set to %u MHz again, read back %u MHz; next check in %u s\n",
+                clock.name, now / 1000000, clock.set / 1000000, again / 1000000, clock.wait * 2);
+    back_off(clock);
+  }
 }
 
 void raise_clocks() {
   if (!hcu_clocks_key("sdmc:/switch/hcu/settings.txt")) {
-    log_stock_clocks();
+    std::printf("[clock] settings.txt clocks=0 (or no key): the game does not touch clocks; busy-loop equals %u MHz\n",
+                busy_loop_mhz());
     return;
   }
   std::printf("[clock] settings.txt clocks=1 requested: CPU %u, GPU %u, memory %u MHz\n", clocks[0].wanted / 1000000,
               clocks[1].wanted / 1000000, clocks[2].wanted / 1000000);
-  // Horizon OC puts stock rates back every tick; fighting it froze consoles (NFSU2's port).
-  if (service_running("hoc:clk")) {
-    std::printf("[clock] Horizon OC is running: the clocks are left to it (nothing set)\n");
+  // Before any pcv call: who else sets clocks. Horizon OC puts stock rates back every tick (fighting it froze consoles
+  // in NFSU2's port); sys-clk-OC's IPC is another one.
+  if (other_clock_tool("hoc:clk", "Horizon OC") || other_clock_tool("sysclkOC", "sys-clk-OC")) return;
+  if (const Result rc = service_probe("sys:clk"); rc == kAlreadyRegistered) {
+    u32 api = 0;
+    if (R_FAILED(smGetService(&sysclk_srv, "sys:clk")) ||
+        R_FAILED(serviceDispatchOut(&sysclk_srv, hcu_sysclk::kGetApiVersion, api)) || !hcu_sysclk::api_trusted(api)) {
+      std::printf("[clock] sys-clk is running (IPC API %u, not known here): the game does not touch clocks\n", api);
+      if (serviceIsActive(&sysclk_srv)) serviceClose(&sysclk_srv);
+      return;
+    }
+    sysclk = true;
+    std::printf("[clock] sys-clk is running (IPC API %u): it keeps the modules it sets, the game sets the others\n", api);
+  } else if (R_FAILED(rc)) {
+    std::printf("[clock] cannot tell whether sys-clk runs (sm rc 0x%X): the game does not touch clocks\n", rc);
     return;
   }
-  // Kefir's sys-clk sets only the modules its profile names: the game sets the others as without it.
-  sysclk = service_running("sys:clk");
-  if (sysclk) std::printf("[clock] sys-clk is running: the game sets its clocks, a sys-clk profile wins over them\n");
   if (!hosversionAtLeast(8, 0, 0)) {
     std::printf("[clock] firmware below 8.0.0: no clkrst, the clocks are unchanged\n");
+    if (sysclk) {
+      serviceClose(&sysclk_srv);
+      sysclk = false;
+    }
     return;
   }
-  if (const Result rc = clkrstInitialize(); R_FAILED(rc)) {
-    std::printf("[clock] clkrstInitialize failed (rc 0x%X): the clocks are unchanged\n", rc);
-    return;
-  }
-  clkrst_up = true;
   const u32 loop_before = busy_loop_mhz();
-  for (Clock& clock : clocks) {
-    if (const Result rc = clkrstOpenSession(&clock.session, clock.module, 3); R_FAILED(rc)) {
-      std::printf("[clock] %s: no clkrst session (rc 0x%X): unchanged\n", clock.name, rc);
-      continue;
-    }
-    clock.open = true;
-    clkrstGetClockRate(&clock.session, &clock.old);
-    // Never lower a rate (docked memory, or someone else's overclock).
-    const bool apply = clock.old < clock.wanted;
-    const Result rc = apply ? clkrstSetClockRate(&clock.session, clock.wanted) : 0;
-    u32 now = 0;
-    clkrstGetClockRate(&clock.session, &now);
-    clock.set = now;
-    std::printf("[clock] %s: was %u, requested %u, %s, read back %u MHz\n", clock.name, clock.old / 1000000,
-                clock.wanted / 1000000, !apply ? "not applied (already at or above)" : R_FAILED(rc) ? "REFUSED" : "applied",
-                now / 1000000);
-    if (R_FAILED(rc)) std::printf("[clock] %s: clkrstSetClockRate rc 0x%X\n", clock.name, rc);
-  }
+  u32 now[3];
+  clock_pass(now);
   std::printf("[clock] busy-loop equals %u MHz before the raise, %u MHz after it\n", loop_before, busy_loop_mhz());
-  clocks_kept.store(true, std::memory_order_release);
+  clocks_on.store(true, std::memory_order_release);
 }
 
-// Every 2 s (log_flush_loop): HOME, docking and sleep put the system's clocks back: set ours again. The first check
-// logs the rates 2 s after the raise (an immediate read-back can show a rate the system takes back later).
+// Every 2 s (log_flush_loop). The first check logs the rates 2 s after the raise (an immediate read-back can show a
+// rate the system takes back later).
 void keep_clocks() {
-  if (!clocks_kept.load(std::memory_order_acquire)) return;
-  u32 hz[3] = {};
-  for (int i = 0; i < 3; i++) {
-    Clock& clock = clocks[i];
-    u32 now = 0;
-    if (clock.open) clkrstGetClockRate(&clock.session, &now);
-    hz[i] = now;
-    if (clock.set == 0 || now == 0 || now >= clock.set) {
-      clock.lowered = false;
-      continue;
-    }
-    // sys-clk: lower again 2 s after our re-set = its profile (it sets it every tick). The profile wins; the old rate
-    // does not come back on exit either.
-    if (sysclk && clock.lowered) {
-      std::printf("[clock] %s held at %u MHz by a sys-clk profile: left to it\n", clock.name, now / 1000000);
-      clock.set = clock.old = 0;
-      continue;
-    }
-    clock.lowered = true;
-    clkrstSetClockRate(&clock.session, clock.set);
-    std::printf("[clock] %s was put back to %u MHz: set to %u MHz again\n", clock.name, now / 1000000,
-                clock.set / 1000000);
-  }
+  if (!clocks_on.load(std::memory_order_acquire)) return;
+  u32 now[3];
+  clock_pass(now);
   if (keep_checks++ == 0) {
-    std::printf("[clock] 2 s after the raise: CPU %u, GPU %u, memory %u MHz; busy-loop equals %u MHz\n",
-                hz[0] / 1000000, hz[1] / 1000000, hz[2] / 1000000, busy_loop_mhz());
+    std::printf("[clock] 2 s after the raise: CPU %u, GPU %u, memory %u MHz (0 = not read); busy-loop equals %u MHz\n",
+                now[0] / 1000000, now[1] / 1000000, now[2] / 1000000, busy_loop_mhz());
   }
 }
 
+// The old rates come back for the modules the game holds; sys-clk is asked first, its modules are left to it.
 void restore_clocks() {
-  if (!clkrst_up) return;
-  clocks_kept.store(false, std::memory_order_release);
-  for (Clock& clock : clocks) {
-    if (!clock.open) continue;
-    if (clock.old != 0 && clock.set != clock.old) clkrstSetClockRate(&clock.session, clock.old);
-    clkrstCloseSession(&clock.session);
+  if (clocks_on.exchange(false, std::memory_order_acq_rel)) {
+    u32 owner[3] = {}, seen[3] = {};
+    const char* why[3] = {};
+    if (sysclk) ask_sysclk(owner, seen, why);
+    for (int i = 0; i < 3; i++) {
+      Clock& clock = clocks[i];
+      if (owner[i] || clock.old == 0 || clock.set == clock.old) continue;
+      ClkrstSession s;
+      if (R_SUCCEEDED(clkrstOpenSession(&s, clock.module, 3))) {
+        clkrstSetClockRate(&s, clock.old);
+        clkrstCloseSession(&s);
+      }
+    }
   }
-  clkrstExit();
-  clkrst_up = false;
+  if (clkrst_up) {
+    clkrstExit();
+    clkrst_up = false;
+  }
+  if (sysclk) {
+    serviceClose(&sysclk_srv);
+    sysclk = false;
+  }
 }
 
 // The log is buffered and flushed twice a second; fsync commits it to the card (after a hang and a hard reboot, a log

@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "settings_menu.h"
+#include "../switch/sysclk_owner.h"
 
 namespace {
 
@@ -88,6 +89,41 @@ int main() {
   Check(hcu_clocks_key(file.c_str()) == 0, "a menu save with clocks 0 writes clocks=0");
   std::remove(file.c_str());
   rmdir(dir.c_str());
+
+  // sys-clk's rate per module (switch/sysclk_owner.h), as its ClockManager::Tick picks it.
+  {
+    using namespace hcu_sysclk;
+    Context c{};
+    Profiles title{}, global{};
+    c.enabled = 1;
+    c.profile = 0;  // Handheld
+    Check(target_hz(c, title, global, 0) == 0, "sys-clk: no value anywhere = Do not override");
+    c.overrideFreqs[1] = 921600000;
+    Check(target_hz(c, title, global, 1) == 921600000, "sys-clk: the override wins");
+    Check(target_hz(c, title, global, 0) == 0, "sys-clk: an override of the GPU leaves the CPU");
+    title.mhz[0][1] = 460;
+    Check(target_hz(c, title, global, 1) == 921600000, "sys-clk: the override wins over the profile");
+    title.mhz[0][0] = 1224;
+    global.mhz[0][0] = 1020;
+    Check(target_hz(c, title, global, 0) == 1224000000u, "sys-clk: the title profile wins over the global one");
+    global.mhz[0][2] = 1600;
+    Check(target_hz(c, title, global, 2) == 1600000000u, "sys-clk: the global profile when the title has none");
+    c.profile = 4;  // Docked: no fallback to Handheld
+    Check(target_hz(c, title, global, 0) == 0, "sys-clk: docked does not take the handheld rate");
+    c.profile = 3;  // Official charger: Official, Charging, Handheld
+    Check(target_hz(c, title, global, 0) == 1224000000u, "sys-clk: the official charger falls back to handheld");
+    title.mhz[1][0] = 1581;
+    Check(target_hz(c, title, global, 0) == 1581000000u, "sys-clk: the official charger takes charging first");
+    c.profile = 2;  // USB charger: USB, Charging, Handheld
+    title.mhz[2][0] = 1785;
+    Check(target_hz(c, title, global, 0) == 1785000000u, "sys-clk: the USB charger takes its own rate first");
+    c.profile = 9;
+    Check(target_hz(c, title, global, 0) == 0, "sys-clk: an unknown profile has no profile rate");
+    Check(target_hz(c, title, global, 1) == 921600000, "sys-clk: an unknown profile keeps the override");
+    c.enabled = 0;
+    Check(target_hz(c, title, global, 1) == 0, "sys-clk disabled sets nothing");
+    Check(api_trusted(4) && api_trusted(5) && !api_trusted(2) && !api_trusted(6), "sys-clk: only IPC API 4 and 5");
+  }
 
   std::printf("%d failures\n", g_failures);
   return g_failures != 0;

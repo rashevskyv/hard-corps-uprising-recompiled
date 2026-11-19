@@ -133,9 +133,18 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   `D:\git\dev\renut-ref\build.lock`.
 - The base owns `main`, threads, memory and the exit. `switch/hcu_nx_base.cpp` adds the SD log, `args.txt`, the
   console defaults of the cvars (`--wrap=main`), the quick exit and the clocks: `clocks=1` in `settings.txt` sets CPU
-  1785 / GPU 768 / memory 1600 MHz through clkrst at start, sets them again every 2 s when the system lowers them, and
-  puts the old rates back on exit; default 0 only logs them (`[clock]` lines). The base itself never sets clocks (up
-  to 0.398 this build had no clock code: `clocks=1` did nothing).
+  1785 / GPU 768 / memory 1600 MHz through clkrst at start, sets them again when the system lowers them (checked
+  every 2 s, then 4, 8 .. 32 s after each re-set; a rate at or above the game's is never set again), and puts the old
+  rates back on exit. Default 0: the game touches no clock. The base itself never sets clocks (up to 0.398 this build
+  had no clock code: `clocks=1` did nothing).
+- sys-clk has priority, per module (0.400, `switch/sysclk_owner.h`). The game asks sys-clk's IPC (`sys:clk`, API 4
+  or 5) every 2 s: a module with a sys-clk override, title profile or global profile rate is sys-clk's, and the game
+  makes no pcv call for it; a module in "Do not override" (or sys-clk disabled) the game sets. A change in the
+  overlay takes effect at the next check. Horizon OC (`hoc:clk`), sys-clk-OC (`sysclkOC`), an unknown sys-clk API
+  or no answer: the game touches no clock. The game holds no clkrst session: each read or set opens one and closes
+  it. Why: 0.399 held three sessions for the whole run, and with sys-clk running pcv aborted (2011-0102, hipc out of
+  session memory) about 6 s into the run. Log lines: `[clock] CPU: sys-clk override 1785 -> game leaves it`,
+  `[clock] GPU: sys-clk Do not override -> game sets 768`.
 - GPU writes: the base's store cards (one byte per 4 KB page) replace the dirty-page bytes. The deko3d backend pulls
   the cards at a texture bind, a vertex copy and a resolve (`PullCards`). The shaders are the same as the old build's:
   this build copies none, the ones in `sdmc:/switch/hcu/shaders/` are used.
