@@ -41,6 +41,7 @@ REPLICATED = {'dp4', 'dp3', 'dp2add', 'max4', 'setp_eq_push', 'setp_ne_push', 's
 
 
 PRECISE = False  # --precise
+NO_ALPHA_TEST = False  # --no-alpha-test
 
 
 class Translator:
@@ -639,6 +640,9 @@ class Translator:
         else:
             if colors:
                 out.append(ind + 'if (alpha.w > 1.5) oC0 = vec4(fract(dbg_uv * (alpha.w > 2.5 ? 256.0 : 16.0)), 0.0, 1.0);  // TEXTURE VIEW')
+            if colors and NO_ALPHA_TEST:
+                out.append(ind + '// No alpha test (--no-alpha-test): bound only for draws with alpha_test_enable 0.')
+            elif colors:
                 out.append(ind + '// Alpha test (RB_COLORCONTROL): alpha.x enable, alpha.y function, alpha.z reference.')
                 out.append(ind + 'if (alpha.x > 0.5) {')
                 out.append(ind + '  uint f = uint(alpha.y); float a = oC0.w; bool pass = f == 7u || (f == 1u && a < alpha.z) || '
@@ -712,9 +716,12 @@ def main():
     ap.add_argument('--out-dir', help='output directory for --all')
     ap.add_argument('--check', action='store_true', help='compile the output with uam')
     ap.add_argument('--precise', action='store_true', help='vertex shaders: precise position and interpolators (no fused multiply-adds)')
+    ap.add_argument('--no-alpha-test', action='store_true',
+                    help='pixel shaders without the alpha test (the backend\'s .frag.na.dksh, for draws with it off)')
     args = ap.parse_args()
-    global PRECISE
+    global PRECISE, NO_ALPHA_TEST
     PRECISE = args.precise
+    NO_ALPHA_TEST = args.no_alpha_test
     if args.all:
         files = sorted(f for f in os.listdir(args.all) if f.endswith('.ucode.vert') or f.endswith('.ucode.frag'))
         os.makedirs(args.out_dir or args.all, exist_ok=True)

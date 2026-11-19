@@ -306,6 +306,8 @@ class DkShaderObj : public Shader {
   bool loaded = false;
   DkShader geom{};           // vertex shaders: the rectangle-list geometry shader
   bool geom_loaded = false;
+  DkShader no_alpha{};       // pixel shaders, ALPHA VARIANTS: the same shader without the alpha test (.frag.na.dksh)
+  bool no_alpha_loaded = false;
   // BindUniforms: the float constants last copied for this shader, in the frame (epoch) and at the data ring offset
   // they were copied to, and their values (only the registers the shader reads are kept up to date).
   uint32_t const_epoch = 0, const_off = 0;
@@ -803,6 +805,12 @@ class Deko3dCommandProcessor : public CommandProcessor {
       shader->geom_loaded = LoadDksh(name, shader->geom);
       if (!shader->geom_loaded) LogOnce("geom", "no rectangle-list geometry shader for VS %016llX (%s)", (unsigned long long)hash, name);
     }
+    // ALPHA VARIANTS (alpha_variants=1, at start): the pixel shader without the alpha test and its discard, for the draws
+    // with alpha_test_enable 0. Staged only where the GLSL differs; a missing one = the normal shader for every draw.
+    if (shader->loaded && shader_type == xenos::ShaderType::kPixel && hcu_settings.alpha_variants) {
+      std::snprintf(name, sizeof(name), "%sshader_%016llX.frag.na.dksh", shader_dir_.c_str(), (unsigned long long)hash);
+      shader->no_alpha_loaded = access(name, F_OK) == 0 && LoadDksh(name, shader->no_alpha);
+    }
     if (!shader->loaded) {
       missing_shaders_++;
       Log("no DKSH for %s %016llX (%u dwords at %08X): dumping the ucode to %smissing/",
@@ -1183,7 +1191,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufBindDepthStencilState(cmd, &ds);
 
     // Shaders (the whole graphics mask: a stage without a shader here is unbound).
-    DkShader const* shaders[3] = {&vs->shader, &ps->shader, &vs->geom};
+    // ALPHA VARIANTS: with the alpha test off (Sys alpha.x = 0, BindUniforms) the variant without it draws the same.
+    const bool no_alpha = ps->no_alpha_loaded && !regs.Get<reg::RB_COLORCONTROL>().alpha_test_enable;
+    if (no_alpha) frame_no_alpha_++;
+    DkShader const* shaders[3] = {&vs->shader, no_alpha ? &ps->no_alpha : &ps->shader, &vs->geom};
     dkCmdBufBindShaders(cmd, DkStageFlag_GraphicsMask, shaders, use_gs ? 3 : 2);
 
     // Vertex layout and data: one buffer per fetch constant the vertex shader uses.
@@ -1713,6 +1724,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
           frame_clears_, frame_resolves_, frame_skipped_, frame_missing_, frame_reuploads_, frame_shadow_biased_, (unsigned long long)(dirty_pages_ - dirty_pages_at_swap_),
           f.data.used >> 10, frame_vtx_bytes_ >> 10, frame_vtx_reused_ >> 10, frame_uniform_reuses_, frame_uniform_sets_, f.staging.used >> 10, image_count_,
           images_.used >> 20, image_flips_);
+      if (hcu_settings.alpha_variants) Log("swap #%u: ALPHA VARIANTS: %u of %u draws took the pixel shader without the alpha test", swaps_, frame_no_alpha_, frame_draws_);
       // CPU time per frame (average over the swaps since the last line): recording the draws, the resolves, the wait for the
       // previous frame's GPU work (a long one = GPU-bound), the wait for a swapchain image (vsync) and the submit.
       uint32_t n = swaps_ <= 3 ? 1 : 60;  // drawn frames since the last line
@@ -1728,6 +1740,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     last_drawn_draws_ = frame_draws_;
     f.level = frame_draws_ >= 150;  // [res]: a level frame (menus draw 97 or fewer)
     frame_draws_ = frame_clears_ = frame_resolves_ = frame_skipped_ = frame_missing_ = frame_reuploads_ = frame_vtx_bytes_ = frame_shadow_biased_ = 0;
+    frame_no_alpha_ = 0;
     frame_vtx_reused_ = frame_uniform_sets_ = frame_uniform_reuses_ = 0;
     frame_ = (frame_ + 1) % n_frames_;
     begun_ = false;
@@ -3354,6 +3367,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
   uint32_t image_flips_ = 0;  // recreated + resized images, all frames (the first 40 are logged)
   uint64_t upload_bytes_ = 0;
   uint32_t frame_draws_ = 0, frame_clears_ = 0, frame_resolves_ = 0, frame_skipped_ = 0, frame_missing_ = 0, frame_reuploads_ = 0, frame_vtx_bytes_ = 0, frame_shadow_biased_ = 0;
+  uint32_t frame_no_alpha_ = 0;  // ALPHA VARIANTS: draws with the pixel shader without the alpha test
   uint32_t frame_vtx_reused_ = 0;  // vertex bytes bound from a copy this frame made already (vtx_copies_)
   // BindUniforms: the frame (incremented in BeginFrame; the shaders' constant copies and the system constants' copy
   // are valid in that frame's data ring only), the last system constants, and the uniform buffers bound and reused.

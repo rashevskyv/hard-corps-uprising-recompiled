@@ -102,7 +102,7 @@ for s in vert frag; do
 done
 SHADER_DUMPS=${HCU_SHADER_DUMPS:-$ROOT/shaders_trace}
 if [ -d "$SHADER_DUMPS" ]; then
-    rm -rf "$BUILD/glsl" "$BUILD/glsl_np"
+    rm -rf "$BUILD/glsl" "$BUILD/glsl_np" "$BUILD/glsl_na"
     python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl" --check --precise
     # The vertex shaders without precise outputs, staged as shader_<hash>.vert.np.dksh (the zfix file's "noprecise").
     python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl_np" --check
@@ -116,6 +116,14 @@ if [ -d "$SHADER_DUMPS" ]; then
     for f in "$BUILD"/glsl_np/*.vert.glsl.dksh; do
         [ -f "$f" ] || continue
         cp "$f" "$STAGE/shaders/$(basename "$f" .glsl.dksh).np.dksh"
+    done
+    # ALPHA VARIANTS (settings.txt alpha_variants=1): the pixel shaders without the alpha test, staged as
+    # shader_<hash>.frag.na.dksh, only where the GLSL differs (a shader with colour outputs).
+    python3 "$SRC/tools/xenos2glsl.py" --all "$SHADER_DUMPS" --out-dir "$BUILD/glsl_na" --check --no-alpha-test
+    for f in "$BUILD"/glsl_na/*.frag.glsl.dksh; do
+        [ -f "$f" ] || continue
+        b=$(basename "$f" .glsl.dksh)
+        cmp -s "$BUILD/glsl_na/$b.glsl" "$BUILD/glsl/$b.glsl" || cp "$f" "$STAGE/shaders/$b.na.dksh"
     done
 fi
 cp "$BUILD/hcu.nro" "$STAGE/hcu.nro"

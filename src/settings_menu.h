@@ -65,6 +65,8 @@ struct HcuSettings {
                           // it go to dk_gpu_times_2.txt and _3.txt (a boss scene; no 150-draw threshold)
   int cull;               // CULL (at each draw): 0 = no culling (the verified picture); 1 = the guest's cull_front /
                           // cull_back with face 0 = CCW front; 2 = the same with the other winding (A/B of the Y flip)
+  int alpha_variants;     // 1 = at start, the pixel shaders without the alpha test (shader_<hash>.frag.na.dksh) are
+                          // loaded and bound for the draws with alpha_test_enable 0 (no discard there)
 };
 
 extern HcuSettings hcu_settings;
