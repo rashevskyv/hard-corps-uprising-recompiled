@@ -1373,6 +1373,15 @@ class Deko3dCommandProcessor : public CommandProcessor {
       const uint64_t now = armGetSystemTick();
       const bool long_swap = swap_tick_ && now - swap_tick_ > armGetSystemTickFreq() * kLongSwapMs / 1000;
       long_swaps_ = long_swap ? long_swaps_ + 1 : 0;
+      // [speed] (LogSkips): an interval counts only between two level swaps (150+ draws; a skipped one has the last
+      // drawn frame's count), so a load or a menu never enters a window.
+      const bool level = (Skipping() ? last_drawn_draws_ : frame_draws_) >= 150;
+      if (level && speed_prev_level_ && swap_tick_) {
+        speed_ticks_ += now - swap_tick_;
+        speed_swaps_++;
+        speed_long_ += long_swap;
+      }
+      speed_prev_level_ = level;
       swap_tick_ = now;
     }
     if (Skipping()) {
@@ -1814,6 +1823,17 @@ class Deko3dCommandProcessor : public CommandProcessor {
 
   // Every 1800 swaps in the skip modes: frames drawn, and frames skipped for a busy GPU.
   void LogSkips() {
+    // The game speed: 300 level swap intervals against 300 vblanks (60 Hz), the worst full window, the swaps over kLongSwapMs.
+    if (speed_swaps_ >= 300) {
+      const double secs = double(speed_ticks_) / double(armGetSystemTickFreq());
+      const double pct = speed_swaps_ / secs / 60.0 * 100.0;
+      if (speed_worst_ == 0 || pct < speed_worst_) speed_worst_ = pct;
+      std::printf("[speed] swap #%u: %u level swaps (150+ draws) in %.2f s = %.1f %% speed, %u long swaps (> %u ms); worst window %.1f %%\n",
+                  swaps_, speed_swaps_, secs, pct, speed_long_, unsigned(kLongSwapMs), speed_worst_);
+      std::fflush(stdout);
+      speed_ticks_ = 0;
+      speed_swaps_ = speed_long_ = 0;
+    }
     if (swaps_ % 1800 || !skip_busy_) return;
     std::printf("[nx] gpu: %s: %u of the last 1800 frames drawn, %u skipped because the GPU was still busy, %u because the CP was slow\n",
                 skip_odd_frames_ ? "30" : fps45_ ? "45" : "60", drawn_frames_, busy_skips_, cp_skips_);
@@ -3580,6 +3600,11 @@ class Deko3dCommandProcessor : public CommandProcessor {
   static constexpr uint64_t kLongSwapMs = 25;  // 30skip: a guest swap interval over this is a 30 Hz scene's
   uint64_t swap_tick_ = 0;                     // the last IssueSwap (armGetSystemTick)
   uint32_t long_swaps_ = 0;                    // guest swap intervals over kLongSwapMs in a row
+  // [speed] window (LogSkips): level swap intervals, their ticks, the long ones, the worst full window's speed in %.
+  uint64_t speed_ticks_ = 0;
+  uint32_t speed_swaps_ = 0, speed_long_ = 0;
+  double speed_worst_ = 0;
+  bool speed_prev_level_ = false;
   uint32_t last_drawn_swap_ = 0, last_drawn_draws_ = 0;  // the frame a GPU fault is in (the error-state log line)
   std::vector<uint32_t> page_serial_ = std::vector<uint32_t>(0x20000);  // per 4 KB physical page: the draw serial of its last write
   uint32_t serial_ = 1;  // the draw serial (SyncDirtyPages)
