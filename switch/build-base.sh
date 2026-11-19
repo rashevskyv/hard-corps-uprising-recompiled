@@ -58,6 +58,24 @@ fi
 # pointer, a guest fault on the 360 too). Its own generated tree: the key goes into the rsync'd manifest copy (the
 # rsync above puts the original back every run), so the stamp below re-runs the codegen at each change of the flavour.
 [ "$DFORM" = 1 ] && echo 'dform_disp_split = true  # switch/build-base.sh -DHCU_DFORM=ON' >> "$SRC/hard_corps_uprising_manifest.toml"
+# The base's other codegen keys (its app/renut_config.toml sets them all), each a -D option of this script only, default
+# OFF: ON puts the key into the manifest copy, as HCU_DFORM, and its suffix on the version. Class "exact": the same
+# values as the default code (read in the base's builders); -DHCU_CG_EXACT=ON turns on every "exact" key ("-cgx").
+# The audit of each is in docs/bible-checklist.md (step 4b).
+#   option              manifest key        suffix  class
+CG_KEYS=(
+    "HCU_DCBT_PREFETCH  dcbt_prefetch       dcbt    exact"  # dcbt / dcbtst as the host's prefetch: a hint, no value
+)
+CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
+CG_SUFFIX=""
+for k in "${CG_KEYS[@]}"; do
+    read -r o key suf class <<< "$k"
+    if [ "$(opt "$o" 0 "$@")" = 1 ] || { [ "$CG_EXACT" = 1 ] && [ "$class" = exact ]; }; then
+        echo "$key = true  # switch/build-base.sh -D$o=ON" >> "$SRC/hard_corps_uprising_manifest.toml"
+        [ "$CG_EXACT" = 1 ] && [ "$class" = exact ] || CG_SUFFIX="$CG_SUFFIX-$suf"
+    fi
+done
+[ "$CG_EXACT" = 1 ] && CG_SUFFIX="-cgx$CG_SUFFIX"
 
 # Codegen, then the store cards (tools/store_cards.py of the base renames the stores outside the stack to their
 # card-marking forms; the deko3d renderer reads the cards). Again whenever the manifest, its config, the CLI or the
@@ -191,6 +209,7 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 [ "$FPCR_ONE" = 1 ] && VERSION="$VERSION-fpcr1"
 [ "$DFORM" = 1 ] && VERSION="$VERSION-dform"
 [ "$DFORM" = 1 ] && [ "$RO_CONSTANTS" = 0 ] && VERSION="$VERSION-noro"
+VERSION="$VERSION$CG_SUFFIX"
 # The instrumented NRO is slow (never a speed test): hbmenu and its logs must say so.
 [ "$PGO" = generate ] && VERSION="$VERSION-pgogen"
 [ "$PGO" = use ] && VERSION="$VERSION-pgo"
