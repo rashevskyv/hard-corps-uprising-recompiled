@@ -83,6 +83,9 @@ CG_KEYS=(
     # Float moves (lfd / stfd, fmr, fneg, fabs ...) switch no mode; lfs / stfs in VMX mode convert any-mode. HCU's
     # census (codegen only): switches off 22774 -> 17836, on 386 -> 253; 597 any-mode helpers.
     "HCU_FP_MOVES       fp_moves_modeless   fpm     fp"
+    # fcfid / fctiwz / fctidz / fsel switch no mode; fcmpu / fcmpo / frsp in VMX mode any-mode. HCU: switches off
+    # 22774 -> 22753; 183 any-mode compares (fsel's GeZeroAnyMode).
+    "HCU_FP_COMPARES    fp_compares_modeless fpc    fp"
 )
 CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
 CG_SUFFIX=""
