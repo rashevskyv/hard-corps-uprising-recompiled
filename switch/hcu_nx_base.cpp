@@ -365,8 +365,13 @@ extern "C" void userAppExit(void) {
 }
 
 // The way out the deko3d backend takes (HOME -> Close, the game's own quit, a GPU queue error): the log first, then the
-// base's exit (libnx's, with the applet's Exit, as the base's main ends).
+// base's exit (libnx's, with the applet's Exit, as the base's main ends). Also XThread::StopTitleThreads when a guest
+// thread outlives the game's quit (switch/sdk-edits-base.py). One caller only: a second one waits for the end.
 extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why) {
+  static std::atomic_flag entered = ATOMIC_FLAG_INIT;
+  if (entered.test_and_set()) {
+    for (;;) svcSleepThread(1'000'000'000LL);
+  }
   std::printf("[nx] exit: %s\n", why);
   hcu::pgo::DumpNow();  // this exit skips OnShutdown: the PGO build's last counts (nothing otherwise)
   userAppExit();

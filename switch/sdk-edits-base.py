@@ -374,3 +374,27 @@ Handle Proc() {
 '''),
 ])
 print('changed (hcu own process handle):', *changed, sep=NL + '  ')
+
+# --- The game's own quit (EXIT GAME: XamLoaderLaunchTitle -> TerminateTitle -> StopTitleThreads). When a guest thread
+# is still running after 2 s, std::_Exit ran __libnx_exit with __nx_applet_exit_mode 0: the NRO went back to hbloader
+# with every other thread alive and hbloader aborted (2347-0024, console 0.400). The base's own exit with live threads
+# (ReXApp::OnClosing) asks the system to end the process instead; rex_nx_quick_exit (switch/hcu_nx_base.cpp) does that
+# after the log and the clock restore.
+edit('src/system/xthread.cpp', [
+    ('''  rex::FlushLogging();
+  std::_Exit(EXIT_FAILURE);
+}
+''',
+     '''  rex::FlushLogging();
+#if REX_PLATFORM_SWITCH
+  rex_nx_quick_exit("guest threads still running 2 s after the title ended");  // hcu (switch/sdk-edits-base.py)
+#else
+  std::_Exit(EXIT_FAILURE);
+#endif
+}
+'''),
+    ('#include <rex/vec128.h>' + NL,
+     '#include <rex/vec128.h>' + NL + '#if REX_PLATFORM_SWITCH' + NL +
+     'extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why);  // hcu switch/hcu_nx_base.cpp' + NL + '#endif' + NL),
+])
+print('changed (hcu title-end exit):', *changed, sep=NL + '  ')

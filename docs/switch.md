@@ -110,6 +110,9 @@ X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screensho
   `overlay_off`, `norumble`, `zfix`, `sfix` still work and win over `settings.txt` (console A/B tests).
 - **Exit.** HOME -> Close and the game's own quit end the process at once (`rex_nx_quick_exit` in
   `switch/host/switch_nx.cpp`): the log is written and the clocks go back, the runtime teardown is not run.
+  On the ultimate base (0.402) the game's quit waits up to 2 s for the guest threads (`XThread::StopTitleThreads`);
+  if one still runs, it ends through `rex_nx_quick_exit` in `switch/hcu_nx_base.cpp` (switch/sdk-edits-base.py).
+  Before, a bare `std::_Exit` went back to hbloader with live threads, and hbloader aborted (2347-0024, 0.400).
 - **GPU queue errors.** When deko3d puts the queue in its error state (a fault in an earlier list), the backend logs
   the swap, the live settings and each nvdrv channel's error notification (type 31 = MMU fault, 8/24 = timeouts,
   25 = illegal method), then ends the process the same way, instead of the deko3d abort.
