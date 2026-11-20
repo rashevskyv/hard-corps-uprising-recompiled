@@ -115,6 +115,13 @@ option(HCU_RO_CONSTANTS "Loads from the game's read-only data as constants (only
 if(NOT HCU_RO_CONSTANTS)
     target_compile_definitions(hcu_recomp PRIVATE REX_RO_CONSTANTS_OFF)
 endif()
+# Item 18 of docs/bible-checklist.md (the base's BANJO_GENERATED_MATH_FLAGS, ON there): -fno-math-errno on the generated
+# game code only, so a sqrt is one instruction, not a possible libm call that sets errno. Exact: errno is not guest
+# state, IEEE results do not change (no -ffinite-math-only, no -fno-trapping-math). OFF (default) until the console A/B.
+option(HCU_NO_MATH_ERRNO "-fno-math-errno on the generated game code" OFF)
+if(HCU_NO_MATH_ERRNO)
+    target_compile_options(hcu_recomp PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-fno-math-errno>")
+endif()
 # Item 15 of docs/bible-checklist.md: link-time optimisation (the base's BANJO_SWITCH_LTO and BANJO_SWITCH_SDK_OPT,
 # app/CMakeLists.txt of the base). The game code, HCU's code, the GPU plugin (deko3d) and the SDK runtime are compiled
 # to GIMPLE and optimised as one program at the link, which repeats -ffp-contract=off and -fno-strict-aliasing (the

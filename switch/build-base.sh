@@ -38,6 +38,7 @@ INLINE_MEMCALLS=$(opt HCU_INLINE_MEMCALLS 1 "$@")
 FPCR_ONE=$(opt HCU_FPCR_ONE_MODE 0 "$@")
 DFORM=$(opt HCU_DFORM 0 "$@")  # this script's only (no CMake option): a codegen key
 RO_CONSTANTS=$(opt HCU_RO_CONSTANTS 1 "$@")
+NO_MATH_ERRNO=$(opt HCU_NO_MATH_ERRNO 0 "$@")
 PGO=""  # HCU_PGO is a string (empty, generate or use): the last -DHCU_PGO=... wins
 for a in "$@"; do case "$a" in -DHCU_PGO=*|-DHCU_PGO:*=*) PGO=${a##*=} ;; esac; done
 
@@ -247,6 +248,7 @@ VERSION="0.$COUNT.$SHA$DIRTY"
 [ "$FPCR_ONE" = 1 ] && VERSION="$VERSION-fpcr1"
 [ "$DFORM" = 1 ] && VERSION="$VERSION-dform"
 [ "$DFORM" = 1 ] && [ "$RO_CONSTANTS" = 0 ] && VERSION="$VERSION-noro"
+[ "$NO_MATH_ERRNO" = 1 ] && VERSION="$VERSION-noerrno"
 VERSION="$VERSION$CG_SUFFIX"
 # The instrumented NRO is slow (never a speed test): hbmenu and its logs must say so.
 [ "$PGO" = generate ] && VERSION="$VERSION-pgogen"
@@ -265,7 +267,7 @@ echo "version $VERSION, built $STAMP"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BASE/tools/switch/cmake/switch-devkitA64.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON -DHCU_FPCR_ONE_MODE=OFF -DHCU_RO_CONSTANTS=ON -DHCU_PGO= "$@" > "$BUILD/configure.log" 2>&1 \
+    -DREXSDK_DIR="$SDK" -DHCU_VERSION="$VERSION" -DHCU_NO_VOLATILE=OFF -DHCU_GUEST_CAS=OFF -DHCU_NX_METER=OFF -DHCU_FLOAT_LOADS=ON -DHCU_COLD_TRAPS=ON -DHCU_INLINE_MEMCALLS=ON -DHCU_FPCR_ONE_MODE=OFF -DHCU_RO_CONSTANTS=ON -DHCU_NO_MATH_ERRNO=OFF -DHCU_PGO= "$@" > "$BUILD/configure.log" 2>&1 \
     || { tail -30 "$BUILD/configure.log"; exit 1; }
 # A failed build must not leave the previous NRO behind.
 rm -f "$BUILD/hcu.nro"
