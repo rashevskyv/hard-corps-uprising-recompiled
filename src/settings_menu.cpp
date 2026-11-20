@@ -105,6 +105,7 @@ void Save() {
     if (s.cull) std::fprintf(f, "cull=%d\n", s.cull);
     if (s.alpha_variants) std::fprintf(f, "alpha_variants=%d\n", s.alpha_variants);
     if (s.shadow_target) std::fprintf(f, "shadow_target=%d\n", s.shadow_target);
+    if (s.tiled_cache) std::fprintf(f, "tiled_cache=%d\n", s.tiled_cache);
     if (s.cheat_lives) std::fprintf(f, "cheat_lives=%d\n", s.cheat_lives);
     if (s.cheat_health) std::fprintf(f, "cheat_health=%d\n", s.cheat_health);
     if (s.cheat_keep_weapons) std::fprintf(f, "cheat_keep_weapons=%d\n", s.cheat_keep_weapons);
@@ -177,6 +178,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "cull")) s.cull = int(v) == 1 || int(v) == 2 ? int(v) : 0;
       else if (!std::strcmp(key, "alpha_variants")) s.alpha_variants = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "shadow_target")) s.shadow_target = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "tiled_cache")) s.tiled_cache = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "cheat_lives")) s.cheat_lives = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "cheat_health")) s.cheat_health = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "cheat_keep_weapons")) s.cheat_keep_weapons = int(v) ? 1 : 0;

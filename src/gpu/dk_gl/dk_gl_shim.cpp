@@ -811,6 +811,7 @@ DkCmdList dkCmdBufFinishList(DkCmdBuf c) {
   return reinterpret_cast<DkCmdList>(list);
 }
 void dkCmdBufBarrier(DkCmdBuf, DkBarrier, uint32_t) {}
+void dkCmdBufTiledCacheOp(DkCmdBuf, DkTiledCacheOp) {}  // tiled_cache=1: GL has no binning to switch
 
 void dkCmdBufBindShaders(DkCmdBuf c, uint32_t stageMask, DkShader const* const shaders[], uint32_t n) {
   std::vector<const DkShader*> list(shaders, shaders + n);

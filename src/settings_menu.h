@@ -70,6 +70,8 @@ struct HcuSettings {
                           // loaded and bound for the draws with alpha_test_enable 0 (no discard there)
   int shadow_target;      // 1 = SHADOW TARGET: the shadow cascades are cleared and drawn straight into their resolve
                           // destination (last frame's resolves predict it); the matching resolve copies nothing
+  int tiled_cache;        // 1 = TILED CACHE (at start): Maxwell's binning on in each command list, flushed at each full
+                          // barrier (the base's sasrt_gpu_tiled_cache)
   // Cheats (src/cheats.cpp, every NRO of switch/switch-base.cmake; the menu's CHEATS page). All 0 = off.
   int cheat_lives;         // the stock never falls
   int cheat_health;        // no damage

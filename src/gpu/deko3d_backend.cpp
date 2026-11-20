@@ -161,6 +161,17 @@ DkImageFormat g_depth_fmt = DkImageFormat_Z24S8;
 // RGBA16_Float images (an A/B of the console's brick hatching: 8-bit quantisation of the scene target).
 bool g_rt16 = false;
 bool g_dxt_cpu = false;  // DXT ON CPU, read once at start (a live change flipped a texture's format between draws)
+// TILED CACHE (tiled_cache=1, at start; item 32 of docs/bible-checklist.md, the base's sasrt_gpu_tiled_cache): Maxwell's
+// tiled caching (binning, which NVN uses; deko3d sets 128x128 tiles up and leaves it off) on from the start of each
+// command list. A full barrier (the copy engine or the present next reads memory) flushes the tiles first; deko3d's
+// own barriers and fences order the rest. Every dkCmdBufBarrier below goes through BarrierTiled (the macro), so no
+// full barrier misses the flush. Off: no tiled cache call at all.
+bool g_tiled_cache = false;
+static void BarrierTiled(DkCmdBuf cmd, DkBarrier mode, uint32_t invalidate) {
+  if (g_tiled_cache && mode == DkBarrier_Full) dkCmdBufTiledCacheOp(cmd, DkTiledCacheOp_Flush);
+  dkCmdBufBarrier(cmd, mode, invalidate);
+}
+#define dkCmdBufBarrier(cmd, mode, invalidate) BarrierTiled(cmd, mode, invalidate)
 
 // DXT ON CPU: one 4x4 block of DXT1 (bc 1), DXT3 (2) or DXT5 (3) to RGBA8 at dst (row pitch in bytes), as the D3D9
 // decoders do (DXT1 with c0 <= c1: three colours and transparent black).
@@ -733,6 +744,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
     g_dxt_cpu = hcu_settings.dxt_cpu != 0;
     g_depth_fmt = hcu_settings.depth32 ? DkImageFormat_ZF32_X24S8 : DkImageFormat_Z24S8;
     g_rt16 = hcu_settings.rt16 != 0;
+    g_tiled_cache = hcu_settings.tiled_cache != 0;
+    if (g_tiled_cache) Log("TILED CACHE on (tiled_cache=1): binning from the start of each command list, flushed at each full barrier");
     Log("depth images: %s (DEPTH 32 BIT %s); DXT ON CPU %s; 8_8_8_8 colour targets: %s (SCENE RT 16F %s)", hcu_settings.depth32 ? "ZF32_X24S8" : "Z24S8",
         hcu_settings.depth32 ? "on" : "off", g_dxt_cpu ? "on" : "off", g_rt16 ? "RGBA16_Float" : "RGBA8_Unorm", g_rt16 ? "on" : "off");
     const int force_filter = hcu_settings.filter;  // 1 linear, 2 nearest
@@ -1585,9 +1598,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
         dkQueueSubmitCommands(queue_, scene);
         dkQueueFlush(queue_);
       }
-      // A new list does not inherit the descriptor sets BeginFrame bound.
+      // A new list does not inherit the descriptor sets BeginFrame bound (nor the tiled cache).
       dkCmdBufBindImageDescriptorSet(cmd, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
       dkCmdBufBindSamplerDescriptorSet(cmd, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
+      if (g_tiled_cache) dkCmdBufTiledCacheOp(cmd, DkTiledCacheOp_Enable);
     }
     int slot;
     {
@@ -2193,6 +2207,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     dkCmdBufAddMemory(f.cmdbuf, cmdmem_.block, f.cmd_offset, kFrameCmdBytes);
     dkCmdBufBindImageDescriptorSet(f.cmdbuf, descriptors_.gpu + f.desc_offset, kMaxImageDescriptors);
     dkCmdBufBindSamplerDescriptorSet(f.cmdbuf, descriptors_.gpu + sampler_desc_offset_, kSamplerCount);
+    if (g_tiled_cache) dkCmdBufTiledCacheOp(f.cmdbuf, DkTiledCacheOp_Enable);
 #ifdef __SWITCH__
     // In their own block, not in `data`: Eden served the read of the vertex ring after the fence slowly (0.323 battle:
     // 1.7 ms a drawn frame on those two loads in BeginFrame).
