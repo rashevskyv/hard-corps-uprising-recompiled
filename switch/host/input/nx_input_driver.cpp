@@ -1,5 +1,8 @@
 #include <rex/input/nx/nx_input_driver.h>
 
+#include <unistd.h>
+
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -7,7 +10,13 @@
 #include <rex/input/flags.h>
 #include <rex/logging.h>
 
+#include "../../../src/input_replay.h"
 #include "../../../src/settings_menu.h"
+
+extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why);  // switch/hcu_nx_base.cpp (switch_nx.cpp in the old build)
+// The strip's swap number and t 0 (src/gpu/deko3d_backend.cpp): the key of the input record and replay.
+extern "C" volatile uint32_t hcu_gpu_swap;
+extern "C" volatile uint64_t hcu_gpu_t0;
 
 namespace rex::input::nx {
 
@@ -118,6 +127,59 @@ int16_t ClampStick(int32_t v) {
   return static_cast<int16_t>(v);
 }
 
+// Input record and replay (settings.txt input_record=1 / input_replay=1, replay wins; docs/switch.md): A/B runs of one
+// scene without a hand. Each poll of player 1 is one record in sdmc:/switch/hcu/input.rec, keyed by the swap number the
+// strip shows ("t <s> #<swap>"). A replay gives the game, at each poll, the last record whose swap is at or below the
+// strip's swap now (src/input_replay.h). The log thread flushes the file every second (hcu_input_flush).
+struct InputRecord {
+  uint32_t poll;        // player 1's poll number since the first swap
+  uint32_t swap;        // the strip's swap number at the poll
+  float t;              // the strip's t: seconds since the first drawn swap
+  X_INPUT_STATE state;  // what the game got (packet number and pad, guest byte order)
+};
+static_assert(sizeof(InputRecord) == 28, "input.rec record size");
+constexpr const char* kRecPath = "sdmc:/switch/hcu/input.rec";
+std::atomic<int> rec_mode{-1};  // -1 = not chosen yet (before the first swap: settings.txt is not read), 0 off, 1 record, 2 replay
+FILE* rec_file = nullptr;
+std::atomic<uint32_t> rec_polls{0};
+std::vector<InputRecord> replay;
+size_t replay_at = 0;
+uint64_t replay_end_tick = 0;  // the tick the replay ended at; 0 = it runs (or there is none)
+
+bool Replaying() { return rec_mode.load(std::memory_order_relaxed) == 2 && !replay_end_tick; }
+
+float StripSeconds() {
+  const uint64_t t0 = hcu_gpu_t0;
+  return t0 ? float(double(armGetSystemTick() - t0) / double(armGetSystemTickFreq())) : 0.f;
+}
+
+// Player 1's first poll after the first swap (the backend reads settings.txt before it).
+void ChooseInputMode() {
+  const uint32_t swap = hcu_gpu_swap;
+  int mode = 0;
+  if (hcu_settings.input_replay) {
+    if (FILE* f = std::fopen(kRecPath, "rb")) {
+      InputRecord r;
+      while (std::fread(&r, sizeof(r), 1, f) == 1) replay.push_back(r);  // a cut last record is left out
+      std::fclose(f);
+    }
+    if (replay.empty()) {
+      std::printf("[input] replay: no records in %s: the pads play\n", kRecPath);
+    } else {
+      mode = 2;
+      std::printf("[input] replay start %zu polls (the recording's swaps #%u to #%u, t %.1f to %.1f s) at swap #%u, t %.1f s; "
+                  "bench_seconds=%d\n", replay.size(), replay.front().swap, replay.back().swap, double(replay.front().t),
+                  double(replay.back().t), swap, StripSeconds(), hcu_settings.bench_seconds);
+    }
+  } else if (hcu_settings.input_record) {
+    rec_file = std::fopen(kRecPath, "wb");
+    if (rec_file) mode = 1;
+    std::printf("[input] record start at swap #%u, t %.1f s: %s\n", swap, StripSeconds(), rec_file ? kRecPath : "input.rec NOT opened");
+  }
+  std::fflush(stdout);
+  rec_mode.store(mode, std::memory_order_release);  // after rec_file: the log thread reads it (hcu_input_flush)
+}
+
 }  // namespace
 
 NXInputDriver::NXInputDriver(rex::ui::Window* window, size_t window_z_order)
@@ -158,7 +220,7 @@ X_RESULT NXInputDriver::GetDeviceCapabilities(DeviceId id, uint32_t flags, X_INP
   (void)flags;
   const int pad = PadIndex(id);
   // Pad 2 is a device only while a controller holds it (the last GetDeviceState poll), as on the console.
-  if (pad < 0 || (pad == 1 && !padIsConnected(&sources_[SourceOf(pad)]))) {
+  if (pad < 0 || (pad == 1 && (Replaying() || !padIsConnected(&sources_[SourceOf(pad)])))) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
   if (out_caps) {
@@ -235,7 +297,53 @@ void NXInputDriver::ShowControllerApplet() {
   if (!RunControllerApplet(false)) RunControllerApplet(true);
 }
 
+// Input record and replay (see the top of this file): player 1 only. A replay ignores the pads (player 2 is not
+// connected) except for the abort; after its last record the pads play again.
 X_RESULT NXInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
+  const int pad = PadIndex(id);
+  if (pad == 0 && rec_mode.load(std::memory_order_relaxed) < 0 && hcu_gpu_swap >= 1) ChooseInputMode();
+  if (Replaying()) {
+    if (pad != 0) return X_ERROR_DEVICE_NOT_CONNECTED;
+    uint64_t held = 0;
+    for (PadState& source : sources_) {
+      padUpdate(&source);
+      held |= padGetButtons(&source);
+    }
+    const uint32_t swap = hcu_gpu_swap;
+    constexpr uint64_t kAbort = HidNpadButton_L | HidNpadButton_R | HidNpadButton_ZL | HidNpadButton_ZR | HidNpadButton_Plus;
+    if ((held & kAbort) == kAbort) {
+      std::printf("[input] replay aborted (L+R+ZL+ZR+Plus) at swap #%u, record %zu of %zu\n", swap, replay_at + 1, replay.size());
+      rex_nx_quick_exit("input replay aborted (L+R+ZL+ZR+Plus)");
+    }
+    const long i = ::hcu::ReplayIndex(replay.data(), replay.size(), replay_at, swap);
+    if (i < long(replay.size())) {
+      if (out_state) {
+        if (i < 0) std::memset(out_state, 0, sizeof(*out_state));
+        else *out_state = replay[i].state;
+      }
+      return X_ERROR_SUCCESS;
+    }
+    replay_end_tick = armGetSystemTick();
+    std::printf("[input] replay end at swap #%u, t %.1f s (the recording's last swap #%u, t %.1f s); the pads play again%s\n", swap,
+                StripSeconds(), replay.back().swap, double(replay.back().t), hcu_settings.bench_seconds ? "; bench quit pending" : "");
+    std::fflush(stdout);
+  }
+  if (pad == 0 && hcu_settings.bench_seconds && replay_end_tick &&
+      armGetSystemTick() - replay_end_tick >= armNsToTicks(uint64_t(hcu_settings.bench_seconds) * 1000000000ull)) {
+    std::printf("[input] bench_seconds=%d after the replay end: quit at swap #%u, t %.1f s\n", hcu_settings.bench_seconds,
+                uint32_t(hcu_gpu_swap), StripSeconds());
+    rex_nx_quick_exit("bench_seconds after the input replay");
+  }
+  const X_RESULT result = PollDeviceState(id, out_state);
+  if (pad == 0 && out_state && result == X_ERROR_SUCCESS && rec_mode.load(std::memory_order_relaxed) == 1) {
+    const InputRecord r{rec_polls.load(std::memory_order_relaxed), hcu_gpu_swap, StripSeconds(), *out_state};
+    std::fwrite(&r, sizeof(r), 1, rec_file);
+    rec_polls.fetch_add(1, std::memory_order_relaxed);
+  }
+  return result;
+}
+
+X_RESULT NXInputDriver::PollDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
   const int pad = PadIndex(id);
   if (pad < 0) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
@@ -398,3 +506,16 @@ X_RESULT NXInputDriver::GetDeviceKeystroke(DeviceId id, uint32_t flags, X_INPUT_
 }
 
 }  // namespace rex::input::nx
+
+// The input record onto the card (fsync, as the log: a flush alone left garbage after a hard reboot). The log thread of
+// switch/hcu_nx_base.cpp calls it every second and at exit with stop = 1 (no fclose: a guest poll may still write).
+extern "C" void hcu_input_flush(int stop) {
+  using namespace rex::input::nx;
+  if (rec_mode.load(std::memory_order_acquire) != 1) return;
+  std::fflush(rec_file);
+  fsync(fileno(rec_file));
+  if (stop) {
+    std::printf("[input] record stop %u polls at swap #%u, t %.1f s\n", rec_polls.load(std::memory_order_relaxed),
+                uint32_t(hcu_gpu_swap), StripSeconds());
+  }
+}

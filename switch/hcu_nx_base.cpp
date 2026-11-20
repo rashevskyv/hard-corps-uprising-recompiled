@@ -25,6 +25,7 @@ extern "C" {
 extern u32 __nx_applet_exit_mode;
 [[noreturn]] void __libnx_exit(int rc);
 int __real_main(int argc, char* argv[]);
+void hcu_input_flush(int stop);  // switch/host/input/nx_input_driver.cpp: input_record=1's file onto the card
 }
 
 namespace {
@@ -312,11 +313,12 @@ void restore_clocks() {
 }
 
 // The log is buffered and flushed twice a second; fsync commits it to the card (after a hang and a hard reboot, a log
-// that was only flushed ended in garbage). Every 4th pass (2 s) keeps the clocks.
+// that was only flushed ended in garbage). Every 4th pass (2 s) keeps the clocks; every 2nd (1 s) flushes the input record.
 void log_flush_loop(void*) {
   for (unsigned pass = 1; log_flush_running; pass++) {
     svcSleepThread(500'000'000LL);
     if (pass % 4 == 0) keep_clocks();
+    if (pass % 2 == 0) hcu_input_flush(0);
     std::fflush(stdout);
     fsync(fileno(stdout));
   }
@@ -359,6 +361,7 @@ extern "C" void userAppExit(void) {
     threadWaitForExit(&log_flush_thread);
     threadClose(&log_flush_thread);
   }
+  hcu_input_flush(1);  // the record's last polls and its stop line
   restore_clocks();
   std::fflush(stdout);
   fsync(fileno(stdout));

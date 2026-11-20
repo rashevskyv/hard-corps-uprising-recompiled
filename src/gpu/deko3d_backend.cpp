@@ -89,6 +89,11 @@ extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200] = {};
 #endif
 #endif  // HCU_BASE_SDK
 
+// The strip's swap number and its t 0 (the first drawn swap's tick), for the pad driver's input record and replay
+// (switch/host/input/nx_input_driver.cpp): it keys each pad state by the number the strip shows ("t <s> #<swap>").
+extern "C" volatile uint32_t hcu_gpu_swap = 0;
+extern "C" volatile uint64_t hcu_gpu_t0 = 0;
+
 namespace rex::graphics::deko {
 
 namespace {
@@ -1407,6 +1412,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     }
     if (Skipping()) {
       swaps_++;  // nothing was recorded: the frame is just counted
+      hcu_gpu_swap = swaps_;
       view_image_ = nullptr;
       step_n_ = step_draws_ = 0;
       if (swaps_ % 60 == 0) {
@@ -1492,7 +1498,10 @@ class Deko3dCommandProcessor : public CommandProcessor {
     // short strip (overlay_w).
     {
       const uint64_t now = armGetSystemTick();
-      if (!clock_t0_) clock_t0_ = now;  // the first drawn swap: t 0 of the strip and of the [nx] load line
+      if (!clock_t0_) {  // the first drawn swap: t 0 of the strip and of the [nx] load line
+        clock_t0_ = now;
+        hcu_gpu_t0 = now;
+      }
       if (!fps_tick_) fps_tick_ = now;
       fps_frames_++;
       if (now - fps_tick_ >= armGetSystemTickFreq()) {
@@ -1778,6 +1787,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
     rex_nx_meter_cp_swap(meter_block_us_);
     cp_slow_ = us_draw_ + us_copy_ - cp_us_at_start_ > 16700;  // CP SKIP (NextFrame); before the summary resets the counters
     swaps_++;
+    hcu_gpu_swap = swaps_;
     if (swaps_ % 60 == 0) ReadSwapInterval();
     LogSkips();
     // Every 60 drawn frames, not every 60 swaps: 30skip draws only odd swaps, so swaps_ % 60 never printed there.

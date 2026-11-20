@@ -72,6 +72,10 @@ struct HcuSettings {
                           // destination (last frame's resolves predict it); the matching resolve copies nothing
   int tiled_cache;        // 1 = TILED CACHE (at start): Maxwell's binning on in each command list, flushed at each full
                           // barrier (the base's sasrt_gpu_tiled_cache)
+  // Input record and replay (switch/host/input/nx_input_driver.cpp, sdmc:/switch/hcu/input.rec; A/B runs without a hand).
+  int input_record;       // 1 = player 1's pad state at each poll goes to input.rec, keyed by the strip's swap number
+  int input_replay;       // 1 = input.rec is played back to the game instead of the pad (wins over input_record)
+  int bench_seconds;      // N > 0: during a replay, the game quits N s after the end of the recording
   // Cheats (src/cheats.cpp, every NRO of switch/switch-base.cmake; the menu's CHEATS page). All 0 = off.
   int cheat_lives;         // the stock never falls
   int cheat_health;        // no damage

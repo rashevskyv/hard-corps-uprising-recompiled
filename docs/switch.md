@@ -154,6 +154,16 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   this build copies none, the ones in `sdmc:/switch/hcu/shaders/` are used.
 - New `settings.txt` key: `audio_threads=1` runs each audio client's callback on its own thread (the old SDK's patch);
   default 0 = the base's audio worker.
+- Input record and replay (A/B runs without a hand; `switch/host/input/nx_input_driver.cpp`; keys saved only when on):
+  `input_record=1` writes player 1's pad state at each poll to `sdmc:/switch/hcu/input.rec` (28 bytes: poll, the
+  strip's swap number `#`, its `t`, the state the game got), from the first swap to the exit, flushed every second.
+  `input_replay=1` (wins over `input_record`) gives the game, at each poll, the last record whose swap is at or below the
+  strip's swap now; the pads are ignored (player 2 not connected) except L+R+ZL+ZR+Plus, which quits through
+  `rex_nx_quick_exit`. After the last record's swap the pads play again. `bench_seconds=N`: N s (system clock) after the
+  replay end, the game quits the same way. Log: `[input] record start / stop N polls`, `[input] replay start N polls`,
+  `[input] replay end`, each with the swap number and t. Not exact: the swap count of a load or a movie depends on the
+  card and the build's speed, so later inputs can land a few swaps off. Check: the `[nx] load ... swap #N` lines of a
+  replay log against the recording's log, and the picture at the end.
 - Cheats (every NRO; all keys 0 = off; the settings menu's line CHEATS > opens their page, B goes back):
   `cheat_god`, `cheat_lives`, `cheat_health`, `cheat_keep_weapons`, `cheat_rapid_fire`, `cheat_stage` (1..8),
   `cheat_log`. `cheat_weapon_a` / `_b` lock slot A / B to a weapon: 1 MG, 2 Spread, 3 Ripple, 4 Heated Plasma,

@@ -35,6 +35,7 @@ class NXInputDriver final : public InputDriver {
     bool logged;
   };
   void LoadSchedule();
+  X_RESULT PollDeviceState(DeviceId id, X_INPUT_STATE* out_state);  // the pad itself (GetDeviceState: record / replay)
   void ShowControllerApplet();
   int SourceOf(int pad) const;
   // Rumble: the two HD rumble devices of each player's controller (handheld, Joy-Con pair, Pro Controller).
