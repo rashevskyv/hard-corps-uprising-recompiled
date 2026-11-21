@@ -401,15 +401,21 @@ print('changed (hcu title-end exit):', *changed, sep=NL + '  ')
 
 # --- SFX / music balance (the mob death sounds were much louder than the music). FMOD in the guest mixes every volume;
 # the host only sees the XMA streams: BGM_xenon.bnk is stereo XMA, the SE_* and Voice_* banks mono. Each decoded frame
-# is scaled after the frame cache (the cache keeps the unscaled samples, so a menu change acts at the next frame): mono
-# by sfx_gain, stereo by music_gain (src/settings_menu.cpp, rex_hcu_xma_gain: 0..2; above 1 saturates at int16
-# full scale, so it can clip; 1 leaves the samples as they are). And the levels of the [audio] line (switch/hcu_nx_base.cpp, once a second): the XMA sources
-# after the gain, and each render client after the 5.1 fold, before the sum and the clamp.
+# is scaled after the frame cache (the cache keeps the unscaled samples, so a menu change acts at the next frame) by
+# its stream's class: stereo by music_gain; mono by voice_gain when the voice table knows the sound as a voice (the
+# enemy shouts were much louder than the gunfire, both mono), else by sfx_gain (src/settings_menu.cpp,
+# rex_hcu_xma_gain: 0..2; above 1 saturates at int16 full scale, so it can clip; 1 leaves the samples as they are).
+# The class is latched at the sound's start: when PrepareDecoder returns 1 (a fresh codec: a new sound), and at the
+# buffer's first frame with the codec kept (a stream's next buffer, a loop, a new sound without a clear), Decode gives
+# the raw guest packet to rex_hcu_xma_start (src/xma_voice_table.cpp: its first-packet key in the table built from the
+# banks at start). Per frame: one member read. And the levels of the [audio] line (switch/hcu_nx_base.cpp, once a
+# second): the XMA sources after the gain, and each render client after the 5.1 fold, before the sum and the clamp.
 write('include/rex/hcu_audio_levels.h', r'''#pragma once
 // hcu (switch/sdk-edits-base.py): the audio levels of the [audio] line (switch/hcu_nx_base.cpp, once a second).
-// Slot 0 = mono XMA, 1 = stereo XMA (src/audio/xma_context.cpp, after the gain); 2..5 = render clients 0..3 after the
-// 5.1 fold, before the sum and the clamp (src/audio/switch/switch_audio_system.cpp). Peak and the sum of squares in
-// int16 units (32767 = full scale), n = samples. Relaxed atomics, no lock: a racing peak can be lost (a diagnostic).
+// Slot 0 = mono XMA but voices, 1 = stereo XMA, 6 = mono voices (src/audio/xma_context.cpp, after the gain); 2..5 =
+// render clients 0..3 after the 5.1 fold, before the sum and the clamp (src/audio/switch/switch_audio_system.cpp).
+// Peak and the sum of squares in int16 units (32767 = full scale), n = samples. Relaxed atomics, no lock: a racing peak
+// can be lost (a diagnostic).
 #include <atomic>
 #include <cstdint>
 struct HcuAudioLevel {
@@ -422,19 +428,23 @@ struct HcuAudioLevel {
     n.fetch_add(count, std::memory_order_relaxed);
   }
 };
-extern "C" HcuAudioLevel rex_hcu_audio_levels[6];
+extern "C" HcuAudioLevel rex_hcu_audio_levels[7];
 ''')
 edit('src/audio/xma_context.cpp', [
     ('#include <rex/filesystem.h>' + NL,
      '#include <rex/filesystem.h>' + NL + r'''#if REX_PLATFORM_SWITCH
-// hcu (switch/sdk-edits-base.py): the SFX / music balance and the source levels of the [audio] line.
+// hcu (switch/sdk-edits-base.py): the SFX / voice / music balance and the source levels of the [audio] line.
 #include <rex/hcu_audio_levels.h>
-extern "C" float rex_hcu_xma_gain(int stereo);  // hcu src/settings_menu.cpp: sfx_gain (mono), music_gain (stereo), 0..2
-HcuAudioLevel rex_hcu_audio_levels[6];
-// A decoded frame's big-endian int16 samples times the gain (Q15, at most 2 = 65536; 1 leaves them as they are,
-// above 1 saturates at -32768..32767), then its level.
-static void HcuGainAndLevel(uint8_t* be, size_t samples, bool stereo) {
-  const float gain = rex_hcu_xma_gain(stereo);
+// hcu src/settings_menu.cpp: the gain of a class, 0..2 (0 = sfx_gain, 1 = music_gain, 2 = voice_gain).
+extern "C" float rex_hcu_xma_gain(int cls);
+// hcu src/xma_voice_table.cpp: a sound start's class from its first packet (see there).
+extern "C" int rex_hcu_xma_start(const uint8_t* packet, int fresh, int stereo, int cls, uint64_t* key,
+                                 uint32_t packet_index, uint32_t bit_offset);
+HcuAudioLevel rex_hcu_audio_levels[7];
+// A decoded frame's big-endian int16 samples times its class's gain (Q15, at most 2 = 65536; 1 leaves them as they
+// are, above 1 saturates at -32768..32767), then its level (slot 0 sfx, 1 music, 6 voice).
+static void HcuGainAndLevel(uint8_t* be, size_t samples, int cls) {
+  const float gain = rex_hcu_xma_gain(cls);
   const int32_t g = gain >= 2.f ? 65536 : gain > 0.f ? int32_t(gain * 32768.f) : 0;
   auto* p = reinterpret_cast<uint16_t*>(be);
   uint32_t peak = 0;
@@ -450,7 +460,7 @@ static void HcuGainAndLevel(uint8_t* be, size_t samples, bool stereo) {
     peak = a > peak ? a : peak;
     sumsq += uint64_t(a) * a;
   }
-  rex_hcu_audio_levels[stereo ? 1 : 0].Add(peak, sumsq, uint32_t(samples));
+  rex_hcu_audio_levels[cls == 2 ? 6 : cls == 1 ? 1 : 0].Add(peak, sumsq, uint32_t(samples));
 }
 #endif
 '''),
@@ -458,10 +468,36 @@ static void HcuGainAndLevel(uint8_t* be, size_t samples, bool stereo) {
 ''',
      '''              size_t(kBytesPerFrameChannel) << data->is_stereo);
 #if REX_PLATFORM_SWITCH
-    // hcu: after the frame cache and the dump, before the guest reads it.
-    HcuGainAndLevel(raw_frame_.data(), (size_t(kBytesPerFrameChannel) << data->is_stereo) / 2, bool(data->is_stereo));
+    // hcu: after the frame cache and the dump, before the guest reads it. Stereo is music; mono the latched class.
+    HcuGainAndLevel(raw_frame_.data(), (size_t(kBytesPerFrameChannel) << data->is_stereo) / 2,
+                    data->is_stereo ? 1 : hcu_class_);
 #endif
 '''),
+    ('''  const int prepared = PrepareDecoder(data->sample_rate, bool(data->is_stereo));
+  if (prepared < 0) {
+    data->error_status = 4;
+    return;
+  }
+''',
+     '''  const int prepared = PrepareDecoder(data->sample_rate, bool(data->is_stereo));
+  if (prepared < 0) {
+    data->error_status = 4;
+    return;
+  }
+#if REX_PLATFORM_SWITCH
+  // hcu: a sound start (a fresh codec, or the buffer's first frame): its class from the raw guest packet.
+  if (prepared == 1 || (packet_index == 0 && relative_offset == packet_first_frame_offset))
+    hcu_class_ = rex_hcu_xma_start(packet, prepared == 1, int(data->is_stereo), hcu_class_, &hcu_key_,
+                                   uint32_t(packet_index), uint32_t(data->input_buffer_read_offset));
+#endif
+'''),
+])
+edit('include/rex/audio/xma/context.h', [
+    ('  bool codec_open_failed_ = false;' + NL,
+     '  bool codec_open_failed_ = false;' + NL +
+     '  // hcu (switch/sdk-edits-base.py): the class of the sound playing (0 sfx, 2 voice; stereo is music) and the key' + NL +
+     '  // of its first packet, latched at its start by Decode (rex_hcu_xma_start, hcu src/xma_voice_table.cpp).' + NL +
+     '  int hcu_class_ = 0;' + NL + '  uint64_t hcu_key_ = 0;' + NL),
 ])
 edit('src/audio/switch/switch_audio_system.cpp', [
     ('extern "C" void RexSwitchPerfMax(unsigned id, u64 value);' + NL,

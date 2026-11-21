@@ -22,6 +22,7 @@
 #include "hcu_version.h"  // written by switch/build-base.sh: HCU_VERSION, HCU_BUILD_UTC, HCU_BUILD_ID
 #include "settings_menu.h"  // hcu_clocks_key
 #include "sysclk_owner.h"
+#include "xma_voice_table.h"  // the voice table: built before the base's main, its counters on the [audio] line
 
 extern "C" {
 // libnx (init.c): the exit; with __nx_applet_exit_mode 1 it asks the system to close the application (the base's main,
@@ -30,7 +31,7 @@ extern u32 __nx_applet_exit_mode;
 [[noreturn]] void __libnx_exit(int rc);
 int __real_main(int argc, char* argv[]);
 void hcu_input_flush(int stop);  // switch/host/input/nx_input_driver.cpp: input_record=1's file onto the card
-float rex_hcu_xma_gain(int stereo);  // src/settings_menu.cpp: sfx_gain / music_gain, 0..2
+float rex_hcu_xma_gain(int cls);  // src/settings_menu.cpp: 0 sfx_gain, 1 music_gain, 2 voice_gain, 0..2
 }
 
 extern "C" volatile uint32_t hcu_gpu_swap;  // the strip's swap number (src/gpu/deko3d_backend.cpp)
@@ -441,13 +442,16 @@ void restore_clocks() {
 }
 
 // The [audio] line, once a second (switch/sdk-edits-base.py, include/rex/hcu_audio_levels.h): peak/RMS (1 = full
-// scale) of the mono and stereo XMA streams after sfx_gain / music_gain, and of each render client c0..c3 after the
-// 5.1 fold, before the sum and the clamp. A slot with no samples this second is left out; no samples at all, no line.
+// scale) of the mono (sfx: every mono stream that is not a voice), voice and stereo XMA streams after sfx_gain /
+// voice_gain / music_gain, and of each render client c0..c3 after the 5.1 fold, before the sum and the clamp. A slot
+// with no samples this second is left out; no samples at all, no line. Then the gains and the voice table's sound
+// starts of this second (src/xma_voice_table.cpp).
 void print_audio_levels() {
-  static const char* const kName[6] = {"mono", "stereo", "c0", "c1", "c2", "c3"};
-  char text[200];
+  static const char* const kName[7] = {"mono", "stereo", "c0", "c1", "c2", "c3", "voice"};
+  static const int kOrder[7] = {0, 6, 1, 2, 3, 4, 5};  // mono, voice, stereo, the clients
+  char text[260];
   int len = 0;
-  for (int i = 0; i < 6; i++) {
+  for (int i : kOrder) {
     HcuAudioLevel& l = rex_hcu_audio_levels[i];
     const uint64_t n = l.n.exchange(0, std::memory_order_relaxed);
     const uint32_t peak = l.peak.exchange(0, std::memory_order_relaxed);
@@ -456,7 +460,11 @@ void print_audio_levels() {
     len += std::snprintf(text + len, sizeof(text) - len, " %s %.3f/%.3f", kName[i], peak / 32767.0,
                          std::sqrt(double(sumsq) / double(n)) / 32767.0);
   }
-  if (len) std::printf("[audio] peak/rms:%s; sfx_gain %.2f music_gain %.2f\n", text, rex_hcu_xma_gain(0), rex_hcu_xma_gain(1));
+  char starts[120];
+  const int slen = hcu_voice_stats(starts, sizeof(starts));
+  if (len || slen)
+    std::printf("[audio] peak/rms:%s; sfx_gain %.2f voice_gain %.2f music_gain %.2f;%s\n", text, rex_hcu_xma_gain(0),
+                rex_hcu_xma_gain(2), rex_hcu_xma_gain(1), slen ? starts : " no starts");
 }
 
 // The log is buffered and flushed twice a second; fsync commits it to the card (after a hang and a hard reboot, a log
@@ -588,5 +596,12 @@ extern "C" int __wrap_main(int argc, char* argv[]) {
   for (const auto& a : args) std::printf(" %s", a.c_str());
   std::printf("\n");
   std::fflush(stdout);
+  // The voice table (src/xma_voice_table.cpp), before the game's audio starts: the banks of the game folder the base
+  // gets (the first --game_data_root, as above; the root form "/switch/hcu/game" opens on the SD).
+  for (const auto& a : args)
+    if (a.compare(0, 17, "--game_data_root=") == 0) {
+      hcu_voice_table_build((a.substr(17) + "/DataXENON/Sound/").c_str(), "sdmc:/switch/hcu/settings.txt");
+      break;
+    }
   return __real_main(int(args.size()), ptrs.data());
 }

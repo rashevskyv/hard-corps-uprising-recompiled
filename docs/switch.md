@@ -157,18 +157,45 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   this build copies none, the ones in `sdmc:/switch/hcu/shaders/` are used.
 - New `settings.txt` key: `audio_threads=1` runs each audio client's callback on its own thread (the old SDK's patch);
   default 0 = the base's audio worker.
-- Volume balance (live; the menu's SFX VOLUME and MUSIC VOLUME, 0..200 % in steps of 10, stopping at both ends):
-  `sfx_gain=0..2` scales every mono XMA stream (the SE_* and Voice_* banks), `music_gain=0..2` every stereo XMA
-  stream (BGM_xenon.bnk; a stereo sound effect would follow it too). Above 2 is 2, below 0 is 0; 1 = the game's own
-  mix (the samples stay as they are). Above 1 amplifies and saturates at int16 full scale, so loud passages can clip.
-  Defaults when the key is absent: `sfx_gain=0.4`, `music_gain=1.5`. A menu save always writes both keys, so a
-  `settings.txt` saved by an older build keeps its values (remove the two lines to get the defaults). The SDK scales each decoded frame after the frame cache (switch/sdk-edits-base.py), so a change acts at the
-  next frame. The guest's FMOD still applies its own volumes after this.
+- Volume balance (live; the menu's SFX VOLUME, VOICE VOLUME and MUSIC VOLUME, 0..200 % in steps of 10, stopping at
+  both ends): `music_gain=0..2` scales every stereo XMA stream (BGM_xenon.bnk; a stereo sound effect would follow it
+  too), `voice_gain=0..2` every mono stream the voice table knows as a voice, `sfx_gain=0..2` every other mono stream.
+  Above 2 is 2, below 0 is 0; 1 = the game's own mix (the samples stay as they are). Above 1 amplifies and saturates at
+  int16 full scale, so loud passages can clip. Defaults when the key is absent: `sfx_gain=1.0`, `voice_gain=0.4`,
+  `music_gain=1.5`. A menu save always writes the three keys, so a `settings.txt` saved by an older build keeps its
+  values (an old file has `sfx_gain=0.4`: remove the gain lines to get the new defaults). The SDK scales each decoded
+  frame after the frame cache (switch/sdk-edits-base.py), so a change acts at the next frame. The guest's FMOD still
+  applies its own volumes after this.
+- The voice table (`src/xma_voice_table.cpp`): voices and effects are both mono 48 kHz XMA, so only the sound's first
+  2048-byte XMA packet tells them apart. Before the base's main, the NRO reads every `*.bnk` (FSB4) in
+  `<game_data_root>/DataXENON/Sound/` (default `sdmc:/switch/hcu/game/DataXENON/Sound/`): the sample headers and the
+  first packet of each mono sample (1209 samples, 962 distinct first packets), not the sample data. A sample is a voice
+  when its bank is a `Voice_*` bank or its name starts with one of the voice prefixes. Default prefixes:
+  `voice_prefixes=NR_,BH_001,CL_001,HD_001,HT_001,LV_001,DWN_,LV_Enemy_,DM_,DMG_VC,TB_,BREATH,ZOMBIE,VOMIT` (read at
+  start; a menu save keeps the line as it is; an empty value = only the `Voice_*` banks). Samples that share a first
+  packet: a `Voice_*` bank's sample makes it a voice (SE_Common's LV_001); otherwise different classes make it sfx
+  (1UP and SE_Stage05's DM_010_2 share their whole first packet and size, so DM_010_2 plays at sfx_gain). Log line:
+  `[audio] voice table: 1209 mono samples of 16 banks in ..., 962 keys (653 voice, 1 voice/sfx conflicts as sfx), 14
+  voice prefixes, 2.9 ms` (2.9 ms on the PC with the files cached; the console reads about 1200 small pieces of the
+  card). No banks: `: no table, every mono sound is sfx`.
+- The class is latched per XMA context at the sound's start, in the SDK's `XmaContext::Decode`: when PrepareDecoder
+  returns 1 (a fresh codec: a new sound, `fresh`), and at the buffer's first frame with the codec kept. A fresh start
+  looks its raw guest packet up: a hit takes the table's class, a miss is sfx. A kept-codec buffer start keeps the
+  class on a miss (a stream's next buffer) or on the same key (a loop); a known first packet with a new key is a new
+  sound the game started without a clear (`unprepared`) and takes its class. Stereo is always music. Per frame: one
+  member read. Start log lines (at most 20 a second, 200 a run):
+  `[audio] start class=voice hit name=SE_Common_xenon/NR_001.wav key=ad355f0fecd05f04 head=400001000649fc03 pkt=0 bit=32 fresh`.
+  `name` ends in `+` when other samples share that first packet; a miss has `name=?`. `head` = the packet's first 8
+  bytes, `pkt` / `bit` = the packet index and the read offset in bits: with `pkt=0 bit=32` a miss is not a sample's
+  first packet (or the banks on the card differ). Many misses with `pkt` above 0 mean the start is not at the first
+  packet (the table cannot work there).
 - The `[audio]` line, once a second:
-  `[audio] peak/rms: mono 0.912/0.104 stereo 0.500/0.120 c0 0.950/0.210 c1 0.020/0.003; sfx_gain 0.40 music_gain 1.50`.
-  Each pair is peak / RMS of that second, 1.000 = full scale. `mono` / `stereo`: the XMA streams after the gain,
-  before FMOD's volumes. `c0`..`c3`: each render client after the 5.1 fold, before the sum and the clamp (a peak
-  above 1 there can clip). A slot with no samples is left out.
+  `[audio] peak/rms: mono 0.912/0.104 voice 0.300/0.050 stereo 0.500/0.120 c0 0.950/0.210 c1 0.020/0.003; sfx_gain 1.00 voice_gain 0.40 music_gain 1.50; starts 5 hit 4 miss 1 unprepared 0 next_miss 2`.
+  Each pair is peak / RMS of that second, 1.000 = full scale. `mono` (the effects) / `voice` / `stereo`: the XMA
+  streams after the gain, before FMOD's volumes. `c0`..`c3`: each render client after the 5.1 fold, before the sum
+  and the clamp (a peak above 1 there can clip). A slot with no samples is left out. The counters: fresh `starts`
+  (`hit` / `miss` of the table), `unprepared` starts, and `next_miss` = kept-codec buffer starts not in the table
+  (streams' next buffers); no starts this second: `no starts`.
 - Input record and replay (A/B runs without a hand; `switch/host/input/nx_input_driver.cpp`; keys saved only when on):
   `input_record=1` writes player 1's pad state at each poll to `sdmc:/switch/hcu/input.rec` (28 bytes: poll, the
   strip's swap number `#`, its `t`, the state the game got), from the first swap to the exit, flushed every second.

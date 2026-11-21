@@ -56,6 +56,7 @@ add_executable(hcu
     src/frame_meter.cpp
     src/gpu_fence_wait.cpp
     src/settings_menu.cpp
+    src/xma_voice_table.cpp
     src/button_glyphs.cpp
     src/frame_recorder.cpp
     ${HCU_SWITCH_HOST}/input/nx_input_driver.cpp

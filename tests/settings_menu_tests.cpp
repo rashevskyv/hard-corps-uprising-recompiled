@@ -10,7 +10,7 @@
 #include "settings_menu.h"
 #include "../switch/sysclk_owner.h"
 
-extern "C" float rex_hcu_xma_gain(int stereo);  // src/settings_menu.cpp (the SDK's declaration)
+extern "C" float rex_hcu_xma_gain(int cls);  // src/settings_menu.cpp (the SDK's declaration): 0 sfx, 1 music, 2 voice
 
 namespace {
 
@@ -105,8 +105,43 @@ int main() {
     Check(text.find("clocks_ladder=1020/307.2,1581/384") != std::string::npos, "a menu save keeps clocks_ladder");
   }
   // sfx_gain / music_gain: 0..2 in the file, percent in the struct (clamped), saved by a menu close, the SDK's getter.
-  Check(hcu_settings.sfx_gain == 40 && hcu_settings.music_gain == 150, "no gain keys: sfx 40 %, music 150 %");
-  Check(rex_hcu_xma_gain(0) == 0.4f && rex_hcu_xma_gain(1) == 1.5f, "the getter: mono 0.4, stereo 1.5 (the defaults)");
+  Check(hcu_settings.sfx_gain == 100 && hcu_settings.music_gain == 150 && hcu_settings.voice_gain == 40,
+        "no gain keys: sfx 100 %, music 150 %, voice 40 %");
+  Check(rex_hcu_xma_gain(0) == 1.f && rex_hcu_xma_gain(1) == 1.5f && rex_hcu_xma_gain(2) == 0.4f,
+        "the getter: sfx 1, music 1.5, voice 0.4 (the defaults)");
+  // voice_gain: the same 0..2 range, clamp and save; a menu save keeps the voice_prefixes line as it is.
+  WriteFile(file, "voice_gain=0.7\nvoice_prefixes=NR_,TB_, ZOMBIE\n");
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.voice_gain == 70 && rex_hcu_xma_gain(2) == 0.7f, "voice_gain=0.7 is 70 %, the getter 0.7");
+  WriteFile(file, "voice_gain=9\n");
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.voice_gain == 200, "voice_gain=9 clamps to 200 %");
+  WriteFile(file, "voice_gain=-3\n");
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.voice_gain == 0, "voice_gain=-3 clamps to 0");
+  {
+    std::string longp = "voice_prefixes=NR_";
+    for (int i = 0; i < 60; i++) longp += ",LONG_PREFIX_" + std::to_string(i);  // past the old 256-byte line buffer
+    WriteFile(file, (longp + "\nvoice_gain=0.3\n").c_str());
+    hcu_settings_load(dir.c_str());
+    Check(hcu_settings.voice_gain == 30, "voice_gain after a long voice_prefixes line");
+    hcu_settings.voice_gain = 120;
+    Toggle();
+    Toggle();
+    hcu_settings.voice_gain = 100;
+    hcu_settings_load(dir.c_str());
+    Check(hcu_settings.voice_gain == 120, "a menu save and a load keep voice_gain 1.2");
+    std::string text;
+    char buf[2048];
+    FILE* f = std::fopen(file.c_str(), "r");
+    while (f && std::fgets(buf, sizeof(buf), f)) text += buf;
+    if (f) std::fclose(f);
+    Check(text.find(longp + "\n") != std::string::npos, "a menu save keeps the whole voice_prefixes line");
+    Check(text.find("voice_gain=1.2\n") != std::string::npos, "a menu save writes voice_gain=1.2");
+  }
+  hcu_settings.sfx_gain = 40;
+  hcu_settings.voice_gain = 40;
+  WriteFile(file, "fps_mode=0\n");
   WriteFile(file, "sfx_gain=0.3\nmusic_gain=7\n");
   hcu_settings_load(dir.c_str());
   Check(hcu_settings.sfx_gain == 30 && hcu_settings.music_gain == 200, "sfx_gain=0.3 is 30 %, music_gain=7 clamps to 200 %");
@@ -174,6 +209,25 @@ int main() {
   Check(hcu_settings.sfx_gain == 0, "LEFT on SFX VOLUME at 0 % stays 0 %");
   Press(HCU_MENU_RIGHT);
   Check(hcu_settings.sfx_gain == 10, "RIGHT on SFX VOLUME at 0 %: 10 %");
+  Press(HCU_MENU_DOWN);  // VOICE VOLUME
+  {
+    char lines[20][48];
+    const int n = hcu_menu_lines(lines, 20);
+    bool on_voice = false;
+    for (int k = 0; k < n; k++) on_voice |= std::string(lines[k]).rfind("> VOICE VOLUME", 0) == 0;
+    Check(on_voice, "the line below SFX VOLUME is VOICE VOLUME");
+  }
+  hcu_settings.voice_gain = 40;
+  Press(HCU_MENU_LEFT);
+  Check(hcu_settings.voice_gain == 30, "LEFT on VOICE VOLUME: 40 % -> 30 %");
+  hcu_settings.voice_gain = 200;
+  Press(HCU_MENU_RIGHT);
+  Check(hcu_settings.voice_gain == 200, "RIGHT on VOICE VOLUME at 200 % stays 200 %");
+  hcu_settings.voice_gain = 0;
+  Press(HCU_MENU_LEFT);
+  Check(hcu_settings.voice_gain == 0, "LEFT on VOICE VOLUME at 0 % stays 0 %");
+  Press(HCU_MENU_RIGHT);
+  Check(hcu_settings.voice_gain == 10, "RIGHT on VOICE VOLUME at 0 %: 10 %");
   Press(HCU_MENU_DOWN);  // MUSIC VOLUME
   hcu_settings.music_gain = 200;
   Press(HCU_MENU_RIGHT);

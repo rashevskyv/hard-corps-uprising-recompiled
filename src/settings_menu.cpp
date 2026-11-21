@@ -19,7 +19,7 @@ HcuSettings hcu_settings = {.fps_mode = 0, .early_submit = 1, .gpu_frames = 3, .
                             .colour_bias = 0.f, .precise = 0, .filter = 0, .lod_bias = 0.f, .aniso = 1.f, .shadow_map = 1,
                             .view = 0, .view_step = 0, .dump = 0, .record = 0, .dxt_cpu = 1, .depth32 = 0, .gamma = 0,
                             .rt16 = 1, .prepass_skip = 0, .upload_strips = 0, .tex_view = 0, .pad_applet = 0, .button_glyphs = 1, .clocks = 0, .audio_threads = 0,
-                            .sfx_gain = 40, .music_gain = 150};
+                            .sfx_gain = 100, .music_gain = 150, .voice_gain = 40};
 
 namespace {
 
@@ -55,6 +55,10 @@ const Item kItems[] = {
     {"SFX VOLUME", {"0 %", "10 %", "20 %", "30 %", "40 %", "50 %", "60 %", "70 %", "80 %", "90 %", "100 %", "110 %", "120 %",
                     "130 %", "140 %", "150 %", "160 %", "170 %", "180 %", "190 %", "200 %"}, 21, false,
      [] { return hcu_settings.sfx_gain / 10; }, [](int i) { hcu_settings.sfx_gain = i * 10; }, true},
+    // The mono streams src/xma_voice_table.cpp knows as voices (the Voice_* banks and the voice_prefixes samples).
+    {"VOICE VOLUME", {"0 %", "10 %", "20 %", "30 %", "40 %", "50 %", "60 %", "70 %", "80 %", "90 %", "100 %", "110 %", "120 %",
+                      "130 %", "140 %", "150 %", "160 %", "170 %", "180 %", "190 %", "200 %"}, 21, false,
+     [] { return hcu_settings.voice_gain / 10; }, [](int i) { hcu_settings.voice_gain = i * 10; }, true},
     {"MUSIC VOLUME", {"0 %", "10 %", "20 %", "30 %", "40 %", "50 %", "60 %", "70 %", "80 %", "90 %", "100 %", "110 %", "120 %",
                       "130 %", "140 %", "150 %", "160 %", "170 %", "180 %", "190 %", "200 %"}, 21, false,
      [] { return hcu_settings.music_gain / 10; }, [](int i) { hcu_settings.music_gain = i * 10; }, true},
@@ -105,13 +109,14 @@ const Item* Page(int& count) {
 
 void Save() {
   if (g_dir.empty()) return;
-  // The clocks_* lines (clocks_auto, clocks_cpu, clocks_gpu, clocks_ladder*) are read by the NRO's start-up code, not
-  // by this struct: every such line is copied as it is, in its order (the reader takes the last line of a key).
+  // The clocks_* lines (clocks_auto, clocks_cpu, clocks_gpu, clocks_ladder*) and voice_prefixes are read by the NRO's
+  // start-up code, not by this struct: every such line is copied as it is, in its order (the reader takes the last line
+  // of a key).
   std::string clock_lines;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "r")) {
-    char line[256];
+    char line[1024];
     while (std::fgets(line, sizeof(line), f)) {
-      if (std::strncmp(line, "clocks_", 7)) continue;
+      if (std::strncmp(line, "clocks_", 7) && std::strncmp(line, "voice_prefixes=", 15)) continue;
       clock_lines += line;
       if (clock_lines.back() != '\n') clock_lines += '\n';
     }
@@ -121,7 +126,8 @@ void Save() {
     const HcuSettings& s = hcu_settings;
     std::fprintf(f, "fps_mode=%d\nearly_submit=%d\ngpu_frames=%d\nswap_images=%d\nclear_skip=%d\nshadow_direct=%d\nresolution=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass_skip=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%s\nclocks=%d\naudio_threads=%d\n",
                  s.fps_mode, s.early_submit, s.gpu_frames, s.swap_images, s.clear_skip, s.shadow_direct, s.resolution, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass_skip, s.gamma, s.rt16, s.button_glyphs ? "switch" : "xbox", s.clocks, s.audio_threads);
-    std::fprintf(f, "sfx_gain=%g\nmusic_gain=%g\n", s.sfx_gain / 100.0, s.music_gain / 100.0);  // always written
+    std::fprintf(f, "sfx_gain=%g\nvoice_gain=%g\nmusic_gain=%g\n", s.sfx_gain / 100.0, s.voice_gain / 100.0,
+                 s.music_gain / 100.0);  // always written
     // The settings.txt-only keys: written only when on, so a menu save keeps them and an old file stays as it was.
     if (s.resolve_clear_key) std::fprintf(f, "resolve_clear_key=%d\n", s.resolve_clear_key);
     if (s.trail_rearm) std::fprintf(f, "trail_rearm=%d\n", s.trail_rearm);
@@ -150,7 +156,7 @@ void Save() {
 
 bool Exists(const std::string& p) { return access(p.c_str(), F_OK) == 0; }
 
-// sfx_gain / music_gain: 0..2 to whole percent; above 2 is 200, below 0 or NaN is 0.
+// sfx_gain / voice_gain / music_gain: 0..2 to whole percent; above 2 is 200, below 0 or NaN is 0.
 int GainPercent(float v) { return v >= 2.f ? 200 : v > 0.f ? int(v * 100.f + 0.5f) : 0; }
 
 // Every close: settings.txt, and a jump when START STAGE changed to a stage while the menu was open (an edge: a
@@ -169,7 +175,7 @@ void hcu_settings_load(const char* dir) {
   HcuSettings& s = hcu_settings;
   bool saved_fps = false;
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "r")) {
-    char line[64];
+    char line[1024];  // (a long voice_prefixes line, read by src/xma_voice_table.cpp, in one piece)
     while (std::fgets(line, sizeof(line), f)) {
       char key[32], word[16];
       float v;
@@ -205,6 +211,7 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "audio_threads")) s.audio_threads = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "sfx_gain")) s.sfx_gain = GainPercent(v);
       else if (!std::strcmp(key, "music_gain")) s.music_gain = GainPercent(v);
+      else if (!std::strcmp(key, "voice_gain")) s.voice_gain = GainPercent(v);
       else if (!std::strcmp(key, "resolve_clear_key")) s.resolve_clear_key = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "trail_rearm")) s.trail_rearm = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "cull")) s.cull = int(v) == 1 || int(v) == 2 ? int(v) : 0;
@@ -334,8 +341,10 @@ int hcu_take_stage_jump(void) {
 // The ultimate base's SDK reads settings.txt audio_threads through this (switch/sdk-edits-base.py, src/audio/audio_system.cpp).
 extern "C" int rex_hcu_audio_threads(void) { return hcu_settings.audio_threads; }
 
-// The SDK's XMA decoder asks this at each frame (switch/sdk-edits-base.py, src/audio/xma_context.cpp): 0..2, mono
-// streams sfx_gain, stereo streams music_gain. The menu thread writes the int; the audio thread reads it here.
-extern "C" float rex_hcu_xma_gain(int stereo) {
-  return __atomic_load_n(stereo ? &hcu_settings.music_gain : &hcu_settings.sfx_gain, __ATOMIC_RELAXED) / 100.f;
+// The SDK's XMA decoder asks this at each frame (switch/sdk-edits-base.py, src/audio/xma_context.cpp): 0..2 for the
+// stream's class (src/xma_voice_table.h): 0 = sfx_gain (mono), 1 = music_gain (stereo), 2 = voice_gain (a mono sound
+// the voice table knows as a voice). The menu thread writes the int; the audio thread reads it here.
+extern "C" float rex_hcu_xma_gain(int cls) {
+  const int* g = cls == 1 ? &hcu_settings.music_gain : cls == 2 ? &hcu_settings.voice_gain : &hcu_settings.sfx_gain;
+  return __atomic_load_n(g, __ATOMIC_RELAXED) / 100.f;
 }
