@@ -132,7 +132,8 @@ int hcu_voice_table_build(const char* sound_dir, const char* settings_path) {
   const std::string dir = sound_dir ? sound_dir : "";
   const std::vector<std::string> prefixes = Prefixes(settings_path);
   std::vector<std::string> files;
-  if (DIR* d = opendir(dir.c_str())) {
+  const std::string open_dir = dir.size() > 1 && dir.back() == '/' ? dir.substr(0, dir.size() - 1) : dir;
+  if (DIR* d = opendir(open_dir.c_str())) {  // (without the trailing slash: libnx's devoptab may not take it)
     while (dirent* e = readdir(d)) {
       const std::string n = e->d_name;
       if (n.size() > 4 && (n.compare(n.size() - 4, 4, ".bnk") == 0 || n.compare(n.size() - 4, 4, ".BNK") == 0))

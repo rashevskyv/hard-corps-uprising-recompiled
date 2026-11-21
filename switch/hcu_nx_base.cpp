@@ -449,7 +449,7 @@ void restore_clocks() {
 void print_audio_levels() {
   static const char* const kName[7] = {"mono", "stereo", "c0", "c1", "c2", "c3", "voice"};
   static const int kOrder[7] = {0, 6, 1, 2, 3, 4, 5};  // mono, voice, stereo, the clients
-  char text[260];
+  char text[260] = "";
   int len = 0;
   for (int i : kOrder) {
     HcuAudioLevel& l = rex_hcu_audio_levels[i];
