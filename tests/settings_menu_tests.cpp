@@ -104,12 +104,25 @@ int main() {
     Check(text.find("clocks_cpu=1428\n") != std::string::npos, "a menu save keeps clocks_cpu");
     Check(text.find("clocks_ladder=1020/307.2,1581/384") != std::string::npos, "a menu save keeps clocks_ladder");
   }
-  // sfx_gain / music_gain: 0..1 in the file, percent in the struct (clamped), saved by a menu close, the SDK's getter.
-  Check(hcu_settings.sfx_gain == 100 && hcu_settings.music_gain == 100, "no gain keys: 100 %");
+  // sfx_gain / music_gain: 0..2 in the file, percent in the struct (clamped), saved by a menu close, the SDK's getter.
+  Check(hcu_settings.sfx_gain == 40 && hcu_settings.music_gain == 150, "no gain keys: sfx 40 %, music 150 %");
+  Check(rex_hcu_xma_gain(0) == 0.4f && rex_hcu_xma_gain(1) == 1.5f, "the getter: mono 0.4, stereo 1.5 (the defaults)");
   WriteFile(file, "sfx_gain=0.3\nmusic_gain=7\n");
   hcu_settings_load(dir.c_str());
-  Check(hcu_settings.sfx_gain == 30 && hcu_settings.music_gain == 100, "sfx_gain=0.3 is 30 %, music_gain=7 clamps to 100 %");
-  Check(rex_hcu_xma_gain(0) == 0.3f && rex_hcu_xma_gain(1) == 1.f, "the getter: mono 0.3, stereo 1");
+  Check(hcu_settings.sfx_gain == 30 && hcu_settings.music_gain == 200, "sfx_gain=0.3 is 30 %, music_gain=7 clamps to 200 %");
+  Check(rex_hcu_xma_gain(0) == 0.3f && rex_hcu_xma_gain(1) == 2.f, "the getter: mono 0.3, stereo 2");
+  WriteFile(file, "sfx_gain=1.7\nmusic_gain=2\n");
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.sfx_gain == 170 && hcu_settings.music_gain == 200, "sfx_gain=1.7 is 170 %, music_gain=2 is 200 %");
+  // A save and a load of 1.5 / 0.4 (the file has %g: "1.5", "0.4").
+  hcu_settings.sfx_gain = 150;
+  hcu_settings.music_gain = 40;
+  Toggle();
+  Toggle();
+  hcu_settings.sfx_gain = hcu_settings.music_gain = 100;
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.sfx_gain == 150 && hcu_settings.music_gain == 40, "a save and a load keep 1.5 and 0.4");
+  Check(rex_hcu_xma_gain(0) == 1.5f && rex_hcu_xma_gain(1) == 0.4f, "the getter after the load: 1.5 and 0.4");
   WriteFile(file, "sfx_gain=-1\n");
   hcu_settings_load(dir.c_str());
   Check(hcu_settings.sfx_gain == 0, "sfx_gain=-1 clamps to 0");
@@ -137,21 +150,34 @@ int main() {
   hcu_settings.sfx_gain = 100;
   hcu_settings_load(dir.c_str());
   Check(hcu_settings.sfx_gain == 90, "the menu close saved sfx_gain 90 %");
-  // The volume lines clamp at 0 and 100 % (no wraparound). The menu opens again on the SFX VOLUME line.
+  // The volume lines go to 200 % and clamp at 0 and 200 % (no wraparound). The menu opens again on the SFX VOLUME line.
   hcu_settings.sfx_gain = 100;
   Toggle();
   Press(HCU_MENU_RIGHT);
+  Check(hcu_settings.sfx_gain == 110, "RIGHT on SFX VOLUME: 100 % -> 110 %");
+  {
+    char lines[20][48];
+    const int n = hcu_menu_lines(lines, 20);
+    bool shown = false;
+    for (int k = 0; k < n; k++) shown |= std::string(lines[k]).find("SFX VOLUME") != std::string::npos &&
+                                         std::string(lines[k]).find("110 %") != std::string::npos;
+    Check(shown, "the SFX VOLUME line shows 110 %");
+  }
+  hcu_settings.sfx_gain = 190;
+  Press(HCU_MENU_RIGHT);
+  Check(hcu_settings.sfx_gain == 200, "RIGHT on SFX VOLUME: 190 % -> 200 %");
+  Press(HCU_MENU_RIGHT);
   Press(HCU_MENU_A);
-  Check(hcu_settings.sfx_gain == 100, "RIGHT / A on SFX VOLUME at 100 % stays 100 %");
+  Check(hcu_settings.sfx_gain == 200, "RIGHT / A on SFX VOLUME at 200 % stays 200 %");
   hcu_settings.sfx_gain = 0;
   Press(HCU_MENU_LEFT);
   Check(hcu_settings.sfx_gain == 0, "LEFT on SFX VOLUME at 0 % stays 0 %");
   Press(HCU_MENU_RIGHT);
   Check(hcu_settings.sfx_gain == 10, "RIGHT on SFX VOLUME at 0 %: 10 %");
   Press(HCU_MENU_DOWN);  // MUSIC VOLUME
-  hcu_settings.music_gain = 100;
+  hcu_settings.music_gain = 200;
   Press(HCU_MENU_RIGHT);
-  Check(hcu_settings.music_gain == 100, "RIGHT on MUSIC VOLUME at 100 % stays 100 %");
+  Check(hcu_settings.music_gain == 200, "RIGHT on MUSIC VOLUME at 200 % stays 200 %");
   hcu_settings.music_gain = 0;
   Press(HCU_MENU_LEFT);
   Check(hcu_settings.music_gain == 0, "LEFT on MUSIC VOLUME at 0 % stays 0 %");

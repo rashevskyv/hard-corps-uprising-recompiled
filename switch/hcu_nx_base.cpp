@@ -30,7 +30,7 @@ extern u32 __nx_applet_exit_mode;
 [[noreturn]] void __libnx_exit(int rc);
 int __real_main(int argc, char* argv[]);
 void hcu_input_flush(int stop);  // switch/host/input/nx_input_driver.cpp: input_record=1's file onto the card
-float rex_hcu_xma_gain(int stereo);  // src/settings_menu.cpp: sfx_gain / music_gain, 0..1
+float rex_hcu_xma_gain(int stereo);  // src/settings_menu.cpp: sfx_gain / music_gain, 0..2
 }
 
 extern "C" volatile uint32_t hcu_gpu_swap;  // the strip's swap number (src/gpu/deko3d_backend.cpp)
@@ -456,7 +456,7 @@ void print_audio_levels() {
     len += std::snprintf(text + len, sizeof(text) - len, " %s %.3f/%.3f", kName[i], peak / 32767.0,
                          std::sqrt(double(sumsq) / double(n)) / 32767.0);
   }
-  if (len) std::printf("[audio] peak/rms:%s; sfx_gain %.1f music_gain %.1f\n", text, rex_hcu_xma_gain(0), rex_hcu_xma_gain(1));
+  if (len) std::printf("[audio] peak/rms:%s; sfx_gain %.2f music_gain %.2f\n", text, rex_hcu_xma_gain(0), rex_hcu_xma_gain(1));
 }
 
 // The log is buffered and flushed twice a second; fsync commits it to the card (after a hang and a hard reboot, a log

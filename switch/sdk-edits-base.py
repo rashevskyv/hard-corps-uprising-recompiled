@@ -402,8 +402,8 @@ print('changed (hcu title-end exit):', *changed, sep=NL + '  ')
 # --- SFX / music balance (the mob death sounds were much louder than the music). FMOD in the guest mixes every volume;
 # the host only sees the XMA streams: BGM_xenon.bnk is stereo XMA, the SE_* and Voice_* banks mono. Each decoded frame
 # is scaled after the frame cache (the cache keeps the unscaled samples, so a menu change acts at the next frame): mono
-# by sfx_gain, stereo by music_gain (src/settings_menu.cpp, rex_hcu_xma_gain: 0..1, attenuation only; 1 leaves the
-# samples as they are). And the levels of the [audio] line (switch/hcu_nx_base.cpp, once a second): the XMA sources
+# by sfx_gain, stereo by music_gain (src/settings_menu.cpp, rex_hcu_xma_gain: 0..2; above 1 saturates at int16
+# full scale, so it can clip; 1 leaves the samples as they are). And the levels of the [audio] line (switch/hcu_nx_base.cpp, once a second): the XMA sources
 # after the gain, and each render client after the 5.1 fold, before the sum and the clamp.
 write('include/rex/hcu_audio_levels.h', r'''#pragma once
 // hcu (switch/sdk-edits-base.py): the audio levels of the [audio] line (switch/hcu_nx_base.cpp, once a second).
@@ -429,19 +429,21 @@ edit('src/audio/xma_context.cpp', [
      '#include <rex/filesystem.h>' + NL + r'''#if REX_PLATFORM_SWITCH
 // hcu (switch/sdk-edits-base.py): the SFX / music balance and the source levels of the [audio] line.
 #include <rex/hcu_audio_levels.h>
-extern "C" float rex_hcu_xma_gain(int stereo);  // hcu src/settings_menu.cpp: sfx_gain (mono), music_gain (stereo), 0..1
+extern "C" float rex_hcu_xma_gain(int stereo);  // hcu src/settings_menu.cpp: sfx_gain (mono), music_gain (stereo), 0..2
 HcuAudioLevel rex_hcu_audio_levels[6];
-// A decoded frame's big-endian int16 samples times the gain (Q15; 1 leaves them as they are), then its level.
+// A decoded frame's big-endian int16 samples times the gain (Q15, at most 2 = 65536; 1 leaves them as they are,
+// above 1 saturates at -32768..32767), then its level.
 static void HcuGainAndLevel(uint8_t* be, size_t samples, bool stereo) {
   const float gain = rex_hcu_xma_gain(stereo);
-  const int32_t g = gain >= 1.f ? 32768 : gain > 0.f ? int32_t(gain * 32768.f) : 0;
+  const int32_t g = gain >= 2.f ? 65536 : gain > 0.f ? int32_t(gain * 32768.f) : 0;
   auto* p = reinterpret_cast<uint16_t*>(be);
   uint32_t peak = 0;
   uint64_t sumsq = 0;
   for (size_t i = 0; i < samples; ++i) {
     int32_t v = int16_t(__builtin_bswap16(p[i]));
     if (g != 32768) {
-      v = (v * g) >> 15;
+      v = int32_t((int64_t(v) * g) >> 15);
+      v = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
       p[i] = __builtin_bswap16(uint16_t(int16_t(v)));
     }
     const uint32_t a = uint32_t(v < 0 ? -v : v);
