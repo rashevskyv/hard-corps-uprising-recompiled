@@ -165,8 +165,8 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   `rex_nx_quick_exit`. After the last record's swap the pads play again. `bench_seconds=N`: N s (system clock) after the
   replay end, the game quits the same way. Log: `[input] record start / stop N polls`, `[input] replay start N polls`,
   `[input] replay end`, each with the swap number and t. Not exact: the swap count of a load or a movie depends on the
-  card and the build's speed, so later inputs can land a few swaps off. Check: the `[nx] load ... swap #N` lines of a
-  replay log against the recording's log, and the picture at the end.
+  card and the build's speed, so later inputs can land a few swaps off. Check: the swap at the replay end (the last `[speed]` line:
+  about #15000 to #15150 for the 2026-11 recording) and the picture at the end.
 - Cheats (every NRO; all keys 0 = off; the settings menu's line CHEATS > opens their page, B goes back):
   `cheat_god`, `cheat_lives`, `cheat_health`, `cheat_keep_weapons`, `cheat_rapid_fire`, `cheat_stage` (1..8),
   `cheat_log`. `cheat_weapon_a` / `_b` lock slot A / B to a weapon: 1 MG, 2 Spread, 3 Ripple, 4 Heated Plasma,

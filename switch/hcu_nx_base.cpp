@@ -294,8 +294,6 @@ void raise_clocks() {
   }
   std::printf("[clock] settings.txt clocks=1 requested: CPU %u, GPU %u, memory %u MHz\n", clocks[0].wanted / 1000000,
               clocks[1].wanted / 1000000, clocks[2].wanted / 1000000);
-  if (gov_on) std::printf("[clock] the governor is on, it starts at rung %d (CPU %u, GPU %u kHz)%s\n", gov_rung, kRungs[gov_rung].cpu, kRungs[gov_rung].gpu,
-                          ladder_n ? "; the ladder is set, so the governor is off" : "");
   // Before any pcv call: who else sets clocks. Horizon OC puts stock rates back every tick (fighting it froze consoles
   // in NFSU2's port); sys-clk-OC's IPC is another one.
   if (other_clock_tool("hoc:clk", "Horizon OC") || other_clock_tool("sysclkOC", "sys-clk-OC")) return;
@@ -320,6 +318,10 @@ void raise_clocks() {
       sysclk = false;
     }
     return;
+  }
+  if (gov_on && !ladder_n) {  // after every early return: the clocks are really the game's
+    std::printf("[clock] the governor is on, it starts at rung %d (CPU %u, GPU %u kHz)\n", gov_rung, kRungs[gov_rung].cpu,
+                kRungs[gov_rung].gpu);
   }
   const u32 loop_before = busy_loop_mhz();
   u32 now[3];

@@ -87,6 +87,21 @@ int main() {
   Toggle();
   Toggle();
   Check(hcu_clocks_key(file.c_str()) == 0, "a menu save with clocks 0 writes clocks=0");
+  // A menu save keeps the clocks_* lines (read by the NRO's start-up code, not by the struct).
+  WriteFile(file, "clocks=1\nclocks_auto=0\nclocks_cpu=1428\nclocks_ladder=1020/307.2,1581/384\r\nfps_mode=0\n");
+  hcu_settings_load(dir.c_str());
+  Toggle();
+  Toggle();
+  {
+    std::string text;
+    char buf[512];
+    FILE* f = std::fopen(file.c_str(), "r");
+    while (f && std::fgets(buf, sizeof(buf), f)) text += buf;
+    if (f) std::fclose(f);
+    Check(text.find("clocks_auto=0\n") != std::string::npos, "a menu save keeps clocks_auto");
+    Check(text.find("clocks_cpu=1428\n") != std::string::npos, "a menu save keeps clocks_cpu");
+    Check(text.find("clocks_ladder=1020/307.2,1581/384") != std::string::npos, "a menu save keeps clocks_ladder");
+  }
   std::remove(file.c_str());
   rmdir(dir.c_str());
 

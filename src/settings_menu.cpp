@@ -95,6 +95,18 @@ const Item* Page(int& count) {
 
 void Save() {
   if (g_dir.empty()) return;
+  // The clocks_* lines (clocks_auto, clocks_cpu, clocks_gpu, clocks_ladder*) are read by the NRO's start-up code, not
+  // by this struct: every such line is copied as it is, in its order (the reader takes the last line of a key).
+  std::string clock_lines;
+  if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "r")) {
+    char line[256];
+    while (std::fgets(line, sizeof(line), f)) {
+      if (std::strncmp(line, "clocks_", 7)) continue;
+      clock_lines += line;
+      if (clock_lines.back() != '\n') clock_lines += '\n';
+    }
+    std::fclose(f);
+  }
   if (FILE* f = std::fopen((g_dir + "settings.txt").c_str(), "w")) {
     const HcuSettings& s = hcu_settings;
     std::fprintf(f, "fps_mode=%d\nearly_submit=%d\ngpu_frames=%d\nswap_images=%d\nclear_skip=%d\nshadow_direct=%d\nresolution=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass_skip=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%s\nclocks=%d\naudio_threads=%d\n",
@@ -120,6 +132,7 @@ void Save() {
     if (s.cheat_stage) std::fprintf(f, "cheat_stage=%d\n", s.cheat_stage);
     if (s.cheat_god) std::fprintf(f, "cheat_god=%d\n", s.cheat_god);
     if (s.cheat_log) std::fprintf(f, "cheat_log=%d\n", s.cheat_log);
+    std::fputs(clock_lines.c_str(), f);
     std::fclose(f);
   }
 }

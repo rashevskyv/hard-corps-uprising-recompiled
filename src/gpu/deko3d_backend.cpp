@@ -94,7 +94,7 @@ extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200] = {};
 extern "C" volatile uint32_t hcu_gpu_swap = 0;
 extern "C" volatile uint64_t hcu_gpu_t0 = 0;
 // The [speed] meter's running totals (level swaps and their ticks, never reset): the clock governor of
-// switch/hcu_nx_base.cpp (clocks_auto=1) takes the speed over its own 2 s from their differences.
+// switch/hcu_nx_base.cpp (clocks=1, on by default; clocks_auto=0 turns it off) takes the speed over its own 2 s from their differences.
 extern "C" volatile uint32_t hcu_speed_swaps = 0;
 extern "C" volatile uint64_t hcu_speed_ticks = 0;
 
