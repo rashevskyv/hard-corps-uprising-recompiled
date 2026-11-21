@@ -120,6 +120,23 @@ int main() {
   hcu_settings.sfx_gain = hcu_settings.music_gain = 100;
   hcu_settings_load(dir.c_str());
   Check(hcu_settings.sfx_gain == 50 && hcu_settings.music_gain == 80, "a menu save keeps sfx_gain and music_gain");
+  // The SFX VOLUME line: LEFT is one 10 % step down, and the close saves it.
+  hcu_settings.sfx_gain = 100;
+  Toggle();
+  bool on_line = false;
+  for (int i = 0; i < 20 && !on_line; i++) {
+    char lines[20][48];
+    const int n = hcu_menu_lines(lines, 20);
+    for (int k = 0; k < n; k++) on_line |= std::string(lines[k]).rfind("> SFX VOLUME", 0) == 0;
+    if (!on_line) Press(HCU_MENU_DOWN);
+  }
+  Check(on_line, "the menu has an SFX VOLUME line");
+  Press(HCU_MENU_LEFT);
+  Check(hcu_settings.sfx_gain == 90, "LEFT on SFX VOLUME: 100 % -> 90 %");
+  Toggle();
+  hcu_settings.sfx_gain = 100;
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.sfx_gain == 90, "the menu close saved sfx_gain 90 %");
   std::remove(file.c_str());
   rmdir(dir.c_str());
 
