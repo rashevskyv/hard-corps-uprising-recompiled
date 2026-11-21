@@ -139,7 +139,7 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   1581 / GPU 384 / memory 1600 MHz through clkrst at start, sets them again when the system lowers them (checked
   every 2 s, then 4, 8 .. 32 s after each re-set; a rate at or above the game's is never set again), and puts the old
   rates back on exit. Default 0: the game touches no clock. The base itself never sets clocks (up to 0.398 this build
-  had no clock code: `clocks=1` did nothing). `clocks_auto=1` (with `clocks=1`) is a governor: every 2 s it takes the
+  had no clock code: `clocks=1` did nothing). With `clocks=1` a governor runs by default (`clocks_auto=0` turns it off; `clocks_cpu` / `clocks_gpu` or `clocks_ladder` do too, unless `clocks_auto=1`): every 2 s it takes the
   game speed from the level swaps (the `[speed]` meter's counts) and moves over six rungs, 1020/307 to 1785/768 MHz
   (start 1581/384): one rung up below 97 % (two below 90 %), one down after 5 samples at 99 % or more (the wait
   doubles to 64 when a lower rung fails at once). `[clock] auto:` lines log each move. sys-clk's modules are left alone.

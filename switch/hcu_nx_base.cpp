@@ -70,7 +70,7 @@ struct LadderStep { u32 cpu, gpu; };
 LadderStep ladder[kLadderMax];
 unsigned ladder_n = 0, ladder_start = 2400, ladder_len = 1500;
 int ladder_at = -1;
-// clocks_auto=1 (clocks=1 only; a clocks_ladder wins): the governor. Every 2 s it takes the game speed from the level
+// The governor (on with clocks=1; clocks_auto=0 turns it off; a clocks_ladder or a clocks_cpu / clocks_gpu key wins). Every 2 s it takes the game speed from the level
 // swaps of that time (the [speed] meter's counts). Below 97 %: one rung up (two below 90 %). At 99 % or more for
 // gov_wait samples in a row: one rung down; a rung that fails within 3 samples of the step down doubles that wait
 // (5 to 64). Between 97 and 99 % and in a stretch of fewer than 60 level swaps (a load, a menu) the rung stays.
@@ -78,7 +78,7 @@ int ladder_at = -1;
 constexpr LadderStep kRungs[] = {{1020000, 307200}, {1224000, 384000}, {1428000, 384000},
                                  {1581000, 384000}, {1683000, 460800}, {1785000, 768000}};
 constexpr int kRungCount = sizeof(kRungs) / sizeof(kRungs[0]);
-bool gov_on = false;
+bool gov_on = true;  // on with clocks=1; off with clocks_auto=0, with clocks_cpu / clocks_gpu (unless clocks_auto=1), or a ladder
 int gov_rung = 3;  // the default pair
 u32 gov_swaps = 0, gov_wait = 5, gov_good = 0, gov_since_down = 100;
 u64 gov_ticks = 0;
@@ -271,8 +271,11 @@ void raise_clocks() {
   if (FILE* f = std::fopen("sdmc:/switch/hcu/settings.txt", "r")) {
     char line[256];
     unsigned v = 0;
+    bool auto_key = false, fixed_key = false;
     while (std::fgets(line, sizeof(line), f)) {
-      if (std::sscanf(line, "clocks_auto=%u", &v) == 1) gov_on = v != 0;
+      if (std::sscanf(line, "clocks_auto=%u", &v) == 1) gov_on = v != 0, auto_key = true;
+      if (std::sscanf(line, "clocks_cpu=%u", &v) == 1 && v) fixed_key = true;
+      if (std::sscanf(line, "clocks_gpu=%u", &v) == 1 && v) fixed_key = true;
       if (std::sscanf(line, "clocks_ladder_swap=%u", &v) == 1) ladder_start = v;
       if (std::sscanf(line, "clocks_ladder_len=%u", &v) == 1 && v) ladder_len = v;
       if (std::strncmp(line, "clocks_ladder=", 14) == 0) {  // cpu/gpu MHz pairs, comma-separated; the last line wins
@@ -287,10 +290,11 @@ void raise_clocks() {
       if (std::sscanf(line, "clocks_gpu=%u", &v) == 1 && v) clocks[1].wanted = std::min(v, 768u) * 1000000u;
     }
     std::fclose(f);
+    if (fixed_key && !auto_key) gov_on = false;  // a fixed pair from the file is meant: no governor unless clocks_auto=1
   }
   std::printf("[clock] settings.txt clocks=1 requested: CPU %u, GPU %u, memory %u MHz\n", clocks[0].wanted / 1000000,
               clocks[1].wanted / 1000000, clocks[2].wanted / 1000000);
-  if (gov_on) std::printf("[clock] clocks_auto=1: the governor starts at rung %d (CPU %u, GPU %u kHz)%s\n", gov_rung, kRungs[gov_rung].cpu, kRungs[gov_rung].gpu,
+  if (gov_on) std::printf("[clock] the governor is on, it starts at rung %d (CPU %u, GPU %u kHz)%s\n", gov_rung, kRungs[gov_rung].cpu, kRungs[gov_rung].gpu,
                           ladder_n ? "; the ladder is set, so the governor is off" : "");
   // Before any pcv call: who else sets clocks. Horizon OC puts stock rates back every tick (fighting it froze consoles
   // in NFSU2's port); sys-clk-OC's IPC is another one.
