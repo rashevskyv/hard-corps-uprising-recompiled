@@ -398,3 +398,103 @@ edit('src/system/xthread.cpp', [
      'extern "C" [[noreturn]] void rex_nx_quick_exit(const char* why);  // hcu switch/hcu_nx_base.cpp' + NL + '#endif' + NL),
 ])
 print('changed (hcu title-end exit):', *changed, sep=NL + '  ')
+
+# --- SFX / music balance (the mob death sounds were much louder than the music). FMOD in the guest mixes every volume;
+# the host only sees the XMA streams: BGM_xenon.bnk is stereo XMA, the SE_* and Voice_* banks mono. Each decoded frame
+# is scaled after the frame cache (the cache keeps the unscaled samples, so a menu change acts at the next frame): mono
+# by sfx_gain, stereo by music_gain (src/settings_menu.cpp, rex_hcu_xma_gain: 0..1, attenuation only; 1 leaves the
+# samples as they are). And the levels of the [audio] line (switch/hcu_nx_base.cpp, once a second): the XMA sources
+# after the gain, and each render client after the 5.1 fold, before the sum and the clamp.
+write('include/rex/hcu_audio_levels.h', r'''#pragma once
+// hcu (switch/sdk-edits-base.py): the audio levels of the [audio] line (switch/hcu_nx_base.cpp, once a second).
+// Slot 0 = mono XMA, 1 = stereo XMA (src/audio/xma_context.cpp, after the gain); 2..5 = render clients 0..3 after the
+// 5.1 fold, before the sum and the clamp (src/audio/switch/switch_audio_system.cpp). Peak and the sum of squares in
+// int16 units (32767 = full scale), n = samples. Relaxed atomics, no lock: a racing peak can be lost (a diagnostic).
+#include <atomic>
+#include <cstdint>
+struct HcuAudioLevel {
+  std::atomic<uint32_t> peak{0};
+  std::atomic<uint64_t> sumsq{0};
+  std::atomic<uint64_t> n{0};
+  void Add(uint32_t p, uint64_t s, uint32_t count) {
+    if (p > peak.load(std::memory_order_relaxed)) peak.store(p, std::memory_order_relaxed);
+    sumsq.fetch_add(s, std::memory_order_relaxed);
+    n.fetch_add(count, std::memory_order_relaxed);
+  }
+};
+extern "C" HcuAudioLevel rex_hcu_audio_levels[6];
+''')
+edit('src/audio/xma_context.cpp', [
+    ('#include <rex/filesystem.h>' + NL,
+     '#include <rex/filesystem.h>' + NL + r'''#if REX_PLATFORM_SWITCH
+// hcu (switch/sdk-edits-base.py): the SFX / music balance and the source levels of the [audio] line.
+#include <rex/hcu_audio_levels.h>
+extern "C" float rex_hcu_xma_gain(int stereo);  // hcu src/settings_menu.cpp: sfx_gain (mono), music_gain (stereo), 0..1
+HcuAudioLevel rex_hcu_audio_levels[6];
+// A decoded frame's big-endian int16 samples times the gain (Q15; 1 leaves them as they are), then its level.
+static void HcuGainAndLevel(uint8_t* be, size_t samples, bool stereo) {
+  const float gain = rex_hcu_xma_gain(stereo);
+  const int32_t g = gain >= 1.f ? 32768 : gain > 0.f ? int32_t(gain * 32768.f) : 0;
+  auto* p = reinterpret_cast<uint16_t*>(be);
+  uint32_t peak = 0;
+  uint64_t sumsq = 0;
+  for (size_t i = 0; i < samples; ++i) {
+    int32_t v = int16_t(__builtin_bswap16(p[i]));
+    if (g != 32768) {
+      v = (v * g) >> 15;
+      p[i] = __builtin_bswap16(uint16_t(int16_t(v)));
+    }
+    const uint32_t a = uint32_t(v < 0 ? -v : v);
+    peak = a > peak ? a : peak;
+    sumsq += uint64_t(a) * a;
+  }
+  rex_hcu_audio_levels[stereo ? 1 : 0].Add(peak, sumsq, uint32_t(samples));
+}
+#endif
+'''),
+    ('''              size_t(kBytesPerFrameChannel) << data->is_stereo);
+''',
+     '''              size_t(kBytesPerFrameChannel) << data->is_stereo);
+#if REX_PLATFORM_SWITCH
+    // hcu: after the frame cache and the dump, before the guest reads it.
+    HcuGainAndLevel(raw_frame_.data(), (size_t(kBytesPerFrameChannel) << data->is_stereo) / 2, bool(data->is_stereo));
+#endif
+'''),
+])
+edit('src/audio/switch/switch_audio_system.cpp', [
+    ('extern "C" void RexSwitchPerfMax(unsigned id, u64 value);' + NL,
+     'extern "C" void RexSwitchPerfMax(unsigned id, u64 value);' + NL + NL +
+     '// hcu (switch/sdk-edits-base.py): the render clients\' levels of the [audio] line. Only the output thread mixes:' + NL +
+     '// FillAndAppend sets the ordinal of the client MixFrameInto mixes.' + NL +
+     '#include <rex/hcu_audio_levels.h>' + NL + 'static uint32_t hcu_mix_client = 0;' + NL),
+    ('''  for (size_t i = 0; i < folded.size(); ++i) {
+    stereo_out[i] += folded[i];
+  }
+''',
+     '''  float hcu_peak = 0.f, hcu_sumsq = 0.f;  // hcu: this client's level (NaN and inf left out)
+  for (size_t i = 0; i < folded.size(); ++i) {
+    stereo_out[i] += folded[i];
+    const float a = std::fabs(folded[i]);
+    if (a <= 64.f) hcu_peak = std::max(hcu_peak, a), hcu_sumsq += a * a;
+  }
+  if (hcu_mix_client < 4)
+    rex_hcu_audio_levels[2 + hcu_mix_client].Add(uint32_t(hcu_peak * 32767.f),
+                                                 uint64_t(double(hcu_sumsq) * (32767.0 * 32767.0)),
+                                                 uint32_t(folded.size()));
+'''),
+    ('''      for (SwitchAudioDriver* driver : drivers_) {
+        // A client with nothing queued contributes silence and gets no
+''',
+     '''      hcu_mix_client = 0;  // hcu: the ordinal of the client MixFrameInto mixes
+      for (SwitchAudioDriver* driver : drivers_) {
+        // A client with nothing queued contributes silence and gets no
+'''),
+    ('''          ++frames_missing;
+        }
+''',
+     '''          ++frames_missing;
+        }
+        ++hcu_mix_client;
+'''),
+])
+print('changed (hcu audio balance):', *changed, sep=NL + '  ')

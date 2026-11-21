@@ -18,7 +18,8 @@
 HcuSettings hcu_settings = {.fps_mode = 0, .early_submit = 1, .gpu_frames = 3, .swap_images = 3, .clear_skip = 0, .shadow_direct = 0, .resolution = 0, .strip = 1, .fps_counter = 1, .rumble = 1, .shadow_bias = 0.f, .shadow_slope = 0.f,
                             .colour_bias = 0.f, .precise = 0, .filter = 0, .lod_bias = 0.f, .aniso = 1.f, .shadow_map = 1,
                             .view = 0, .view_step = 0, .dump = 0, .record = 0, .dxt_cpu = 1, .depth32 = 0, .gamma = 0,
-                            .rt16 = 1, .prepass_skip = 0, .upload_strips = 0, .tex_view = 0, .pad_applet = 0, .button_glyphs = 1, .clocks = 0, .audio_threads = 0};
+                            .rt16 = 1, .prepass_skip = 0, .upload_strips = 0, .tex_view = 0, .pad_applet = 0, .button_glyphs = 1, .clocks = 0, .audio_threads = 0,
+                            .sfx_gain = 100, .music_gain = 100};
 
 namespace {
 
@@ -48,6 +49,12 @@ const Item kItems[] = {
     {"OVERLAY", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
     {"FPS COUNTER", {"OFF", "ON"}, 2, false, [] { return hcu_settings.fps_counter; }, [](int i) { hcu_settings.fps_counter = i; }},
     {"RUMBLE", {"OFF", "ON"}, 2, false, [] { return hcu_settings.rumble; }, [](int i) { hcu_settings.rumble = i; }},
+    // Live: the SDK reads the value at each decoded XMA frame (rex_hcu_xma_gain). A file value off the 10 % steps shows
+    // as the step below it; a change snaps it to the steps.
+    {"SFX VOLUME", {"0 %", "10 %", "20 %", "30 %", "40 %", "50 %", "60 %", "70 %", "80 %", "90 %", "100 %"}, 11, false,
+     [] { return hcu_settings.sfx_gain / 10; }, [](int i) { hcu_settings.sfx_gain = i * 10; }},
+    {"MUSIC VOLUME", {"0 %", "10 %", "20 %", "30 %", "40 %", "50 %", "60 %", "70 %", "80 %", "90 %", "100 %"}, 11, false,
+     [] { return hcu_settings.music_gain / 10; }, [](int i) { hcu_settings.music_gain = i * 10; }},
     // A crutch for GPU-bound stages, not the default: fewer pixels, a softer picture.
     {"RESOLUTION", {"NATIVE 1280X720", "1120X630", "960X540", "800X450"}, 4, true, [] { return hcu_settings.resolution; },
      [](int i) { hcu_settings.resolution = i; }},
@@ -112,6 +119,7 @@ void Save() {
     std::fprintf(f, "fps_mode=%d\nearly_submit=%d\ngpu_frames=%d\nswap_images=%d\nclear_skip=%d\nshadow_direct=%d\nresolution=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass_skip=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%s\nclocks=%d\naudio_threads=%d\n",
                  s.fps_mode, s.early_submit, s.gpu_frames, s.swap_images, s.clear_skip, s.shadow_direct, s.resolution, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass_skip, s.gamma, s.rt16, s.button_glyphs ? "switch" : "xbox", s.clocks, s.audio_threads);
     // The settings.txt-only keys: written only when on, so a menu save keeps them and an old file stays as it was.
+    std::fprintf(f, "sfx_gain=%g\nmusic_gain=%g\n", s.sfx_gain / 100.0, s.music_gain / 100.0);
     if (s.resolve_clear_key) std::fprintf(f, "resolve_clear_key=%d\n", s.resolve_clear_key);
     if (s.trail_rearm) std::fprintf(f, "trail_rearm=%d\n", s.trail_rearm);
     if (s.cull) std::fprintf(f, "cull=%d\n", s.cull);
@@ -138,6 +146,9 @@ void Save() {
 }
 
 bool Exists(const std::string& p) { return access(p.c_str(), F_OK) == 0; }
+
+// sfx_gain / music_gain: 0..1 to whole percent; above 1 is 100 (attenuation only), below 0 or NaN is 0.
+int GainPercent(float v) { return v >= 1.f ? 100 : v > 0.f ? int(v * 100.f + 0.5f) : 0; }
 
 // Every close: settings.txt, and a jump when START STAGE changed to a stage while the menu was open (an edge: a
 // close without a change jumps nowhere, even with cheat_stage set).
@@ -189,6 +200,8 @@ void hcu_settings_load(const char* dir) {
       else if (!std::strcmp(key, "tex_view")) s.tex_view = int(v);  // read only (the Linux host has no pad)
       else if (!std::strcmp(key, "clocks")) s.clocks = int(v) ? 1 : 0;  // acted on at start (hcu_clocks_key)
       else if (!std::strcmp(key, "audio_threads")) s.audio_threads = int(v) ? 1 : 0;
+      else if (!std::strcmp(key, "sfx_gain")) s.sfx_gain = GainPercent(v);
+      else if (!std::strcmp(key, "music_gain")) s.music_gain = GainPercent(v);
       else if (!std::strcmp(key, "resolve_clear_key")) s.resolve_clear_key = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "trail_rearm")) s.trail_rearm = int(v) ? 1 : 0;
       else if (!std::strcmp(key, "cull")) s.cull = int(v) == 1 || int(v) == 2 ? int(v) : 0;
@@ -317,3 +330,9 @@ int hcu_take_stage_jump(void) {
 
 // The ultimate base's SDK reads settings.txt audio_threads through this (switch/sdk-edits-base.py, src/audio/audio_system.cpp).
 extern "C" int rex_hcu_audio_threads(void) { return hcu_settings.audio_threads; }
+
+// The SDK's XMA decoder asks this at each frame (switch/sdk-edits-base.py, src/audio/xma_context.cpp): 0..1, mono
+// streams sfx_gain, stereo streams music_gain. The menu thread writes the int; the audio thread reads it here.
+extern "C" float rex_hcu_xma_gain(int stereo) {
+  return __atomic_load_n(stereo ? &hcu_settings.music_gain : &hcu_settings.sfx_gain, __ATOMIC_RELAXED) / 100.f;
+}

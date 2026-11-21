@@ -14,6 +14,9 @@
 #include <switch.h>
 
 #include <atomic>
+#include <cmath>
+
+#include <rex/hcu_audio_levels.h>  // switch/sdk-edits-base.py: the [audio] line
 
 #include "hcu_pgo.h"
 #include "hcu_version.h"  // written by switch/build-base.sh: HCU_VERSION, HCU_BUILD_UTC, HCU_BUILD_ID
@@ -27,6 +30,7 @@ extern u32 __nx_applet_exit_mode;
 [[noreturn]] void __libnx_exit(int rc);
 int __real_main(int argc, char* argv[]);
 void hcu_input_flush(int stop);  // switch/host/input/nx_input_driver.cpp: input_record=1's file onto the card
+float rex_hcu_xma_gain(int stereo);  // src/settings_menu.cpp: sfx_gain / music_gain, 0..1
 }
 
 extern "C" volatile uint32_t hcu_gpu_swap;  // the strip's swap number (src/gpu/deko3d_backend.cpp)
@@ -436,15 +440,35 @@ void restore_clocks() {
   }
 }
 
+// The [audio] line, once a second (switch/sdk-edits-base.py, include/rex/hcu_audio_levels.h): peak/RMS (1 = full
+// scale) of the mono and stereo XMA streams after sfx_gain / music_gain, and of each render client c0..c3 after the
+// 5.1 fold, before the sum and the clamp. A slot with no samples this second is left out; no samples at all, no line.
+void print_audio_levels() {
+  static const char* const kName[6] = {"mono", "stereo", "c0", "c1", "c2", "c3"};
+  char text[200];
+  int len = 0;
+  for (int i = 0; i < 6; i++) {
+    HcuAudioLevel& l = rex_hcu_audio_levels[i];
+    const uint64_t n = l.n.exchange(0, std::memory_order_relaxed);
+    const uint32_t peak = l.peak.exchange(0, std::memory_order_relaxed);
+    const uint64_t sumsq = l.sumsq.exchange(0, std::memory_order_relaxed);
+    if (!n) continue;
+    len += std::snprintf(text + len, sizeof(text) - len, " %s %.3f/%.3f", kName[i], peak / 32767.0,
+                         std::sqrt(double(sumsq) / double(n)) / 32767.0);
+  }
+  if (len) std::printf("[audio] peak/rms:%s; sfx_gain %.1f music_gain %.1f\n", text, rex_hcu_xma_gain(0), rex_hcu_xma_gain(1));
+}
+
 // The log is buffered and flushed twice a second; fsync commits it to the card (after a hang and a hard reboot, a log
-// that was only flushed ended in garbage). Every 4th pass (2 s) keeps the clocks; every 2nd (1 s) flushes the input record.
+// that was only flushed ended in garbage). Every 4th pass (2 s) keeps the clocks; every 2nd (1 s) flushes the input
+// record and prints the [audio] line.
 void log_flush_loop(void*) {
   for (unsigned pass = 1; log_flush_running; pass++) {
     svcSleepThread(500'000'000LL);
     if (pass % 4 == 0) keep_clocks();
     if (pass % 4 == 2) govern();
     step_ladder();
-    if (pass % 2 == 0) hcu_input_flush(0);
+    if (pass % 2 == 0) hcu_input_flush(0), print_audio_levels();
     std::fflush(stdout);
     fsync(fileno(stdout));
   }

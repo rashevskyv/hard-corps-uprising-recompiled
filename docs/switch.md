@@ -157,6 +157,16 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   this build copies none, the ones in `sdmc:/switch/hcu/shaders/` are used.
 - New `settings.txt` key: `audio_threads=1` runs each audio client's callback on its own thread (the old SDK's patch);
   default 0 = the base's audio worker.
+- Volume balance (live; the menu's SFX VOLUME and MUSIC VOLUME, 0..100 % in steps of 10): `sfx_gain=0..1` scales
+  every mono XMA stream (the SE_* and Voice_* banks), `music_gain=0..1` every stereo XMA stream (BGM_xenon.bnk; a
+  stereo sound effect would follow it too). Attenuation only: above 1 is 1, below 0 is 0; default 1 = the game's own
+  mix. The SDK scales each decoded frame after the frame cache (switch/sdk-edits-base.py), so a change acts at the
+  next frame. The guest's FMOD still applies its own volumes after this.
+- The `[audio]` line, once a second:
+  `[audio] peak/rms: mono 0.912/0.104 stereo 0.500/0.120 c0 0.950/0.210 c1 0.020/0.003; sfx_gain 1.0 music_gain 1.0`.
+  Each pair is peak / RMS of that second, 1.000 = full scale. `mono` / `stereo`: the XMA streams after the gain,
+  before FMOD's volumes. `c0`..`c3`: each render client after the 5.1 fold, before the sum and the clamp (a peak
+  above 1 there can clip). A slot with no samples is left out.
 - Input record and replay (A/B runs without a hand; `switch/host/input/nx_input_driver.cpp`; keys saved only when on):
   `input_record=1` writes player 1's pad state at each poll to `sdmc:/switch/hcu/input.rec` (28 bytes: poll, the
   strip's swap number `#`, its `t`, the state the game got), from the first swap to the exit, flushed every second.

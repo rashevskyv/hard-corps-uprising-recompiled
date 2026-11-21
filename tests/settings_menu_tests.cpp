@@ -10,6 +10,8 @@
 #include "settings_menu.h"
 #include "../switch/sysclk_owner.h"
 
+extern "C" float rex_hcu_xma_gain(int stereo);  // src/settings_menu.cpp (the SDK's declaration)
+
 namespace {
 
 int g_failures = 0;
@@ -102,6 +104,22 @@ int main() {
     Check(text.find("clocks_cpu=1428\n") != std::string::npos, "a menu save keeps clocks_cpu");
     Check(text.find("clocks_ladder=1020/307.2,1581/384") != std::string::npos, "a menu save keeps clocks_ladder");
   }
+  // sfx_gain / music_gain: 0..1 in the file, percent in the struct (clamped), saved by a menu close, the SDK's getter.
+  Check(hcu_settings.sfx_gain == 100 && hcu_settings.music_gain == 100, "no gain keys: 100 %");
+  WriteFile(file, "sfx_gain=0.3\nmusic_gain=7\n");
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.sfx_gain == 30 && hcu_settings.music_gain == 100, "sfx_gain=0.3 is 30 %, music_gain=7 clamps to 100 %");
+  Check(rex_hcu_xma_gain(0) == 0.3f && rex_hcu_xma_gain(1) == 1.f, "the getter: mono 0.3, stereo 1");
+  WriteFile(file, "sfx_gain=-1\n");
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.sfx_gain == 0, "sfx_gain=-1 clamps to 0");
+  hcu_settings.sfx_gain = 50;
+  hcu_settings.music_gain = 80;
+  Toggle();
+  Toggle();
+  hcu_settings.sfx_gain = hcu_settings.music_gain = 100;
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.sfx_gain == 50 && hcu_settings.music_gain == 80, "a menu save keeps sfx_gain and music_gain");
   std::remove(file.c_str());
   rmdir(dir.c_str());
 
