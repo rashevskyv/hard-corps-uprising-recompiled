@@ -93,6 +93,10 @@ extern "C" volatile uint8_t rex_nx_dirty_coarse[0x200] = {};
 // (switch/host/input/nx_input_driver.cpp): it keys each pad state by the number the strip shows ("t <s> #<swap>").
 extern "C" volatile uint32_t hcu_gpu_swap = 0;
 extern "C" volatile uint64_t hcu_gpu_t0 = 0;
+// The [speed] meter's running totals (level swaps and their ticks, never reset): the clock governor of
+// switch/hcu_nx_base.cpp (clocks_auto=1) takes the speed over its own 2 s from their differences.
+extern "C" volatile uint32_t hcu_speed_swaps = 0;
+extern "C" volatile uint64_t hcu_speed_ticks = 0;
 
 namespace rex::graphics::deko {
 
@@ -1403,6 +1407,8 @@ class Deko3dCommandProcessor : public CommandProcessor {
         speed_ticks_ += now - swap_tick_;
         speed_swaps_++;
         speed_long_ += long_swap;
+        hcu_speed_ticks = hcu_speed_ticks + (now - swap_tick_);
+        hcu_speed_swaps = hcu_speed_swaps + 1;
       }
       speed_prev_level_ = level;
       // Due30's prediction: the average of the last two guest intervals (one interval's jitter drew two frames in a row).

@@ -30,6 +30,8 @@ void hcu_input_flush(int stop);  // switch/host/input/nx_input_driver.cpp: input
 }
 
 extern "C" volatile uint32_t hcu_gpu_swap;  // the strip's swap number (src/gpu/deko3d_backend.cpp)
+extern "C" volatile uint32_t hcu_speed_swaps;  // level swaps and their ticks, running totals (the governor's speed)
+extern "C" volatile uint64_t hcu_speed_ticks;
 
 namespace {
 
@@ -68,6 +70,18 @@ struct LadderStep { u32 cpu, gpu; };
 LadderStep ladder[kLadderMax];
 unsigned ladder_n = 0, ladder_start = 2400, ladder_len = 1500;
 int ladder_at = -1;
+// clocks_auto=1 (clocks=1 only; a clocks_ladder wins): the governor. Every 2 s it takes the game speed from the level
+// swaps of that time (the [speed] meter's counts). Below 97 %: one rung up (two below 90 %). At 99 % or more for
+// gov_wait samples in a row: one rung down; a rung that fails within 3 samples of the step down doubles that wait
+// (5 to 64). Between 97 and 99 % and in a stretch of fewer than 60 level swaps (a load, a menu) the rung stays.
+// The rungs are the knee found at the replay (0.410 A/B): CPU 1581 / GPU 384 holds 100 %, 1326 / 384 does not.
+constexpr LadderStep kRungs[] = {{1020000, 307200}, {1224000, 384000}, {1428000, 384000},
+                                 {1581000, 384000}, {1683000, 460800}, {1785000, 768000}};
+constexpr int kRungCount = sizeof(kRungs) / sizeof(kRungs[0]);
+bool gov_on = false;
+int gov_rung = 3;  // the default pair
+u32 gov_swaps = 0, gov_wait = 5, gov_good = 0, gov_since_down = 100;
+u64 gov_ticks = 0;
 constexpr u32 kNoAnswer = 1;           // owner: sys-clk did not answer, so the module is left alone
 bool clkrst_up = false;
 Service sysclk_srv;                     // sys-clk's IPC (trusted API): asked before every pcv call
@@ -253,11 +267,12 @@ void raise_clocks() {
     return;
   }
   // clocks_cpu=<MHz> / clocks_gpu=<MHz> in settings.txt (clocks=1 only): another target than the default 1581 / 384 (at most 1785 / 768; 0 = the default)
-  // (A/B of the steps above stock, CPU 1020 / GPU 307; the last line wins; 0 or above the default = the default).
+  // (A/B of the steps above stock, CPU 1020 / GPU 307; the last line wins; a 0 is ignored, the default stays).
   if (FILE* f = std::fopen("sdmc:/switch/hcu/settings.txt", "r")) {
     char line[256];
     unsigned v = 0;
     while (std::fgets(line, sizeof(line), f)) {
+      if (std::sscanf(line, "clocks_auto=%u", &v) == 1) gov_on = v != 0;
       if (std::sscanf(line, "clocks_ladder_swap=%u", &v) == 1) ladder_start = v;
       if (std::sscanf(line, "clocks_ladder_len=%u", &v) == 1 && v) ladder_len = v;
       if (std::strncmp(line, "clocks_ladder=", 14) == 0) {  // cpu/gpu MHz pairs, comma-separated; the last line wins
@@ -275,6 +290,8 @@ void raise_clocks() {
   }
   std::printf("[clock] settings.txt clocks=1 requested: CPU %u, GPU %u, memory %u MHz\n", clocks[0].wanted / 1000000,
               clocks[1].wanted / 1000000, clocks[2].wanted / 1000000);
+  if (gov_on) std::printf("[clock] clocks_auto=1: the governor starts at rung %d (CPU %u, GPU %u kHz)%s\n", gov_rung, kRungs[gov_rung].cpu, kRungs[gov_rung].gpu,
+                          ladder_n ? "; the ladder is set, so the governor is off" : "");
   // Before any pcv call: who else sets clocks. Horizon OC puts stock rates back every tick (fighting it froze consoles
   // in NFSU2's port); sys-clk-OC's IPC is another one.
   if (other_clock_tool("hoc:clk", "Horizon OC") || other_clock_tool("sysclkOC", "sys-clk-OC")) return;
@@ -321,16 +338,8 @@ void keep_clocks() {
 
 // Every 0.5 s (log_flush_loop): the ladder step of the current swap. A module the game holds is set to the step's rate
 // (up or down); clock.set follows it, so the check above does not put the old rate back. sys-clk's modules are left.
-void step_ladder() {
-  if (!clocks_on.load(std::memory_order_acquire) || !ladder_n) return;
-  const unsigned swap = hcu_gpu_swap;
-  if (swap < ladder_start) return;
-  const int at = int(std::min<unsigned>((swap - ladder_start) / ladder_len, ladder_n - 1));
-  if (at == ladder_at) return;
-  ladder_at = at;
-  const u32 want[2] = {ladder[at].cpu * 1000u, ladder[at].gpu * 1000u};
-  u32 got[2] = {};
-  Result rcs[2] = {};
+void set_pair(const LadderStep& step, u32 got[2], Result rcs[2]) {
+  const u32 want[2] = {step.cpu * 1000u, step.gpu * 1000u};
   for (int i = 0; i < 2; i++) {
     Clock& clock = clocks[i];
     if (clock.set == 0) continue;  // not held by the game (sys-clk's module, or no set yet)
@@ -342,8 +351,59 @@ void step_ladder() {
     clkrstCloseSession(&s);
     if (got[i]) clock.set = got[i];  // the rate the system took (the check compares with it)
   }
+}
+
+void step_ladder() {
+  if (!clocks_on.load(std::memory_order_acquire) || !ladder_n) return;
+  const unsigned swap = hcu_gpu_swap;
+  if (swap < ladder_start) return;
+  const int at = int(std::min<unsigned>((swap - ladder_start) / ladder_len, ladder_n - 1));
+  if (at == ladder_at) return;
+  ladder_at = at;
+  u32 got[2] = {};
+  Result rcs[2] = {};
+  set_pair(ladder[at], got, rcs);
   std::printf("[clock] ladder step %d at swap #%u: CPU %u, GPU %u kHz asked, read back CPU %u, GPU %u kHz (rc 0x%X 0x%X; 0 = not held)\n",
               at, swap, ladder[at].cpu, ladder[at].gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1]);
+}
+
+// Every 2 s (log_flush_loop): the governor (see kRungs).
+void govern() {
+  if (!gov_on || ladder_n || !clocks_on.load(std::memory_order_acquire)) return;
+  const u32 sw = hcu_speed_swaps;
+  const u64 tk = hcu_speed_ticks;
+  const u32 dsw = sw - gov_swaps;
+  const u64 dtk = tk - gov_ticks;
+  gov_swaps = sw;
+  gov_ticks = tk;
+  if (dsw < 60 || !dtk) return;
+  const double pct = dsw / (double(dtk) / double(armGetSystemTickFreq())) / 60.0 * 100.0;
+  gov_since_down++;
+  int to = gov_rung;
+  if (pct < 97.0) {
+    gov_good = 0;
+    if (gov_since_down <= 3 && gov_wait < 64) gov_wait *= 2;  // the lower rung failed: wait longer before trying it again
+    to = std::min(gov_rung + (pct < 90.0 ? 2 : 1), kRungCount - 1);
+  } else if (pct >= 99.0 && gov_rung > 0) {
+    if (++gov_good >= gov_wait) {
+      gov_good = 0;
+      to = gov_rung - 1;
+    }
+  } else {
+    gov_good = 0;
+  }
+  if (to == gov_rung) return;
+  if (to < gov_rung) {
+    if (gov_since_down >= 10) gov_wait = 5;
+    gov_since_down = 0;
+  }
+  u32 got[2] = {};
+  Result rcs[2] = {};
+  set_pair(kRungs[to], got, rcs);
+  std::printf("[clock] auto: speed %.1f %% over %u level swaps, rung %d -> %d at swap #%u: CPU %u, GPU %u kHz asked, read back CPU %u, GPU %u kHz (rc 0x%X 0x%X; wait %u samples)\n",
+              pct, dsw, gov_rung, to, (unsigned)hcu_gpu_swap, kRungs[to].cpu, kRungs[to].gpu, got[0] / 1000, got[1] / 1000, rcs[0],
+              rcs[1], gov_wait);
+  gov_rung = to;
 }
 
 // The old rates come back for the modules the game holds; sys-clk is asked first, its modules are left to it.
@@ -378,6 +438,7 @@ void log_flush_loop(void*) {
   for (unsigned pass = 1; log_flush_running; pass++) {
     svcSleepThread(500'000'000LL);
     if (pass % 4 == 0) keep_clocks();
+    if (pass % 4 == 2) govern();
     step_ladder();
     if (pass % 2 == 0) hcu_input_flush(0);
     std::fflush(stdout);
