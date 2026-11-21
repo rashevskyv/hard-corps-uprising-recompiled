@@ -90,6 +90,26 @@ int main() {
   Toggle();
   Toggle();
   Check(hcu_clocks_key(file.c_str()) == 0, "a menu save with clocks 0 writes clocks=0");
+  // fps_mode=3 (the removed 30 HALF SPEED) loads as 30, and the menu shows 30; RIGHT goes 30 -> 45 -> 60 -> 30.
+  WriteFile(file, "fps_mode=3\n");
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.fps_mode == 0, "fps_mode=3 loads as 0 (30)");
+  Toggle();
+  {
+    char lines[40][48] = {};
+    const int n = hcu_menu_lines(lines, 40);
+    Check(n > 1 && std::string(lines[1]).find("FRAME RATE") != std::string::npos && std::string(lines[1]).substr(21) == "30",
+          "the menu shows FRAME RATE 30 for fps_mode=3");
+    int seen[3] = {};
+    for (int i = 0; i < 3; i++) Press(HCU_MENU_RIGHT), seen[i] = hcu_settings.fps_mode;
+    Check(seen[0] == 4 && seen[1] == 2 && seen[2] == 0, "RIGHT cycles 30 (0), 45 (4), 60 (2), never 3");
+  }
+  Press(HCU_MENU_B);
+  WriteFile(dir + "fps", "30\n");
+  WriteFile(file, "rumble=1\n");
+  hcu_settings_load(dir.c_str());
+  Check(hcu_settings.fps_mode == 0, "the fps file 30 sets 0 (30)");
+  unlink((dir + "fps").c_str());
   // A menu save keeps the clocks_* lines (read by the NRO's start-up code, not by the struct).
   WriteFile(file, "clocks=1\nclocks_auto=0\nclocks_cpu=1428\nclocks_ladder=1020/307.2,1581/384\r\nfps_mode=0\n");
   hcu_settings_load(dir.c_str());
@@ -282,7 +302,7 @@ int main() {
       const Ladder l = ladder_for(mode, docked);
       return l.rungs[0].cpu == cpu && l.rungs[0].gpu == gpu;
     };
-    Check(first(0, false, 1122000, 384000) && first(3, false, 1122000, 384000), "clock: handheld 30 starts at 1122/384");
+    Check(first(0, false, 1122000, 384000), "clock: handheld 30 starts at 1122/384");
     Check(first(4, false, 1326000, 460800), "clock: handheld 45 starts at 1326/460.8");
     Check(first(1, false, 1683000, 691200) && first(2, false, 1683000, 691200), "clock: handheld 60 starts at 1683/691.2");
     Check(first(0, true, 1683000, 844800) && first(4, true, 1683000, 844800) && first(2, true, 1683000, 844800),
@@ -296,7 +316,6 @@ int main() {
       }
     }
     Check(gov_speed(0, 120, 60, 2.0) == 100.0, "clock: 30 fps (every second frame drawn) is 100 %");
-    Check(gov_speed(3, 60, 60, 2.0) == 100.0, "clock: 30 half speed (30 guest frames a second) is 100 %");
     Check(gov_speed(2, 120, 108, 2.0) == 90.0, "clock: 60 with busy skips counts the shown frames");
     Check(gov_speed(4, 120, 90, 2.0) == 100.0, "clock: 45 shows 45 of 60");
     Check(gov_speed(1, 108, 108, 2.0) == 90.0, "clock: 60 with a slow game counts the game speed");

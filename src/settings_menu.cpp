@@ -43,9 +43,10 @@ struct Item {
 };
 
 const Item kItems[] = {
-    // Shown in rate order; the saved fps_mode keeps its old numbers (1, the old 60skip, now does what 2 does: shown as 60).
-    {"FRAME RATE", {"30", "45", "60", "30 HALF SPEED"}, 4, false,
-     [] { const int m = hcu_settings.fps_mode; return m == 4 ? 1 : m == 1 ? 2 : m; },
+    // Shown in rate order; the saved fps_mode keeps its old numbers (1, the old 60skip, now does what 2 does: shown as 60;
+    // 3, the removed 30 HALF SPEED, loads as 0).
+    {"FRAME RATE", {"30", "45", "60"}, 3, false,
+     [] { const int m = hcu_settings.fps_mode; return m == 4 ? 1 : m == 1 || m == 2 ? 2 : 0; },
      [](int i) { hcu_settings.fps_mode = i == 1 ? 4 : i; }},
     {"OVERLAY", {"OFF", "ON"}, 2, false, [] { return hcu_settings.strip; }, [](int i) { hcu_settings.strip = i; }},
     {"FPS COUNTER", {"OFF", "ON"}, 2, false, [] { return hcu_settings.fps_counter; }, [](int i) { hcu_settings.fps_counter = i; }},
@@ -235,14 +236,14 @@ void hcu_settings_load(const char* dir) {
     }
     std::fclose(f);
   }
-  if (s.fps_mode < 0 || s.fps_mode > 4) s.fps_mode = 0;
+  if (s.fps_mode < 0 || s.fps_mode > 4 || s.fps_mode == 3) s.fps_mode = 0;  // 3: the removed 30 HALF SPEED
   // The marker files of the console A/B tests win, but fps only while settings.txt holds no fps_mode (the menu's
-  // choice, saved when it closes): "30skip" (30), "45", "60skip" / "60" (60), "30" (the half-speed cap, as before).
+  // choice, saved when it closes): "30skip" / "30" (30), "45", "60skip" / "60" (60).
   if (FILE* f = std::fopen((g_dir + "fps").c_str(), "r")) {
     char t[16] = {};
     if (std::fgets(t, sizeof(t), f)) {
       t[std::strcspn(t, "\r\n")] = 0;
-      const int m = !std::strncmp(t, "30skip", 6) ? 0 : !std::strncmp(t, "60skip", 6) ? 1 : std::atoi(t) == 30 ? 3 : std::atoi(t) == 45 ? 4 : 2;
+      const int m = !std::strncmp(t, "30skip", 6) ? 0 : !std::strncmp(t, "60skip", 6) ? 1 : std::atoi(t) == 30 ? 0 : std::atoi(t) == 45 ? 4 : 2;
       if (saved_fps) std::printf("[nx] settings: the fps file (%s) is ignored: settings.txt fps_mode=%d (the menu's choice) wins\n", t, s.fps_mode);
       else {
         s.fps_mode = m;

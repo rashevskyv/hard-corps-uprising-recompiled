@@ -288,7 +288,7 @@ void raise_clocks() {
     unsigned v = 0;
     bool auto_key = false;
     while (std::fgets(line, sizeof(line), f)) {
-      if (std::sscanf(line, "fps_mode=%u", &v) == 1) mode = v <= 4 ? int(v) : 0;  // as hcu_settings_load
+      if (std::sscanf(line, "fps_mode=%u", &v) == 1) mode = v <= 4 && v != 3 ? int(v) : 0;  // as hcu_settings_load
       if (std::sscanf(line, "clocks_auto=%u", &v) == 1) gov_on = v != 0, auto_key = true;
       if (std::sscanf(line, "clocks_cpu=%u", &v) == 1 && v) fixed_key = true;
       if (std::sscanf(line, "clocks_gpu=%u", &v) == 1 && v) fixed_key = true;

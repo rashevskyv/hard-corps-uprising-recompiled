@@ -41,7 +41,7 @@ Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, 
 
 | Setting | Values |
 | --- | --- |
-| FRAME RATE | 30 (default), 60 SKIP WHEN BUSY, 60, 30 HALF SPEED |
+| FRAME RATE | 30 (default), 45, 60. A `settings.txt` from an older build with `fps_mode=3` (the removed 30 HALF SPEED) loads as 30. |
 | OVERLAY | the version and performance line at the bottom of the screen: ON (default), OFF |
 | FPS COUNTER | the frame rate at the bottom of the screen: ON (default), OFF. It does not depend on OVERLAY: with OVERLAY off the frame rate is shown alone. After the rate it shows `t <seconds> #<swap>`: the time since the first drawn frame and the swap number, the same clock and counter as the log's `swap #...` lines and the -meter build's `[nx] load t ... s, swap #...` line, so a screenshot finds its place in the log. |
 | RUMBLE | ON (default), OFF |

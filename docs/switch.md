@@ -100,8 +100,8 @@ X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screensho
   band) on handheld, a Joy-Con pair or a Pro Controller.
 - **Settings menu.** Both stick clicks (L3 + R3) open and close it (`src/settings_menu.cpp`, drawn by the
   deko3d backend with the strip's 5x7 font). Up/down, left/right or A to change, B to close; closing saves
-  `sdmc:/switch/hcu/settings.txt`. The game keeps running behind it. Lines: frame rate (30 / 60 skip when busy
-  / 60 / 30 half speed), performance strip, rumble, shadow bias, colour bias, shadow map, view (live), precise
+  `sdmc:/switch/hcu/settings.txt`. The game keeps running behind it. Lines: frame rate (30 / 45 / 60; the old
+  `fps_mode=3`, 30 half speed, is removed and loads as 30), performance strip, rumble, shadow bias, colour bias, shadow map, view (live), precise
   shaders (next start). VIEW shows the frame's scene copy before the post effects, or the shadow map (the depth
   texture the receivers sample), instead of the front buffer: which one has the console hatching names the pass. There is no texture
   filter line any more: forced linear filtering blends the 8-bit palette indices of the sprites (wrong colours,
@@ -147,7 +147,7 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
 
   | Console, FRAME RATE | Rungs (first = start and floor) | Source of the first rung |
   | --- | --- | --- |
-  | Handheld, 30 and 30 HALF SPEED | 1122/384, 1224/384, 1428/384, 1581/384, 1683/460.8, 1785/768 | the user's guess, not measured |
+  | Handheld, 30 | 1122/384, 1224/384, 1428/384, 1581/384, 1683/460.8, 1785/768 | the user's guess, not measured |
   | Handheld, 45 | 1326/460.8, 1428/460.8, 1581/460.8, 1683/460.8, 1785/768 | the user's guess, not measured |
   | Handheld, 60 | 1683/691.2, 1785/768, 1785/844.8, 1785/921.6 | the user's choice; by hand, stock CPU with GPU 690 held 60 fps |
   | Docked, every mode | 1683/844.8, 1785/844.8, 1785/921.6 | the user's guess ("1700 and 800"), not measured |
@@ -157,7 +157,7 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
 - The governor runs every 2 s. The ladder is picked at start from `settings.txt` `fps_mode` and the console mode
   (`appletGetOperationMode`). The menu's FRAME RATE (in level play) and a dock or undock (at any time) switch the
   ladder live: the new ladder starts on its first rung, and that sample is dropped. The speed: the level swaps (the
-  `[speed]` meter's counts) against 60 guest frames a second (30 in 30 HALF SPEED, which runs the game at half speed);
+  `[speed]` meter's counts) against 60 guest frames a second;
   in 45 and 60 also the drawn level swaps against 45 or 60, the lower of the two counts (those modes skip a frame the
   GPU is busy for, so the game speed alone stays 100 % while fewer frames are shown). In 30 the game speed alone
   counts (its 30 Hz pacing reads about 100 %). One rung up below 97 % (two below 90 %), one down after 5 samples at

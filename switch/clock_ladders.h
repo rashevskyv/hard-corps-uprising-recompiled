@@ -11,7 +11,7 @@ namespace hcu_clock {
 struct Rung { uint32_t cpu, gpu; };  // kHz
 
 // The first rung is the start and the floor: the governor never goes below it. Handheld: one ladder per mode.
-// 30 (fps_mode 0) and 30 HALF SPEED (3): 1122/384 is the user's guess, not measured.
+// 30 (fps_mode 0): 1122/384 is the user's guess, not measured.
 constexpr Rung k30[] = {{1122000, 384000}, {1224000, 384000}, {1428000, 384000},
                         {1581000, 384000}, {1683000, 460800}, {1785000, 768000}};
 // 45 (fps_mode 4): 1326/460.8 is the user's guess, not measured.
@@ -38,15 +38,14 @@ constexpr Ladder ladder_for(int fps_mode, bool docked) {
 }
 
 constexpr const char* mode_name(int fps_mode) {
-  return fps_mode == 3 ? "30 fps half speed" : fps_mode == 4 ? "45 fps" : fps_mode == 1 || fps_mode == 2 ? "60 fps" : "30 fps";
+  return fps_mode == 4 ? "45 fps" : fps_mode == 1 || fps_mode == 2 ? "60 fps" : "30 fps";
 }
 
 // The speed in % from the level swaps (all guest frames, skipped ones too) and the drawn ones of `secs` seconds.
-// Full game speed is 60 guest frames a second, 30 in 30 HALF SPEED (it runs the game at half speed). 45 and 60 skip a
-// frame the GPU is busy for, so the game keeps its speed while fewer frames are shown: there the shown frames against
-// 45 or 60 count too (the lower of the two). 30 keeps the game speed only (its 30 Hz pacing draws about 30).
+// Full game speed is 60 guest frames a second. 45 and 60 skip a frame the GPU is busy for, so the game keeps its speed
+// while fewer frames are shown: there the shown frames against 45 or 60 count too (the lower of the two). 30 keeps the game speed only (its 30 Hz pacing draws about 30).
 inline double gov_speed(int fps_mode, uint32_t swaps, uint32_t drawn, double secs) {
-  const double game = swaps / secs / (fps_mode == 3 ? 30.0 : 60.0) * 100.0;
+  const double game = swaps / secs / 60.0 * 100.0;
   const double shown_fps = fps_mode == 4 ? 45.0 : fps_mode == 1 || fps_mode == 2 ? 60.0 : 0.0;
   if (shown_fps == 0.0) return game;
   const double shown = drawn / secs / shown_fps * 100.0;
