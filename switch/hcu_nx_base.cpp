@@ -382,7 +382,8 @@ void govern() {
   int to = gov_rung;
   if (pct < 97.0) {
     gov_good = 0;
-    if (gov_since_down <= 3 && gov_wait < 64) gov_wait *= 2;  // the lower rung failed: wait longer before trying it again
+    // The lower rung failed at once: wait longer before trying it again; it held for more than 3 samples: back to 5.
+    gov_wait = gov_since_down <= 3 ? std::min(gov_wait * 2, 64u) : 5;
     to = std::min(gov_rung + (pct < 90.0 ? 2 : 1), kRungCount - 1);
   } else if (pct >= 99.0 && gov_rung > 0) {
     if (++gov_good >= gov_wait) {
@@ -393,10 +394,7 @@ void govern() {
     gov_good = 0;
   }
   if (to == gov_rung) return;
-  if (to < gov_rung) {
-    if (gov_since_down >= 10) gov_wait = 5;
-    gov_since_down = 0;
-  }
+  if (to < gov_rung) gov_since_down = 0;
   u32 got[2] = {};
   Result rcs[2] = {};
   set_pair(kRungs[to], got, rcs);
