@@ -22,7 +22,7 @@ The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled g
 > - **Very little testing**: a few hours of single player on one console. Graphical glitches, crashes and freezes are possible, and save data may be lost.
 > - **Local 2-player needs two full controllers** (Pro Controller or a Joy-Con pair each; a single Joy-Con is not accepted, the game uses every button). The Xbox LIVE features are not available.
 > - **The DLC characters** (Harley Daniels, Sayuri, Leviathan) work from your own marketplace packages: see "DLC characters" below.
-> - **30 fps by default.** The game runs at full speed and every second frame is drawn. The 60 fps modes can slow the game down in busy scenes.
+> - **30 fps by default.** The game runs at full speed and every second frame is drawn. The whole default setup (clocks, frame skipping, speed) is tuned for 30 fps. **60 fps needs an overclock** (see "Clocks and 60 fps" below); without it the 60 fps modes can slow the game down in busy scenes.
 > - No launcher, cheats, achievements or display options: those are PC features.
 
 ### Install
@@ -47,6 +47,14 @@ Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, 
 | RUMBLE | ON (default), OFF |
 | BUTTON ICONS | the button pictures in the game's prompts: SWITCH (default, our own Switch button icons), XBOX (the game's Xbox icons, with the A/B and X/Y pictures swapped so that each one shows the Switch letter of that button, as in 0.303). Applies at the next start. In `settings.txt`: `button_glyphs=switch` or `button_glyphs=xbox`. |
 | CONTROLLERS | press **A**: the console's controller applet (1 or 2 players). Pair the second controller there for local 2-player. |
+
+### Clocks and 60 fps
+
+This build is made with the **Ultimate base** pipeline (`renut_nx_ultimate_base`: its SDK, toolchain and PGO tools), not with the old SDK of the first Switch builds.
+
+- **Default (30 fps):** the game keeps full speed. `clocks=1` in `settings.txt` raises the CPU to 1581 MHz, the GPU to 384 MHz and the memory to 1600 MHz at start (stock: CPU 1020, GPU 307). With `clocks=1` a **governor** then moves the CPU/GPU pair over six steps (1020/307 up to 1785/768 MHz) by the measured game speed: one step up below 97 %, one step down after several seconds at 99 % or more. `clocks_auto=0` turns the governor off (the pair stays 1581/384); `clocks_cpu=<MHz>` / `clocks_gpu=<MHz>` set a fixed pair. sys-clk keeps priority: a module it sets is left to it.
+- **Measured** (the recorded 2.5-minute replay, 30 fps mode, builds 0.404 to 0.414): CPU 1020 with GPU 691 gave 95 % of full speed (worst 5-second window 80 %); CPU 1581 with GPU 384 held about 100 %; CPU 1326 with GPU 384 did not. With the governor and the PGO build the replay ran 99.7 % of full speed with about 44 % of the time at stock clocks.
+- **60 fps needs an overclock.** By hand, in 60 fps mode (scenes not recorded; clocks set with sys-clk): CPU 1785 / GPU 844 MHz held 60 fps with no drops; CPU 1200 / GPU 800+ MHz held 60 fps; GPU 690 MHz with the stock CPU also held 60 fps. At stock clocks the 60 fps modes can slow down in busy scenes. The built-in `clocks=1` pair (1581/384) is chosen for 30 fps, not for 60.
 
 ### Local 2-player
 
