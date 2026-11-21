@@ -19,8 +19,9 @@
 #include <rex/hcu_audio_levels.h>  // switch/sdk-edits-base.py: the [audio] line
 
 #include "hcu_pgo.h"
+#include "clock_ladders.h"
 #include "hcu_version.h"  // written by switch/build-base.sh: HCU_VERSION, HCU_BUILD_UTC, HCU_BUILD_ID
-#include "settings_menu.h"  // hcu_clocks_key
+#include "settings_menu.h"  // hcu_clocks_key, hcu_settings.fps_mode
 #include "sysclk_owner.h"
 #include "xma_voice_table.h"  // the voice table: built before the base's main, its counters on the [audio] line
 
@@ -37,6 +38,7 @@ float rex_hcu_xma_gain(int cls);  // src/settings_menu.cpp: 0 sfx_gain, 1 music_
 extern "C" volatile uint32_t hcu_gpu_swap;  // the strip's swap number (src/gpu/deko3d_backend.cpp)
 extern "C" volatile uint32_t hcu_speed_swaps;  // level swaps and their ticks, running totals (the governor's speed)
 extern "C" volatile uint64_t hcu_speed_ticks;
+extern "C" volatile uint32_t hcu_speed_drawn;  // of those swaps, the drawn ones
 
 namespace {
 
@@ -44,7 +46,8 @@ const char* const kDataDir = "sdmc:/switch/hcu";
 Thread log_flush_thread;
 volatile bool log_flush_running = false;
 
-// settings.txt clocks=1 (default 0: the game touches no clock): CPU 1581, GPU 384, memory 1600 MHz (0.409 A/B: about 100 % speed at the replay, as 1785 / 768) through clkrst,
+// settings.txt clocks=1 (default 0: the game touches no clock): memory 1600 MHz, CPU / GPU the first rung of the frame-rate mode's
+// ladder (clock_ladders.h; with clocks_auto=0: CPU 1581, GPU 384, 0.409 A/B: about 100 % speed at the replay in 30 fps) through clkrst,
 // as switch/host/switch_nx.cpp did in the old SDK's build. sys-clk has priority, per module: a module it sets (an
 // override, or a title or global profile rate) is its own, and the game makes no pcv call for it; a module it leaves
 // ("Do not override", or sys-clk disabled) the game sets. sys-clk is asked again every 2 s, so a change in its
@@ -71,21 +74,24 @@ constinit Clock clocks[] = {  // userAppInit runs before the C++ constructors
 // (default 1500, about 28 s), the last one stays. The pairs may be lower than the rates the game holds (A/B of the
 // steps above stock: find where the speed starts to fall).
 constexpr unsigned kLadderMax = 16;
-struct LadderStep { u32 cpu, gpu; };
+using LadderStep = hcu_clock::Rung;  // kHz
 LadderStep ladder[kLadderMax];
 unsigned ladder_n = 0, ladder_start = 2400, ladder_len = 1500;
 int ladder_at = -1;
-// The governor (on with clocks=1; clocks_auto=0 turns it off; a clocks_ladder or a clocks_cpu / clocks_gpu key wins). Every 2 s it takes the game speed from the level
-// swaps of that time (the [speed] meter's counts). Below 97 %: one rung up (two below 90 %). At 99 % or more for
-// gov_wait samples in a row: one rung down; a rung that fails within 3 samples of the step down doubles that wait
-// (5 to 64). Between 97 and 99 % and in a stretch of fewer than 60 level swaps (a load, a menu) the rung stays.
-// The rungs are the knee found at the replay (0.410 A/B): CPU 1581 / GPU 384 holds 100 %, 1326 / 384 does not.
-constexpr LadderStep kRungs[] = {{1020000, 307200}, {1224000, 384000}, {1428000, 384000},
-                                 {1581000, 384000}, {1683000, 460800}, {1785000, 768000}};
-constexpr int kRungCount = sizeof(kRungs) / sizeof(kRungs[0]);
+// The governor (on with clocks=1; clocks_auto=0 turns it off; a clocks_ladder or a clocks_cpu / clocks_gpu key wins). Its
+// ladder (clock_ladders.h) is the frame-rate mode's in handheld (30, 45, 60) and one for every mode docked: from
+// settings.txt fps_mode and the console mode at start, then from the menu's FRAME RATE and the console mode (both read
+// every 2 s in level play); it starts on the first rung, which is also the floor. Every 2 s it takes the speed
+// from the level swaps of that time (the [speed] meter's counts; in 45 and 60 also the drawn ones: gov_speed). Below
+// 97 %: one rung up (two below 90 %). At 99 % or more for gov_wait samples in a row: one rung down; a rung that fails
+// within 3 samples of the step down doubles that wait (5 to 64). Between 97 and 99 % and in a stretch of fewer than 60
+// level swaps (a load, a menu) the rung stays. (0.410 A/B at the replay, 30 fps: CPU 1581 / GPU 384 held 100 %, 1326 / 384 did not.)
 bool gov_on = true;  // on with clocks=1; off with clocks_auto=0, with clocks_cpu / clocks_gpu (unless clocks_auto=1), or a ladder
-int gov_rung = 3;  // the default pair
-u32 gov_swaps = 0, gov_wait = 5, gov_good = 0, gov_since_down = 100;
+int gov_mode = 0;    // the fps_mode and the console mode the ladder is for
+bool gov_docked = false;
+constinit hcu_clock::Ladder gov_ladder = hcu_clock::ladder_for(0, false);  // constinit: raise_clocks runs before the constructors
+int gov_rung = 0;    // the ladder's first rung: the start and the floor
+u32 gov_swaps = 0, gov_drawn = 0, gov_wait = 5, gov_good = 0, gov_since_down = 100;
 u64 gov_ticks = 0;
 constexpr u32 kNoAnswer = 1;           // owner: sys-clk did not answer, so the module is left alone
 bool clkrst_up = false;
@@ -271,13 +277,18 @@ void raise_clocks() {
                 busy_loop_mhz());
     return;
   }
-  // clocks_cpu=<MHz> / clocks_gpu=<MHz> in settings.txt (clocks=1 only): another target than the default 1581 / 384 (at most 1785 / 768; 0 = the default)
+  // clocks_cpu=<MHz> / clocks_gpu=<MHz> in settings.txt (clocks=1 only): a fixed pair instead of the governor's first rung (at most 1785 / 768; 0 = not set)
   // (A/B of the steps above stock, CPU 1020 / GPU 307; the last line wins; a 0 is ignored, the default stays).
+  // fps_mode picks the governor's ladder: hcu_settings is not loaded yet (the backend loads it), so it is read here; the
+  // fps file of the debug dir is not, the governor's first sample follows hcu_settings.fps_mode.
+  int mode = 0;
+  bool fixed_key = false;
   if (FILE* f = std::fopen("sdmc:/switch/hcu/settings.txt", "r")) {
     char line[256];
     unsigned v = 0;
-    bool auto_key = false, fixed_key = false;
+    bool auto_key = false;
     while (std::fgets(line, sizeof(line), f)) {
+      if (std::sscanf(line, "fps_mode=%u", &v) == 1) mode = v <= 4 ? int(v) : 0;  // as hcu_settings_load
       if (std::sscanf(line, "clocks_auto=%u", &v) == 1) gov_on = v != 0, auto_key = true;
       if (std::sscanf(line, "clocks_cpu=%u", &v) == 1 && v) fixed_key = true;
       if (std::sscanf(line, "clocks_gpu=%u", &v) == 1 && v) fixed_key = true;
@@ -296,6 +307,12 @@ void raise_clocks() {
     }
     std::fclose(f);
     if (fixed_key && !auto_key) gov_on = false;  // a fixed pair from the file is meant: no governor unless clocks_auto=1
+  }
+  if (gov_on && !ladder_n) {
+    gov_mode = mode;
+    gov_docked = appletGetOperationMode() == AppletOperationMode_Console;  // libnx's value, kept by applet messages
+    gov_ladder = hcu_clock::ladder_for(mode, gov_docked);
+    if (!fixed_key) clocks[0].wanted = gov_ladder.rungs[0].cpu * 1000u, clocks[1].wanted = gov_ladder.rungs[0].gpu * 1000u;
   }
   std::printf("[clock] settings.txt clocks=1 requested: CPU %u, GPU %u, memory %u MHz\n", clocks[0].wanted / 1000000,
               clocks[1].wanted / 1000000, clocks[2].wanted / 1000000);
@@ -325,8 +342,9 @@ void raise_clocks() {
     return;
   }
   if (gov_on && !ladder_n) {  // after every early return: the clocks are really the game's
-    std::printf("[clock] the governor is on, it starts at rung %d (CPU %u, GPU %u kHz)\n", gov_rung, kRungs[gov_rung].cpu,
-                kRungs[gov_rung].gpu);
+    std::printf("[clock] auto: mode %s (fps_mode %d), %s, ladder %s (%d rungs), start rung 0 (CPU %g, GPU %g MHz; the floor); the memory stays on every rung\n",
+                hcu_clock::mode_name(gov_mode), gov_mode, gov_docked ? "docked" : "handheld", gov_ladder.name, gov_ladder.count, gov_ladder.rungs[0].cpu / 1000.0,
+                gov_ladder.rungs[0].gpu / 1000.0);
   }
   const u32 loop_before = busy_loop_mhz();
   u32 now[3];
@@ -378,24 +396,53 @@ void step_ladder() {
               at, swap, ladder[at].cpu, ladder[at].gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1]);
 }
 
-// Every 2 s (log_flush_loop): the governor (see kRungs).
+// Every 2 s (log_flush_loop): the governor (see gov_on).
 void govern() {
   if (!gov_on || ladder_n || !clocks_on.load(std::memory_order_acquire)) return;
-  const u32 sw = hcu_speed_swaps;
+  const u32 sw = hcu_speed_swaps, dr = hcu_speed_drawn;
   const u64 tk = hcu_speed_ticks;
-  const u32 dsw = sw - gov_swaps;
+  const u32 dsw = sw - gov_swaps, ddr = dr - gov_drawn;
   const u64 dtk = tk - gov_ticks;
   gov_swaps = sw;
+  gov_drawn = dr;
   gov_ticks = tk;
-  if (dsw < 60 || !dtk) return;
-  const double pct = dsw / (double(dtk) / double(armGetSystemTickFreq())) / 60.0 * 100.0;
+  const bool level = dsw >= 60 && dtk;
+  // The menu's FRAME RATE and the console mode are live. The console mode is read every 2 s (an undock in a menu must
+  // not keep the docked rates in handheld); fps_mode only in level play (hcu_settings is loaded by then). A change drops
+  // this sample (part of it is the old mode's); a new ladder starts on its first rung.
+  const int mode = level ? hcu_settings.fps_mode : gov_mode;
+  const bool docked = appletGetOperationMode() == AppletOperationMode_Console;
+  if (mode != gov_mode || docked != gov_docked) {
+    const hcu_clock::Ladder was = gov_ladder;
+    gov_mode = mode;
+    gov_docked = docked;
+    gov_ladder = hcu_clock::ladder_for(mode, docked);
+    gov_good = 0;
+    gov_wait = 5;
+    gov_since_down = 100;
+    if (gov_ladder.rungs == was.rungs) {
+      std::printf("[clock] auto: mode %s (fps_mode %d), %s, ladder %s stays, rung %d\n", hcu_clock::mode_name(mode), mode,
+                  docked ? "docked" : "handheld", gov_ladder.name, gov_rung);
+      return;
+    }
+    gov_rung = 0;
+    u32 got[2] = {};
+    Result rcs[2] = {};
+    set_pair(gov_ladder.rungs[0], got, rcs);
+    std::printf("[clock] auto: mode %s (fps_mode %d), %s, ladder %s (%d rungs), start rung 0 (CPU %g, GPU %g MHz; the floor) at swap #%u, read back CPU %u, GPU %u kHz (rc 0x%X 0x%X)\n",
+                hcu_clock::mode_name(mode), mode, docked ? "docked" : "handheld", gov_ladder.name, gov_ladder.count, gov_ladder.rungs[0].cpu / 1000.0,
+                gov_ladder.rungs[0].gpu / 1000.0, (unsigned)hcu_gpu_swap, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1]);
+    return;
+  }
+  if (!level) return;
+  const double pct = hcu_clock::gov_speed(gov_mode, dsw, ddr, double(dtk) / double(armGetSystemTickFreq()));
   gov_since_down++;
   int to = gov_rung;
   if (pct < 97.0) {
     gov_good = 0;
     // The lower rung failed at once: wait longer before trying it again; it held for more than 3 samples: back to 5.
     gov_wait = gov_since_down <= 3 ? std::min(gov_wait * 2, 64u) : 5;
-    to = std::min(gov_rung + (pct < 90.0 ? 2 : 1), kRungCount - 1);
+    to = std::min(gov_rung + (pct < 90.0 ? 2 : 1), gov_ladder.count - 1);
   } else if (pct >= 99.0 && gov_rung > 0) {
     if (++gov_good >= gov_wait) {
       gov_good = 0;
@@ -408,10 +455,10 @@ void govern() {
   if (to < gov_rung) gov_since_down = 0;
   u32 got[2] = {};
   Result rcs[2] = {};
-  set_pair(kRungs[to], got, rcs);
-  std::printf("[clock] auto: speed %.1f %% over %u level swaps, rung %d -> %d at swap #%u: CPU %u, GPU %u kHz asked, read back CPU %u, GPU %u kHz (rc 0x%X 0x%X; wait %u samples)\n",
-              pct, dsw, gov_rung, to, (unsigned)hcu_gpu_swap, kRungs[to].cpu, kRungs[to].gpu, got[0] / 1000, got[1] / 1000, rcs[0],
-              rcs[1], gov_wait);
+  set_pair(gov_ladder.rungs[to], got, rcs);
+  std::printf("[clock] auto: speed %.1f %% over %u level swaps (%u drawn), ladder %s, rung %d -> %d at swap #%u: CPU %u, GPU %u kHz asked, read back CPU %u, GPU %u kHz (rc 0x%X 0x%X; wait %u samples)\n",
+              pct, dsw, ddr, gov_ladder.name, gov_rung, to, (unsigned)hcu_gpu_swap, gov_ladder.rungs[to].cpu,
+              gov_ladder.rungs[to].gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1], gov_wait);
   gov_rung = to;
 }
 

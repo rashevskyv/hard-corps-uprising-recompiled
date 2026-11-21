@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "settings_menu.h"
+#include "../switch/clock_ladders.h"
 #include "../switch/sysclk_owner.h"
 
 extern "C" float rex_hcu_xma_gain(int cls);  // src/settings_menu.cpp (the SDK's declaration): 0 sfx, 1 music, 2 voice
@@ -272,6 +273,33 @@ int main() {
     c.enabled = 0;
     Check(target_hz(c, title, global, 1) == 0, "sys-clk disabled sets nothing");
     Check(api_trusted(4) && api_trusted(5) && !api_trusted(2) && !api_trusted(6), "sys-clk: only IPC API 4 and 5");
+  }
+
+  // The governor's ladder per mode and its speed (switch/clock_ladders.h).
+  {
+    using namespace hcu_clock;
+    const auto first = [](int mode, bool docked, uint32_t cpu, uint32_t gpu) {
+      const Ladder l = ladder_for(mode, docked);
+      return l.rungs[0].cpu == cpu && l.rungs[0].gpu == gpu;
+    };
+    Check(first(0, false, 1122000, 384000) && first(3, false, 1122000, 384000), "clock: handheld 30 starts at 1122/384");
+    Check(first(4, false, 1326000, 460800), "clock: handheld 45 starts at 1326/460.8");
+    Check(first(1, false, 1683000, 691200) && first(2, false, 1683000, 691200), "clock: handheld 60 starts at 1683/691.2");
+    Check(first(0, true, 1683000, 844800) && first(4, true, 1683000, 844800) && first(2, true, 1683000, 844800),
+          "clock: docked starts at 1683/844.8 in every mode");
+    for (int mode = 0; mode <= 4; mode++) {
+      for (bool docked : {false, true}) {
+        const Ladder l = ladder_for(mode, docked);
+        bool up = l.count >= 2;
+        for (int i = 1; i < l.count; i++) up = up && l.rungs[i].cpu >= l.rungs[i - 1].cpu && l.rungs[i].gpu >= l.rungs[i - 1].gpu;
+        Check(up && l.rungs[l.count - 1].cpu == 1785000, "clock: every ladder climbs to CPU 1785");
+      }
+    }
+    Check(gov_speed(0, 120, 60, 2.0) == 100.0, "clock: 30 fps (every second frame drawn) is 100 %");
+    Check(gov_speed(3, 60, 60, 2.0) == 100.0, "clock: 30 half speed (30 guest frames a second) is 100 %");
+    Check(gov_speed(2, 120, 108, 2.0) == 90.0, "clock: 60 with busy skips counts the shown frames");
+    Check(gov_speed(4, 120, 90, 2.0) == 100.0, "clock: 45 shows 45 of 60");
+    Check(gov_speed(1, 108, 108, 2.0) == 90.0, "clock: 60 with a slow game counts the game speed");
   }
 
   std::printf("%d failures\n", g_failures);

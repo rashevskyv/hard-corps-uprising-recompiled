@@ -97,6 +97,7 @@ extern "C" volatile uint64_t hcu_gpu_t0 = 0;
 // switch/hcu_nx_base.cpp (clocks=1, on by default; clocks_auto=0 turns it off) takes the speed over its own 2 s from their differences.
 extern "C" volatile uint32_t hcu_speed_swaps = 0;
 extern "C" volatile uint64_t hcu_speed_ticks = 0;
+extern "C" volatile uint32_t hcu_speed_drawn = 0;  // of those swaps, the drawn ones (45 and 60 skip busy frames)
 
 namespace rex::graphics::deko {
 
@@ -1409,6 +1410,7 @@ class Deko3dCommandProcessor : public CommandProcessor {
         speed_long_ += long_swap;
         hcu_speed_ticks = hcu_speed_ticks + (now - swap_tick_);
         hcu_speed_swaps = hcu_speed_swaps + 1;
+        if (!Skipping()) hcu_speed_drawn = hcu_speed_drawn + 1;
       }
       speed_prev_level_ = level;
       // Due30's prediction: the average of the last two guest intervals (one interval's jitter drew two frames in a row).

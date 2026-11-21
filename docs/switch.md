@@ -135,14 +135,36 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   store cards when the manifest changed, configure with the base's toolchain file, build. Under
   `D:\git\dev\renut-ref\build.lock`.
 - The base owns `main`, threads, memory and the exit. `switch/hcu_nx_base.cpp` adds the SD log, `args.txt`, the
-  console defaults of the cvars (`--wrap=main`), the quick exit and the clocks: `clocks=1` in `settings.txt` sets CPU
-  1581 / GPU 384 / memory 1600 MHz through clkrst at start, sets them again when the system lowers them (checked
-  every 2 s, then 4, 8 .. 32 s after each re-set; a rate at or above the game's is never set again), and puts the old
-  rates back on exit. Default 0: the game touches no clock. The base itself never sets clocks (up to 0.398 this build
-  had no clock code: `clocks=1` did nothing). With `clocks=1` a governor runs by default (`clocks_auto=0` turns it off; `clocks_cpu` / `clocks_gpu` or `clocks_ladder` do too, unless `clocks_auto=1`): every 2 s it takes the
-  game speed from the level swaps (the `[speed]` meter's counts) and moves over six rungs, 1020/307 to 1785/768 MHz
-  (start 1581/384): one rung up below 97 % (two below 90 %), one down after 5 samples at 99 % or more (the wait
-  doubles to 64 when a lower rung fails at once). `[clock] auto:` lines log each move. sys-clk's modules are left alone.
+  console defaults of the cvars (`--wrap=main`), the quick exit and the clocks: `clocks=1` in `settings.txt` sets the
+  memory to 1600 MHz and the CPU / GPU to the governor's first rung (below) through clkrst at start, sets them again
+  when the system lowers them (checked every 2 s, then 4, 8 .. 32 s after each re-set; a rate at or above the game's
+  is never set again), and puts the old rates back on exit. Default 0: the game touches no clock. The base itself
+  never sets clocks (up to 0.398 this build had no clock code: `clocks=1` did nothing). With `clocks=1` a governor
+  runs by default (`clocks_auto=0` turns it off and keeps CPU 1581 / GPU 384; `clocks_cpu` / `clocks_gpu` or
+  `clocks_ladder` turn it off too, unless `clocks_auto=1`).
+- The governor's ladder (`switch/clock_ladders.h`) follows the frame-rate mode and the console mode. The first rung
+  is the start and the floor; the memory stays 1600 MHz on every rung. CPU/GPU in MHz:
+
+  | Console, FRAME RATE | Rungs (first = start and floor) | Source of the first rung |
+  | --- | --- | --- |
+  | Handheld, 30 and 30 HALF SPEED | 1122/384, 1224/384, 1428/384, 1581/384, 1683/460.8, 1785/768 | the user's guess, not measured |
+  | Handheld, 45 | 1326/460.8, 1428/460.8, 1581/460.8, 1683/460.8, 1785/768 | the user's guess, not measured |
+  | Handheld, 60 | 1683/691.2, 1785/768, 1785/844.8, 1785/921.6 | the user's choice; by hand, stock CPU with GPU 690 held 60 fps |
+  | Docked, every mode | 1683/844.8, 1785/844.8, 1785/921.6 | the user's guess ("1700 and 800"), not measured |
+
+  The rates are steps of the pcv table (sys-clk's list). 844.8 and 921.6 are asked, a read-back from a console is not
+  seen yet. Kefir's sys-clk caps an Erista GPU in handheld at 460.8 MHz (the 4IFIR limits); the game has no such cap.
+- The governor runs every 2 s. The ladder is picked at start from `settings.txt` `fps_mode` and the console mode
+  (`appletGetOperationMode`). The menu's FRAME RATE (in level play) and a dock or undock (at any time) switch the
+  ladder live: the new ladder starts on its first rung, and that sample is dropped. The speed: the level swaps (the
+  `[speed]` meter's counts) against 60 guest frames a second (30 in 30 HALF SPEED, which runs the game at half speed);
+  in 45 and 60 also the drawn level swaps against 45 or 60, the lower of the two counts (those modes skip a frame the
+  GPU is busy for, so the game speed alone stays 100 % while fewer frames are shown). In 30 the game speed alone
+  counts (its 30 Hz pacing reads about 100 %). One rung up below 97 % (two below 90 %), one down after 5 samples at
+  99 % or more (the wait doubles to 64 when a lower rung fails at once), never below the first rung. Log lines:
+  `[clock] auto: mode 30 fps (fps_mode 0), handheld, ladder 30 (6 rungs), start rung 0 (CPU 1122, GPU 384 MHz; the floor)`
+  at start and at a switch, `[clock] auto: speed ..` at each move. sys-clk's modules are left alone. The
+  `clocks_gpu` and `clocks_ladder` keys still stop at GPU 768 MHz.
 - sys-clk has priority, per module (0.400, `switch/sysclk_owner.h`). The game asks sys-clk's IPC (`sys:clk`, API 4
   or 5) every 2 s: a module with a sys-clk override, title profile or global profile rate is sys-clk's, and the game
   makes no pcv call for it; a module in "Do not override" (or sys-clk disabled) the game sets. A change in the
