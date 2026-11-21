@@ -240,6 +240,17 @@ void raise_clocks() {
                 busy_loop_mhz());
     return;
   }
+  // clocks_cpu=<MHz> / clocks_gpu=<MHz> in settings.txt (clocks=1 only): a lower target than the default 1785 / 768
+  // (A/B of the steps above stock, CPU 1020 / GPU 307; the last line wins; 0 or above the default = the default).
+  if (FILE* f = std::fopen("sdmc:/switch/hcu/settings.txt", "r")) {
+    char line[64];
+    unsigned v = 0;
+    while (std::fgets(line, sizeof(line), f)) {
+      if (std::sscanf(line, "clocks_cpu=%u", &v) == 1) clocks[0].wanted = (v && v < 1785 ? v : 1785) * 1000000u;
+      if (std::sscanf(line, "clocks_gpu=%u", &v) == 1) clocks[1].wanted = (v && v < 768 ? v : 768) * 1000000u;
+    }
+    std::fclose(f);
+  }
   std::printf("[clock] settings.txt clocks=1 requested: CPU %u, GPU %u, memory %u MHz\n", clocks[0].wanted / 1000000,
               clocks[1].wanted / 1000000, clocks[2].wanted / 1000000);
   // Before any pcv call: who else sets clocks. Horizon OC puts stock rates back every tick (fighting it froze consoles
