@@ -60,7 +60,7 @@ fi
 # rsync above puts the original back every run), so the stamp below re-runs the codegen at each change of the flavour.
 [ "$DFORM" = 1 ] && echo 'dform_disp_split = true  # switch/build-base.sh -DHCU_DFORM=ON' >> "$SRC/hard_corps_uprising_manifest.toml"
 # The base's other codegen keys (its app/renut_config.toml sets them all), each a -D option of this script only, default
-# OFF: ON puts the key into the manifest copy, as HCU_DFORM, and its suffix on the version. Class "exact": the same
+# OFF (HCU_SKIP_MSR: ON since the 0.405 A/B runs): ON puts the key into the manifest copy, as HCU_DFORM, and its suffix on the version. Class "exact": the same
 # values as the default code (read in the base's builders); -DHCU_CG_EXACT=ON turns on every "exact" key ("-cgx").
 # Class "lock": the same values, but the code no longer takes a lock the default code takes (exact only under the
 # hypothesis written at the key). Class "fix": other values than the default code, the ones the 360 gives.
@@ -109,7 +109,8 @@ CG_EXACT=$(opt HCU_CG_EXACT 0 "$@")
 CG_SUFFIX=""
 for k in "${CG_KEYS[@]}"; do
     read -r o key suf class <<< "$k"
-    if [ "$(opt "$o" 0 "$@")" = 1 ] || { [ "$CG_EXACT" = 1 ] && [ "$class" = exact ]; }; then
+    d=0; [ "$o" = HCU_SKIP_MSR ] && d=1  # skip_msr is on by default (-DHCU_SKIP_MSR=OFF turns it off)
+    if [ "$(opt "$o" $d "$@")" = 1 ] || { [ "$CG_EXACT" = 1 ] && [ "$class" = exact ]; }; then
         echo "$key = true  # switch/build-base.sh -D$o=ON" >> "$SRC/hard_corps_uprising_manifest.toml"
         [ "$CG_EXACT" = 1 ] && [ "$class" = exact ] || CG_SUFFIX="$CG_SUFFIX-$suf"
     fi
