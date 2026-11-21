@@ -39,6 +39,7 @@ struct Item {
   bool at_start;  // applies at the next start
   int (*get)();
   void (*set)(int);
+  bool clamp = false;  // LEFT stops at the first option, RIGHT / A at the last (no wraparound)
 };
 
 const Item kItems[] = {
@@ -52,9 +53,9 @@ const Item kItems[] = {
     // Live: the SDK reads the value at each decoded XMA frame (rex_hcu_xma_gain). A file value off the 10 % steps shows
     // as the step below it; a change snaps it to the steps.
     {"SFX VOLUME", {"0 %", "10 %", "20 %", "30 %", "40 %", "50 %", "60 %", "70 %", "80 %", "90 %", "100 %"}, 11, false,
-     [] { return hcu_settings.sfx_gain / 10; }, [](int i) { hcu_settings.sfx_gain = i * 10; }},
+     [] { return hcu_settings.sfx_gain / 10; }, [](int i) { hcu_settings.sfx_gain = i * 10; }, true},
     {"MUSIC VOLUME", {"0 %", "10 %", "20 %", "30 %", "40 %", "50 %", "60 %", "70 %", "80 %", "90 %", "100 %"}, 11, false,
-     [] { return hcu_settings.music_gain / 10; }, [](int i) { hcu_settings.music_gain = i * 10; }},
+     [] { return hcu_settings.music_gain / 10; }, [](int i) { hcu_settings.music_gain = i * 10; }, true},
     // A crutch for GPU-bound stages, not the default: fewer pixels, a softer picture.
     {"RESOLUTION", {"NATIVE 1280X720", "1120X630", "960X540", "800X450"}, 4, true, [] { return hcu_settings.resolution; },
      [](int i) { hcu_settings.resolution = i; }},
@@ -118,8 +119,8 @@ void Save() {
     const HcuSettings& s = hcu_settings;
     std::fprintf(f, "fps_mode=%d\nearly_submit=%d\ngpu_frames=%d\nswap_images=%d\nclear_skip=%d\nshadow_direct=%d\nresolution=%d\nstrip=%d\nfps_counter=%d\nrumble=%d\nshadow_bias=%g\nshadow_slope=%g\ncolour_bias=%g\nprecise=%d\nshadow_map=%d\nupload_strips=%d\ndxt_cpu=%d\ndepth32=%d\nprepass_skip=%d\ngamma=%d\nrt16=%d\nbutton_glyphs=%s\nclocks=%d\naudio_threads=%d\n",
                  s.fps_mode, s.early_submit, s.gpu_frames, s.swap_images, s.clear_skip, s.shadow_direct, s.resolution, s.strip, s.fps_counter, s.rumble, s.shadow_bias, s.shadow_slope, s.colour_bias, s.precise, s.shadow_map, s.upload_strips, s.dxt_cpu, s.depth32, s.prepass_skip, s.gamma, s.rt16, s.button_glyphs ? "switch" : "xbox", s.clocks, s.audio_threads);
+    std::fprintf(f, "sfx_gain=%g\nmusic_gain=%g\n", s.sfx_gain / 100.0, s.music_gain / 100.0);  // always written
     // The settings.txt-only keys: written only when on, so a menu save keeps them and an old file stays as it was.
-    std::fprintf(f, "sfx_gain=%g\nmusic_gain=%g\n", s.sfx_gain / 100.0, s.music_gain / 100.0);
     if (s.resolve_clear_key) std::fprintf(f, "resolve_clear_key=%d\n", s.resolve_clear_key);
     if (s.trail_rearm) std::fprintf(f, "trail_rearm=%d\n", s.trail_rearm);
     if (s.cull) std::fprintf(f, "cull=%d\n", s.cull);
@@ -301,8 +302,8 @@ int hcu_menu_input(uint32_t held) {
   if (down & HCU_MENU_DOWN) g_row = (g_row + 1) % count;
   const Item& it = items[g_row];
   const int was = it.get();
-  if (down & (HCU_MENU_RIGHT | HCU_MENU_A)) it.set((was + 1) % it.count);
-  if (down & HCU_MENU_LEFT) it.set((was + it.count - 1) % it.count);
+  if (down & (HCU_MENU_RIGHT | HCU_MENU_A)) it.set(it.clamp ? (was + 1 < it.count ? was + 1 : was) : (was + 1) % it.count);
+  if (down & HCU_MENU_LEFT) it.set(it.clamp ? (was > 0 ? was - 1 : 0) : (was + it.count - 1) % it.count);
   if (it.get() != was) {
     std::printf("[nx] menu: %s %s -> %s%s\n", it.label, it.names[was], it.names[it.get()], it.at_start ? " (saved; applies at the next start)" : "");
     std::fflush(stdout);

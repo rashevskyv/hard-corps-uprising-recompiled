@@ -137,6 +137,25 @@ int main() {
   hcu_settings.sfx_gain = 100;
   hcu_settings_load(dir.c_str());
   Check(hcu_settings.sfx_gain == 90, "the menu close saved sfx_gain 90 %");
+  // The volume lines clamp at 0 and 100 % (no wraparound). The menu opens again on the SFX VOLUME line.
+  hcu_settings.sfx_gain = 100;
+  Toggle();
+  Press(HCU_MENU_RIGHT);
+  Press(HCU_MENU_A);
+  Check(hcu_settings.sfx_gain == 100, "RIGHT / A on SFX VOLUME at 100 % stays 100 %");
+  hcu_settings.sfx_gain = 0;
+  Press(HCU_MENU_LEFT);
+  Check(hcu_settings.sfx_gain == 0, "LEFT on SFX VOLUME at 0 % stays 0 %");
+  Press(HCU_MENU_RIGHT);
+  Check(hcu_settings.sfx_gain == 10, "RIGHT on SFX VOLUME at 0 %: 10 %");
+  Press(HCU_MENU_DOWN);  // MUSIC VOLUME
+  hcu_settings.music_gain = 100;
+  Press(HCU_MENU_RIGHT);
+  Check(hcu_settings.music_gain == 100, "RIGHT on MUSIC VOLUME at 100 % stays 100 %");
+  hcu_settings.music_gain = 0;
+  Press(HCU_MENU_LEFT);
+  Check(hcu_settings.music_gain == 0, "LEFT on MUSIC VOLUME at 0 % stays 0 %");
+  Toggle();
   std::remove(file.c_str());
   rmdir(dir.c_str());
 
