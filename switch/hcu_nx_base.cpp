@@ -2,6 +2,7 @@
 // (main, threads, memory, the crash hooks, stderr, the exit); this file keeps what HCU's own host layer
 // (switch/host/switch_nx.cpp, switch/host/ui/windowed_app_main_nx.cpp, old SDK only) gave the game: the log in
 // sdmc:/switch/hcu/, the console defaults of the cvars, args.txt and the marker files, the version, the quick exit.
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -56,7 +57,17 @@ constinit Clock clocks[] = {  // userAppInit runs before the C++ constructors
     {"GPU", PcvModuleId_GPU, 768000000},
     {"memory", PcvModuleId_EMC, 1600000000},
 };
-constexpr u32 kNoAnswer = 1;            // owner: sys-clk did not answer, so the module is left alone
+// clocks_ladder=<cpu>/<gpu>,... (MHz, at most 16 pairs): the game steps through the pairs by the strip's swap number,
+// the first pair from swap clocks_ladder_swap (default 2400, after the menus), a new pair every clocks_ladder_len swaps
+// (default 1500, about 28 s), the last one stays. The pairs may be lower than the rates the game holds (A/B of the
+// steps above stock: find where the speed starts to fall).
+constexpr unsigned kLadderMax = 16;
+struct LadderStep { u32 cpu, gpu; };
+LadderStep ladder[kLadderMax];
+unsigned ladder_n = 0, ladder_start = 2400, ladder_len = 1500;
+int ladder_at = -1;
+extern "C" volatile uint32_t hcu_gpu_swap;
+constexpr u32 kNoAnswer = 1;           // owner: sys-clk did not answer, so the module is left alone
 bool clkrst_up = false;
 Service sysclk_srv;                     // sys-clk's IPC (trusted API): asked before every pcv call
 bool sysclk = false;
@@ -243,9 +254,19 @@ void raise_clocks() {
   // clocks_cpu=<MHz> / clocks_gpu=<MHz> in settings.txt (clocks=1 only): a lower target than the default 1785 / 768
   // (A/B of the steps above stock, CPU 1020 / GPU 307; the last line wins; 0 or above the default = the default).
   if (FILE* f = std::fopen("sdmc:/switch/hcu/settings.txt", "r")) {
-    char line[64];
+    char line[256];
     unsigned v = 0;
     while (std::fgets(line, sizeof(line), f)) {
+      if (std::sscanf(line, "clocks_ladder_swap=%u", &v) == 1) ladder_start = v;
+      if (std::sscanf(line, "clocks_ladder_len=%u", &v) == 1 && v) ladder_len = v;
+      if (std::strncmp(line, "clocks_ladder=", 14) == 0) {  // cpu/gpu MHz pairs, comma-separated; the last line wins
+        ladder_n = 0;
+        for (const char* p = line + 14; ladder_n < kLadderMax; p = std::strchr(p, ',') ? std::strchr(p, ',') + 1 : "") {
+          unsigned c = 0, g = 0;
+          if (std::sscanf(p, "%u/%u", &c, &g) != 2 || !c || !g) break;
+          ladder[ladder_n++] = {c < 1785 ? c : 1785, g < 768 ? g : 768};
+        }
+      }
       if (std::sscanf(line, "clocks_cpu=%u", &v) == 1) clocks[0].wanted = (v && v < 1785 ? v : 1785) * 1000000u;
       if (std::sscanf(line, "clocks_gpu=%u", &v) == 1) clocks[1].wanted = (v && v < 768 ? v : 768) * 1000000u;
     }
@@ -297,6 +318,31 @@ void keep_clocks() {
   }
 }
 
+// Every 0.5 s (log_flush_loop): the ladder step of the current swap. A module the game holds is set to the step's rate
+// (up or down); clock.set follows it, so the check above does not put the old rate back. sys-clk's modules are left.
+void step_ladder() {
+  if (!ladder_n || !clocks_on.load(std::memory_order_acquire)) return;
+  const unsigned swap = hcu_gpu_swap;
+  if (swap < ladder_start) return;
+  const int at = int(std::min<unsigned>((swap - ladder_start) / ladder_len, ladder_n - 1));
+  if (at == ladder_at) return;
+  ladder_at = at;
+  const u32 want[2] = {ladder[at].cpu * 1000000u, ladder[at].gpu * 1000000u};
+  u32 got[2] = {};
+  for (int i = 0; i < 2; i++) {
+    Clock& clock = clocks[i];
+    if (clock.owner != 0 || clock.set == 0) continue;
+    ClkrstSession s;
+    if (R_FAILED(clkrstOpenSession(&s, clock.module, 3))) continue;
+    clock.set = want[i];
+    clkrstSetClockRate(&s, want[i]);
+    clkrstGetClockRate(&s, &got[i]);
+    clkrstCloseSession(&s);
+  }
+  std::printf("[clock] ladder step %d at swap #%u: CPU %u, GPU %u MHz asked, read back CPU %u, GPU %u MHz\n", at, swap,
+              ladder[at].cpu, ladder[at].gpu, got[0] / 1000000, got[1] / 1000000);
+}
+
 // The old rates come back for the modules the game holds; sys-clk is asked first, its modules are left to it.
 void restore_clocks() {
   if (clocks_on.exchange(false, std::memory_order_acq_rel)) {
@@ -329,6 +375,7 @@ void log_flush_loop(void*) {
   for (unsigned pass = 1; log_flush_running; pass++) {
     svcSleepThread(500'000'000LL);
     if (pass % 4 == 0) keep_clocks();
+    step_ladder();
     if (pass % 2 == 0) hcu_input_flush(0);
     std::fflush(stdout);
     fsync(fileno(stdout));
