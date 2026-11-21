@@ -136,7 +136,7 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   `D:\git\dev\renut-ref\build.lock`.
 - The base owns `main`, threads, memory and the exit. `switch/hcu_nx_base.cpp` adds the SD log, `args.txt`, the
   console defaults of the cvars (`--wrap=main`), the quick exit and the clocks: `clocks=1` in `settings.txt` sets CPU
-  1785 / GPU 768 / memory 1600 MHz through clkrst at start, sets them again when the system lowers them (checked
+  1581 / GPU 384 / memory 1600 MHz through clkrst at start, sets them again when the system lowers them (checked
   every 2 s, then 4, 8 .. 32 s after each re-set; a rate at or above the game's is never set again), and puts the old
   rates back on exit. Default 0: the game touches no clock. The base itself never sets clocks (up to 0.398 this build
   had no clock code: `clocks=1` did nothing).

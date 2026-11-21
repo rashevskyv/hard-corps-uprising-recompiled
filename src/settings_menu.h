@@ -53,7 +53,7 @@ struct HcuSettings {
   int pad_applet;     // CONTROLLERS: 1 = the pad driver opens the console's controller applet on its next poll, then sets 0
   int button_glyphs;  // BUTTON ICONS (button_glyphs=switch|xbox, or 1|0): 1 = Switch icons (our art, src/button_glyphs.cpp), 0 = the game's Xbox icons with
                       // A<->B and X<->Y swapped (read when the game opens a screen's images)
-  int clocks;         // clocks=1: the game raises CPU 1785 / GPU 768 / memory 1600 MHz and keeps them (the old default);
+  int clocks;         // clocks=1: the game raises CPU 1581 / GPU 384 / memory 1600 MHz and keeps them (the 0.409 A/B pair; the old default was 1785 / 768);
                       // 0 (default): the clocks are not touched (stock, or what sys-clk sets), only logged. Read at
                       // start by hcu_clocks_key (switch/hcu_nx_base.cpp; switch_nx.cpp in the old SDK's build), before
                       // this struct is loaded; kept here so the menu's save keeps it

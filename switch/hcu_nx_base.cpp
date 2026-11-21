@@ -37,7 +37,7 @@ const char* const kDataDir = "sdmc:/switch/hcu";
 Thread log_flush_thread;
 volatile bool log_flush_running = false;
 
-// settings.txt clocks=1 (default 0: the game touches no clock): CPU 1785, GPU 768, memory 1600 MHz through clkrst,
+// settings.txt clocks=1 (default 0: the game touches no clock): CPU 1581, GPU 384, memory 1600 MHz (0.409 A/B: about 100 % speed at the replay, as 1785 / 768) through clkrst,
 // as switch/host/switch_nx.cpp did in the old SDK's build. sys-clk has priority, per module: a module it sets (an
 // override, or a title or global profile rate) is its own, and the game makes no pcv call for it; a module it leaves
 // ("Do not override", or sys-clk disabled) the game sets. sys-clk is asked again every 2 s, so a change in its
@@ -55,8 +55,8 @@ struct Clock {
   u32 wait = 1;     // the next back-off: 1, 2, 4, 8, 16 checks (2 to 32 s)
 };
 constinit Clock clocks[] = {  // userAppInit runs before the C++ constructors
-    {"CPU", PcvModuleId_CpuBus, 1785000000},
-    {"GPU", PcvModuleId_GPU, 768000000},
+    {"CPU", PcvModuleId_CpuBus, 1581000000},
+    {"GPU", PcvModuleId_GPU, 384000000},
     {"memory", PcvModuleId_EMC, 1600000000},
 };
 // clocks_ladder=<cpu>/<gpu>,... (MHz, may be fractional: 460.8; at most 16 pairs): the game steps through the pairs by the strip's swap number,
@@ -252,7 +252,7 @@ void raise_clocks() {
                 busy_loop_mhz());
     return;
   }
-  // clocks_cpu=<MHz> / clocks_gpu=<MHz> in settings.txt (clocks=1 only): a lower target than the default 1785 / 768
+  // clocks_cpu=<MHz> / clocks_gpu=<MHz> in settings.txt (clocks=1 only): another target than the default 1581 / 384 (at most 1785 / 768; 0 = the default)
   // (A/B of the steps above stock, CPU 1020 / GPU 307; the last line wins; 0 or above the default = the default).
   if (FILE* f = std::fopen("sdmc:/switch/hcu/settings.txt", "r")) {
     char line[256];
@@ -268,8 +268,8 @@ void raise_clocks() {
           ladder[ladder_n++] = {u32(std::min(c, 1785.f) * 1000.f + .5f), u32(std::min(g, 768.f) * 1000.f + .5f)};  // kHz
         }
       }
-      if (std::sscanf(line, "clocks_cpu=%u", &v) == 1) clocks[0].wanted = (v && v < 1785 ? v : 1785) * 1000000u;
-      if (std::sscanf(line, "clocks_gpu=%u", &v) == 1) clocks[1].wanted = (v && v < 768 ? v : 768) * 1000000u;
+      if (std::sscanf(line, "clocks_cpu=%u", &v) == 1 && v) clocks[0].wanted = std::min(v, 1785u) * 1000000u;
+      if (std::sscanf(line, "clocks_gpu=%u", &v) == 1 && v) clocks[1].wanted = std::min(v, 768u) * 1000000u;
     }
     std::fclose(f);
   }
