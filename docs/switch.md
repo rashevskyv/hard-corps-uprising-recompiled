@@ -153,10 +153,14 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   | Docked, every mode | 1683/844.8, 1785/844.8, 1785/921.6 | the user's guess ("1700 and 800"), not measured |
 
   The rates are steps of the pcv table (sys-clk's list). 844.8 and 921.6 are asked, a read-back from a console is not
-  seen yet. Kefir's sys-clk caps an Erista GPU in handheld at 460.8 MHz (the 4IFIR limits); the game has no such cap.
+  seen yet. Erista (spl `HardwareType` 0 or 1, read once at start; a failed read
+  counts as not Erista): the game holds the GPU at 460.8 MHz on every rung of every ladder, handheld and docked, and
+  also lowers a higher rate to it (`hcu_clock::for_soc`; log `[clock] erista, GPU held at 460.8 MHz`). The CPU steps
+  stay. A module sys-clk sets and `clocks=0` are still left alone.
 - The governor runs every 2 s. The ladder is picked at start from `settings.txt` `fps_mode` and the console mode
   (`appletGetOperationMode`). The menu's FRAME RATE (in level play) and a dock or undock (at any time) switch the
-  ladder live: the new ladder starts on its first rung, and that sample is dropped. The speed: the level swaps (the
+  ladder live: the new ladder starts on its first rung, and that sample and the next one are dropped (the backend
+  takes a new FRAME RATE within 60 swaps). A module sys-clk hands back is taken at the current rung. The speed: the level swaps (the
   `[speed]` meter's counts) against 60 guest frames a second;
   in 45 and 60 also the drawn level swaps against 45 or 60, the lower of the two counts (those modes skip a frame the
   GPU is busy for, so the game speed alone stays 100 % while fewer frames are shown). In 30 the game speed alone
@@ -164,7 +168,7 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   99 % or more (the wait doubles to 64 when a lower rung fails at once), never below the first rung. Log lines:
   `[clock] auto: mode 30 fps (fps_mode 0), handheld, ladder 30 (6 rungs), start rung 0 (CPU 1122, GPU 384 MHz; the floor)`
   at start and at a switch, `[clock] auto: speed ..` at each move. sys-clk's modules are left alone. The
-  `clocks_gpu` and `clocks_ladder` keys still stop at GPU 768 MHz.
+  `clocks_gpu` and `clocks_ladder` keys still stop at GPU 768 MHz (460.8 on Erista).
 - sys-clk has priority, per module (0.400, `switch/sysclk_owner.h`). The game asks sys-clk's IPC (`sys:clk`, API 4
   or 5) every 2 s: a module with a sys-clk override, title profile or global profile rate is sys-clk's, and the game
   makes no pcv call for it; a module in "Do not override" (or sys-clk disabled) the game sets. A change in the

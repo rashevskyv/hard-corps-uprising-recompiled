@@ -63,6 +63,7 @@ struct Clock {
   u32 owner = ~0u;  // sys-clk's rate for it, Hz; 0 = left to the game; ~0u = not asked yet
   u32 skip = 0;     // checks to skip (back-off after a re-set or a failed set)
   u32 wait = 1;     // the next back-off: 1, 2, 4, 8, 16 checks (2 to 32 s)
+  bool exact = false;  // set to `wanted` also from a higher rate (the Erista GPU: held at 460.8, docked too)
 };
 constinit Clock clocks[] = {  // userAppInit runs before the C++ constructors
     {"CPU", PcvModuleId_CpuBus, 1581000000},
@@ -92,6 +93,8 @@ bool gov_docked = false;
 constinit hcu_clock::Ladder gov_ladder = hcu_clock::ladder_for(0, false);  // constinit: raise_clocks runs before the constructors
 int gov_rung = 0;    // the ladder's first rung: the start and the floor
 u32 gov_swaps = 0, gov_drawn = 0, gov_wait = 5, gov_good = 0, gov_since_down = 100;
+u32 gov_skip = 0;    // samples to drop after a ladder change (the backend takes a new fps_mode within 60 swaps)
+bool erista = false;  // splGetConfig HardwareType 0 or 1 (raise_clocks): the GPU is held at 460.8 (clock_ladders.h)
 u64 gov_ticks = 0;
 constexpr u32 kNoAnswer = 1;           // owner: sys-clk did not answer, so the module is left alone
 bool clkrst_up = false;
@@ -194,7 +197,7 @@ u32 pcv_rate(const Clock& clock, u32 to, u32* before = nullptr, Result* set_rc =
   u32 hz = 0;
   clkrstGetClockRate(&s, &hz);
   if (before) *before = hz;
-  if (to && hz < to) {
+  if (to && (hz < to || (clock.exact && hz != to))) {
     const Result rc = clkrstSetClockRate(&s, to);
     if (set_rc) *set_rc = rc;
     clkrstGetClockRate(&s, &hz);
@@ -221,7 +224,9 @@ void take(Clock& clock) {
   clock.set = now;
   std::printf("[clock] %s: was %u, requested %u, %s, read back %u MHz\n", clock.name, before / 1000000,
               clock.wanted / 1000000,
-              before >= clock.wanted ? "not applied (already at or above)" : R_FAILED(rc) ? "REFUSED" : "applied",
+              before == clock.wanted || (!clock.exact && before > clock.wanted) ? "not applied (already at or above)"
+              : R_FAILED(rc)                                                   ? "REFUSED"
+                                                                               : "applied",
               now / 1000000);
   if (R_FAILED(rc)) std::printf("[clock] %s: clkrstSetClockRate rc 0x%X\n", clock.name, rc);
 }
@@ -263,7 +268,7 @@ void clock_pass(u32 now_out[3]) {
     }
     const u32 now = seen[i] ? seen[i] : pcv_rate(clock, 0);
     now_out[i] = now;
-    if (now == 0 || now >= clock.set) continue;
+    if (now == 0 || now == clock.set || (!clock.exact && now > clock.set)) continue;
     const u32 again = pcv_rate(clock, clock.set);
     std::printf("[clock] %s was put back to %u MHz: set to %u MHz again, read back %u MHz; next check in %u s\n",
                 clock.name, now / 1000000, clock.set / 1000000, again / 1000000, clock.wait * 2);
@@ -308,11 +313,30 @@ void raise_clocks() {
     std::fclose(f);
     if (fixed_key && !auto_key) gov_on = false;  // a fixed pair from the file is meant: no governor unless clocks_auto=1
   }
+  // Erista or not: spl HardwareType 0 (Icosa) or 1 (Copper) is Erista, 2..5 Mariko (sys-clk's board.cpp). A failed
+  // call counts as not Erista (the ladders unchanged).
+  u64 hw = ~0ull;
+  Result spl_rc = splInitialize();
+  if (R_SUCCEEDED(spl_rc)) {
+    spl_rc = splGetConfig(SplConfigItem_HardwareType, &hw);
+    splExit();
+  }
+  erista = R_SUCCEEDED(spl_rc) && hw <= 1;
+  if (erista) {
+    clocks[1].wanted = hcu_clock::kEristaGpu * 1000u;  // also over a clocks_gpu key
+    clocks[1].exact = true;
+    std::printf("[clock] erista, GPU held at 460.8 MHz (hardware type %u; every rung, handheld and docked)\n", unsigned(hw));
+  } else {
+    std::printf("[clock] hardware type %d (rc 0x%X): not erista, the GPU follows the ladder\n", R_SUCCEEDED(spl_rc) ? int(hw) : -1, spl_rc);
+  }
   if (gov_on && !ladder_n) {
     gov_mode = mode;
     gov_docked = appletGetOperationMode() == AppletOperationMode_Console;  // libnx's value, kept by applet messages
     gov_ladder = hcu_clock::ladder_for(mode, gov_docked);
-    if (!fixed_key) clocks[0].wanted = gov_ladder.rungs[0].cpu * 1000u, clocks[1].wanted = gov_ladder.rungs[0].gpu * 1000u;
+    if (!fixed_key) {
+      clocks[0].wanted = gov_ladder.rungs[0].cpu * 1000u;
+      clocks[1].wanted = hcu_clock::for_soc(gov_ladder.rungs[0], erista).gpu * 1000u;
+    }
   }
   std::printf("[clock] settings.txt clocks=1 requested: CPU %u, GPU %u, memory %u MHz\n", clocks[0].wanted / 1000000,
               clocks[1].wanted / 1000000, clocks[2].wanted / 1000000);
@@ -344,7 +368,7 @@ void raise_clocks() {
   if (gov_on && !ladder_n) {  // after every early return: the clocks are really the game's
     std::printf("[clock] auto: mode %s (fps_mode %d), %s, ladder %s (%d rungs), start rung 0 (CPU %g, GPU %g MHz; the floor); the memory stays on every rung\n",
                 hcu_clock::mode_name(gov_mode), gov_mode, gov_docked ? "docked" : "handheld", gov_ladder.name, gov_ladder.count, gov_ladder.rungs[0].cpu / 1000.0,
-                gov_ladder.rungs[0].gpu / 1000.0);
+                hcu_clock::for_soc(gov_ladder.rungs[0], erista).gpu / 1000.0);
   }
   const u32 loop_before = busy_loop_mhz();
   u32 now[3];
@@ -367,10 +391,12 @@ void keep_clocks() {
 
 // Every 0.5 s (log_flush_loop): the ladder step of the current swap. A module the game holds is set to the step's rate
 // (up or down); clock.set follows it, so the check above does not put the old rate back. sys-clk's modules are left.
+// `wanted` follows the step too: a module sys-clk hands back later is taken at the current step, not the start one.
 void set_pair(const LadderStep& step, u32 got[2], Result rcs[2]) {
-  const u32 want[2] = {step.cpu * 1000u, step.gpu * 1000u};
+  const u32 want[2] = {step.cpu * 1000u, hcu_clock::for_soc(step, erista).gpu * 1000u};
   for (int i = 0; i < 2; i++) {
     Clock& clock = clocks[i];
+    clock.wanted = want[i];
     if (clock.set == 0) continue;  // not held by the game (sys-clk's module, or no set yet)
     ClkrstSession s;
     if (R_FAILED(clkrstOpenSession(&s, clock.module, 3))) continue;
@@ -393,7 +419,7 @@ void step_ladder() {
   Result rcs[2] = {};
   set_pair(ladder[at], got, rcs);
   std::printf("[clock] ladder step %d at swap #%u: CPU %u, GPU %u kHz asked, read back CPU %u, GPU %u kHz (rc 0x%X 0x%X; 0 = not held)\n",
-              at, swap, ladder[at].cpu, ladder[at].gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1]);
+              at, swap, ladder[at].cpu, hcu_clock::for_soc(ladder[at], erista).gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1]);
 }
 
 // Every 2 s (log_flush_loop): the governor (see gov_on).
@@ -420,6 +446,7 @@ void govern() {
     gov_good = 0;
     gov_wait = 5;
     gov_since_down = 100;
+    gov_skip = 1;  // the next sample too: the backend may still pace the old mode for up to 60 swaps of it
     if (gov_ladder.rungs == was.rungs) {
       std::printf("[clock] auto: mode %s (fps_mode %d), %s, ladder %s stays, rung %d\n", hcu_clock::mode_name(mode), mode,
                   docked ? "docked" : "handheld", gov_ladder.name, gov_rung);
@@ -431,10 +458,14 @@ void govern() {
     set_pair(gov_ladder.rungs[0], got, rcs);
     std::printf("[clock] auto: mode %s (fps_mode %d), %s, ladder %s (%d rungs), start rung 0 (CPU %g, GPU %g MHz; the floor) at swap #%u, read back CPU %u, GPU %u kHz (rc 0x%X 0x%X)\n",
                 hcu_clock::mode_name(mode), mode, docked ? "docked" : "handheld", gov_ladder.name, gov_ladder.count, gov_ladder.rungs[0].cpu / 1000.0,
-                gov_ladder.rungs[0].gpu / 1000.0, (unsigned)hcu_gpu_swap, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1]);
+                hcu_clock::for_soc(gov_ladder.rungs[0], erista).gpu / 1000.0, (unsigned)hcu_gpu_swap, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1]);
     return;
   }
   if (!level) return;
+  if (gov_skip) {
+    gov_skip--;
+    return;
+  }
   const double pct = hcu_clock::gov_speed(gov_mode, dsw, ddr, double(dtk) / double(armGetSystemTickFreq()));
   gov_since_down++;
   int to = gov_rung;
@@ -458,7 +489,7 @@ void govern() {
   set_pair(gov_ladder.rungs[to], got, rcs);
   std::printf("[clock] auto: speed %.1f %% over %u level swaps (%u drawn), ladder %s, rung %d -> %d at swap #%u: CPU %u, GPU %u kHz asked, read back CPU %u, GPU %u kHz (rc 0x%X 0x%X; wait %u samples)\n",
               pct, dsw, ddr, gov_ladder.name, gov_rung, to, (unsigned)hcu_gpu_swap, gov_ladder.rungs[to].cpu,
-              gov_ladder.rungs[to].gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1], gov_wait);
+              hcu_clock::for_soc(gov_ladder.rungs[to], erista).gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1], gov_wait);
   gov_rung = to;
 }
 

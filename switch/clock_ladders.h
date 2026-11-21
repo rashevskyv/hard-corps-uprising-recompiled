@@ -1,7 +1,8 @@
 // The clock governor's ladders (switch/hcu_nx_base.cpp), one per frame-rate mode, and the speed it acts on. Pure
 // C++: the host test (tests/settings_menu_tests.cpp) includes it too. The rates are steps of the clkrst/pcv tables
 // (CPU 1020, 1122, 1224, 1326, 1428, 1581, 1683, 1785; GPU 307.2, 384, 460.8, 537.6, 614.4, 691.2, 768, 844.8,
-// 921.6 MHz; sys-clk's list, D:\git\dev\sys-clk-vanilla-kefir\manager\src\ipc\pc_shim\client.cpp).
+// 921.6 MHz; sys-clk's list, D:\git\dev\sys-clk-vanilla-kefir\manager\src\ipc\pc_shim\client.cpp; no ladder uses 537.6
+// or 614.4).
 #pragma once
 
 #include <cstdint>
@@ -23,6 +24,11 @@ constexpr Rung k60[] = {{1683000, 691200}, {1785000, 768000}, {1785000, 844800},
 // step above 800 (768 is below it).
 constexpr Rung kDocked[] = {{1683000, 844800}, {1785000, 844800}, {1785000, 921600}};
 // The memory is not on a ladder: clocks=1 sets it to 1600 MHz once (hcu_nx_base.cpp), in every mode and on every rung.
+
+// Erista (the first Switch model): the GPU is held at 460.8 MHz on every rung of every ladder, handheld and docked
+// (the user's choice); the CPU steps stay. Mariko, OLED and Lite: the ladders as they are.
+constexpr uint32_t kEristaGpu = 460800;  // kHz
+constexpr Rung for_soc(Rung r, bool erista) { return erista ? Rung{r.cpu, kEristaGpu} : r; }
 
 struct Ladder {
   const char* name;

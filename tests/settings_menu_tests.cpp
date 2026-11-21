@@ -315,6 +315,18 @@ int main() {
         Check(up && l.rungs[l.count - 1].cpu == 1785000, "clock: every ladder climbs to CPU 1785");
       }
     }
+    // Erista: GPU 460.8 on every rung of every ladder, the CPU unchanged; Mariko: the rung as it is.
+    bool erista_ok = true;
+    for (int mode : {0, 1, 2, 4}) {
+      for (bool docked : {false, true}) {
+        const Ladder l = ladder_for(mode, docked);
+        for (int i = 0; i < l.count; i++) {
+          const Rung e = for_soc(l.rungs[i], true), m = for_soc(l.rungs[i], false);
+          erista_ok = erista_ok && e.gpu == 460800 && e.cpu == l.rungs[i].cpu && m.gpu == l.rungs[i].gpu && m.cpu == l.rungs[i].cpu;
+        }
+      }
+    }
+    Check(erista_ok, "clock: erista holds GPU 460.8 on every rung, the CPU and Mariko unchanged");
     Check(gov_speed(0, 120, 60, 2.0) == 100.0, "clock: 30 fps (every second frame drawn) is 100 %");
     Check(gov_speed(2, 120, 108, 2.0) == 90.0, "clock: 60 with busy skips counts the shown frames");
     Check(gov_speed(4, 120, 90, 2.0) == 100.0, "clock: 45 shows 45 of 60");
