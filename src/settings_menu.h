@@ -60,7 +60,7 @@ struct HcuSettings {
   int audio_threads;  // audio_threads=1 (the ultimate base's SDK only): one host thread per guest audio client
                       // (switch/sdk-edits-base.py); 0 (default): the base's one audio worker runs every client
   int sfx_gain;       // SFX VOLUME / MUSIC VOLUME / VOICE VOLUME, percent 0..200 (100 = as the game mixes it; above 100
-  int music_gain;     // saturates and can clip; live; defaults 100 / 150 / 40). settings.txt sfx_gain / music_gain /
+  int music_gain;     // saturates and can clip; live; defaults 80 / 100 / 20). settings.txt sfx_gain / music_gain /
   int voice_gain;     // voice_gain=0..2. The SDK scales each decoded XMA frame: stereo streams by music_gain, mono
                       // streams by voice_gain when src/xma_voice_table.cpp knows the sound as a voice, else by sfx_gain
                       // (rex_hcu_xma_gain, switch/sdk-edits-base.py). The voice families: settings.txt voice_prefixes

@@ -19,7 +19,7 @@ HcuSettings hcu_settings = {.fps_mode = 0, .early_submit = 1, .gpu_frames = 3, .
                             .colour_bias = 0.f, .precise = 0, .filter = 0, .lod_bias = 0.f, .aniso = 1.f, .shadow_map = 1,
                             .view = 0, .view_step = 0, .dump = 0, .record = 0, .dxt_cpu = 1, .depth32 = 0, .gamma = 0,
                             .rt16 = 1, .prepass_skip = 0, .upload_strips = 0, .tex_view = 0, .pad_applet = 0, .button_glyphs = 1, .clocks = 0, .audio_threads = 0,
-                            .sfx_gain = 100, .music_gain = 150, .voice_gain = 40};
+                            .sfx_gain = 80, .music_gain = 100, .voice_gain = 20};
 
 namespace {
 

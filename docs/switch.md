@@ -161,8 +161,8 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   both ends): `music_gain=0..2` scales every stereo XMA stream (BGM_xenon.bnk; a stereo sound effect would follow it
   too), `voice_gain=0..2` every mono stream the voice table knows as a voice, `sfx_gain=0..2` every other mono stream.
   Above 2 is 2, below 0 is 0; 1 = the game's own mix (the samples stay as they are). Above 1 amplifies and saturates at
-  int16 full scale, so loud passages can clip. Defaults when the key is absent: `sfx_gain=1.0`, `voice_gain=0.4`,
-  `music_gain=1.5`. A menu save always writes the three keys, so a `settings.txt` saved by an older build keeps its
+  int16 full scale, so loud passages can clip. Defaults when the key is absent: `sfx_gain=0.8`, `voice_gain=0.2`,
+  `music_gain=1.0`. A menu save always writes the three keys, so a `settings.txt` saved by an older build keeps its
   values (an old file has `sfx_gain=0.4`: remove the gain lines to get the new defaults). The SDK scales each decoded
   frame after the frame cache (switch/sdk-edits-base.py), so a change acts at the next frame. The guest's FMOD still
   applies its own volumes after this.
@@ -190,7 +190,7 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   first packet (or the banks on the card differ). Many misses with `pkt` above 0 mean the start is not at the first
   packet (the table cannot work there).
 - The `[audio]` line, once a second:
-  `[audio] peak/rms: mono 0.912/0.104 voice 0.300/0.050 stereo 0.500/0.120 c0 0.950/0.210 c1 0.020/0.003; sfx_gain 1.00 voice_gain 0.40 music_gain 1.50; starts 5 hit 4 miss 1 unprepared 0 next_miss 2`.
+  `[audio] peak/rms: mono 0.912/0.104 voice 0.300/0.050 stereo 0.500/0.120 c0 0.950/0.210 c1 0.020/0.003; sfx_gain 0.80 voice_gain 0.20 music_gain 1.00; starts 5 hit 4 miss 1 unprepared 0 next_miss 2`.
   Each pair is peak / RMS of that second, 1.000 = full scale. `mono` (the effects) / `voice` / `stereo`: the XMA
   streams after the gain, before FMOD's volumes. `c0`..`c3`: each render client after the 5.1 fold, before the sum
   and the clamp (a peak above 1 there can clip). A slot with no samples is left out. The counters: fresh `starts`

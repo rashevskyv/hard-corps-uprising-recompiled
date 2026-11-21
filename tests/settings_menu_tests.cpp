@@ -105,10 +105,10 @@ int main() {
     Check(text.find("clocks_ladder=1020/307.2,1581/384") != std::string::npos, "a menu save keeps clocks_ladder");
   }
   // sfx_gain / music_gain: 0..2 in the file, percent in the struct (clamped), saved by a menu close, the SDK's getter.
-  Check(hcu_settings.sfx_gain == 100 && hcu_settings.music_gain == 150 && hcu_settings.voice_gain == 40,
-        "no gain keys: sfx 100 %, music 150 %, voice 40 %");
-  Check(rex_hcu_xma_gain(0) == 1.f && rex_hcu_xma_gain(1) == 1.5f && rex_hcu_xma_gain(2) == 0.4f,
-        "the getter: sfx 1, music 1.5, voice 0.4 (the defaults)");
+  Check(hcu_settings.sfx_gain == 80 && hcu_settings.music_gain == 100 && hcu_settings.voice_gain == 20,
+        "no gain keys: sfx 80 %, music 100 %, voice 20 %");
+  Check(rex_hcu_xma_gain(0) == 0.8f && rex_hcu_xma_gain(1) == 1.f && rex_hcu_xma_gain(2) == 0.2f,
+        "the getter: sfx 0.8, music 1, voice 0.2 (the defaults)");
   // voice_gain: the same 0..2 range, clamp and save; a menu save keeps the voice_prefixes line as it is.
   WriteFile(file, "voice_gain=0.7\nvoice_prefixes=NR_,TB_, ZOMBIE\n");
   hcu_settings_load(dir.c_str());
