@@ -58,7 +58,7 @@ This build is made with the **Ultimate base** pipeline (`renut_nx_ultimate_base`
   | --- | --- | --- | --- |
   | Handheld, 30 | 1122 / 384 | 1785 / 768 | no: the user's guess |
   | Handheld, 45 | 1326 / 460.8 | 1785 / 768 | no: the user's guess |
-  | Handheld, 60 | 1683 / 691.2 | 1785 / 921.6 | partly: stock CPU with GPU 690 held 60 fps by hand |
+  | Handheld, 60 | 1785 / 844.8 | 1785 / 921.6 | partly: 1785 / 844 held 60 fps by hand |
   | Docked, any | 1683 / 844.8 | 1785 / 921.6 | no: the user's guess |
 
   Memory is 1600 MHz in every preset. On the first Switch model (Erista) the game holds the GPU at 460.8 MHz in every preset and on every step, handheld and docked (the CPU steps stay; the log says `erista, GPU held at 460.8`). Mariko, OLED and Lite use the table as it is. `clocks_auto=0` turns the governor off (a fixed 1581/384); `clocks_cpu=<MHz>` / `clocks_gpu=<MHz>` set a fixed pair. sys-clk keeps priority: a module it sets is left to it.

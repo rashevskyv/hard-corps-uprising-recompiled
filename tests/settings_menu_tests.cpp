@@ -304,7 +304,7 @@ int main() {
     };
     Check(first(0, false, 1122000, 384000), "clock: handheld 30 starts at 1122/384");
     Check(first(4, false, 1326000, 460800), "clock: handheld 45 starts at 1326/460.8");
-    Check(first(1, false, 1683000, 691200) && first(2, false, 1683000, 691200), "clock: handheld 60 starts at 1683/691.2");
+    Check(first(1, false, 1785000, 844800) && first(2, false, 1785000, 844800), "clock: handheld 60 starts at 1785/844.8");
     Check(first(0, true, 1683000, 844800) && first(4, true, 1683000, 844800) && first(2, true, 1683000, 844800),
           "clock: docked starts at 1683/844.8 in every mode");
     for (int mode = 0; mode <= 4; mode++) {

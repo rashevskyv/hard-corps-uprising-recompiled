@@ -149,7 +149,7 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   | --- | --- | --- |
   | Handheld, 30 | 1122/384, 1224/384, 1428/384, 1581/384, 1683/460.8, 1785/768 | the user's guess, not measured |
   | Handheld, 45 | 1326/460.8, 1428/460.8, 1581/460.8, 1683/460.8, 1785/768 | the user's guess, not measured |
-  | Handheld, 60 | 1683/691.2, 1785/768, 1785/844.8, 1785/921.6 | the user's choice; by hand, stock CPU with GPU 690 held 60 fps |
+  | Handheld, 60 | 1785/844.8, 1785/921.6 | the user's choice; by hand, 1785/844 held 60 fps (1683/691.2 gave 57 fps on average) |
   | Docked, every mode | 1683/844.8, 1785/844.8, 1785/921.6 | the user's guess ("1700 and 800"), not measured |
 
   The rates are steps of the pcv table (sys-clk's list). 844.8 and 921.6 are asked, a read-back from a console is not

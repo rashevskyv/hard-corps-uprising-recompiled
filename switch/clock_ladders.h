@@ -17,9 +17,9 @@ constexpr Rung k30[] = {{1122000, 384000}, {1224000, 384000}, {1428000, 384000},
                         {1581000, 384000}, {1683000, 460800}, {1785000, 768000}};
 // 45 (fps_mode 4): 1326/460.8 is the user's guess, not measured.
 constexpr Rung k45[] = {{1326000, 460800}, {1428000, 460800}, {1581000, 460800}, {1683000, 460800}, {1785000, 768000}};
-// 60 (fps_mode 1 and 2): 1683/691.2 is the user's choice, not measured as a pair (by hand with sys-clk: stock CPU with
-// GPU 690, 1200/800+ and 1785/844 held 60 fps).
-constexpr Rung k60[] = {{1683000, 691200}, {1785000, 768000}, {1785000, 844800}, {1785000, 921600}};
+// 60 (fps_mode 1 and 2): 1785/844.8 is the user's choice after the 1683/691.2 run (0.426 log: 57 fps on average, speed
+// down to 83 %); by hand with sys-clk 1785/844 held 60 fps.
+constexpr Rung k60[] = {{1785000, 844800}, {1785000, 921600}};
 // Docked, every mode: the user's guess "1700 and 800", not measured; 1683 is the CPU step nearest 1700, 844.8 the GPU
 // step above 800 (768 is below it).
 constexpr Rung kDocked[] = {{1683000, 844800}, {1785000, 844800}, {1785000, 921600}};
