@@ -101,8 +101,10 @@ X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screensho
 - **Settings menu.** Both stick clicks (L3 + R3) open and close it (`src/settings_menu.cpp`, drawn by the
   deko3d backend with the strip's 5x7 font). Up/down, left/right or A to change, B to close; closing saves
   `sdmc:/switch/hcu/settings.txt`. The game keeps running behind it. Lines: frame rate (30 / 45 / 60; the old
-  `fps_mode=3`, 30 half speed, is removed and loads as 30), performance strip, rumble, shadow bias, colour bias, shadow map, view (live), precise
-  shaders (next start). VIEW shows the frame's scene copy before the post effects, or the shadow map (the depth
+  `fps_mode=3`, 30 half speed, is removed and loads as 30), overlay, fps counter, rumble, SFX / VOICE / MUSIC VOLUME
+  (live), resolution (next start), button icons (next start), controllers and the CHEATS page. The diagnostic lines
+  below (shadow bias, colour bias, shadow map, view, precise shaders) left the menu for the release (2026-11-03);
+  `settings.txt` still sets them. VIEW shows the frame's scene copy before the post effects, or the shadow map (the depth
   texture the receivers sample), instead of the front buffer: which one has the console hatching names the pass. There is no texture
   filter line any more: forced linear filtering blends the 8-bit palette indices of the sprites (wrong colours,
   green specks at their edges in 0.243-0.246); the file `sfix` still forces it for A/B tests. Each change is a log line `[nx] menu: ...`; each new bias value logs its first
@@ -157,15 +159,18 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
   counts as not Erista): the game holds the GPU at 460.8 MHz on every rung of every ladder, handheld and docked, and
   also lowers a higher rate to it (`hcu_clock::for_soc`; log `[clock] erista, GPU held at 460.8 MHz`). The CPU steps
   stay. A module sys-clk sets and `clocks=0` are still left alone.
-- The governor runs every 2 s. The ladder is picked at start from `settings.txt` `fps_mode` and the console mode
+- The governor runs every 0.1 s (the mode check and a step down every 2 s). The ladder is picked at start from `settings.txt` `fps_mode` and the console mode
   (`appletGetOperationMode`). The menu's FRAME RATE (in level play) and a dock or undock (at any time) switch the
   ladder live: the new ladder starts on its first rung, and that sample and the next one are dropped (the backend
   takes a new FRAME RATE within 60 swaps). A module sys-clk hands back is taken at the current rung. The speed: the level swaps (the
   `[speed]` meter's counts) against 60 guest frames a second;
   in 45 and 60 also the drawn level swaps against 45 or 60, the lower of the two counts (those modes skip a frame the
   GPU is busy for, so the game speed alone stays 100 % while fewer frames are shown). In 30 the game speed alone
-  counts (its 30 Hz pacing reads about 100 %). One rung up below 97 % (two below 90 %), one down after 5 samples at
-  99 % or more (the wait doubles to 64 when a lower rung fails at once), never below the first rung. Log lines:
+  counts (its 30 Hz pacing reads about 100 %). The speed is of the last second (10 passes of 0.1 s), and the governor
+  counts lost frames, not percent (`hcu_clock::gov_lost`: of 45 in 45 fps mode, else of 60): 3 or more lost, one rung
+  up at once (two for 6 or more), then a second of the new rate is judged; every 2 s, under 1 lost for 5 samples in a
+  row, one rung down (the wait doubles, up to 64, when a lower rung fails within 3 samples of the step down); between
+  1 and 3 lost, or fewer than 30 level swaps in the second (a load, a menu), the rung stays. Never below the first rung. Log lines:
   `[clock] auto: mode 30 fps (fps_mode 0), handheld, ladder 30 (6 rungs), start rung 0 (CPU 1122, GPU 384 MHz; the floor)`
   at start and at a switch, `[clock] auto: speed ..` at each move. sys-clk's modules are left alone. The
   `clocks_gpu` and `clocks_ladder` keys still stop at GPU 768 MHz (460.8 on Erista).

@@ -16,14 +16,14 @@
 
 ## Nintendo Switch (experimental)
 
-The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled game code, running on the console with a native deko3d renderer (libnx). Ready builds are on the [Releases](https://github.com/rashevskyv/hard-corps-uprising-recompiled/releases) page, with Windows and Linux builds of the same branch (the codegen fix the intro movie needs; see the release notes). **No game data is included.**
+The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled game code, running on the console with a native deko3d renderer (libnx). Ready builds are on the [Releases](https://github.com/rashevskyv/hard-corps-uprising-recompiled/releases) page. The current release is Switch only; the Windows and Linux builds of this branch are in the release `switch-0.303.fdae3aa`. **No game data is included.**
 
 > **Read this first.**
 > - **Very little testing**: a few hours of single player on one console. Graphical glitches, crashes and freezes are possible, and save data may be lost.
 > - **Local 2-player needs two full controllers** (Pro Controller or a Joy-Con pair each; a single Joy-Con is not accepted, the game uses every button). The Xbox LIVE features are not available.
 > - **The DLC characters** (Harley Daniels, Sayuri, Leviathan) work from your own marketplace packages: see "DLC characters" below.
 > - **30 fps by default.** The game runs at full speed and every second frame is drawn. The whole default setup (clocks, frame skipping, speed) is tuned for 30 fps. **60 fps needs an overclock** (see "Clocks and 60 fps" below); without it the 60 fps modes can slow the game down in busy scenes.
-> - No launcher, cheats, achievements or display options: those are PC features.
+> - No launcher, achievements or display options: those are PC features. The cheats are on the settings menu's CHEATS page.
 
 ### Install
 
@@ -45,14 +45,19 @@ Buttons work by position, as on the Xbox pad: Switch **B** = Xbox A, **A** = B, 
 | OVERLAY | the version and performance line at the bottom of the screen: ON (default), OFF |
 | FPS COUNTER | the frame rate at the bottom of the screen: ON (default), OFF. It does not depend on OVERLAY: with OVERLAY off the frame rate is shown alone. After the rate it shows `t <seconds> #<swap>`: the time since the first drawn frame and the swap number, the same clock and counter as the log's `swap #...` lines and the -meter build's `[nx] load t ... s, swap #...` line, so a screenshot finds its place in the log. |
 | RUMBLE | ON (default), OFF |
+| SFX VOLUME | the sound effects: 0 to 200 % in steps of 10, default 80 %. Live. 100 % is the game's own mix; above 100 % amplifies, and loud passages can clip. The line stops at 0 and 200 % (no wraparound). In `settings.txt`: `sfx_gain=0..2`. |
+| VOICE VOLUME | the voices (the mono sounds the voice table knows as voices: the `Voice_*` banks and the voice name prefixes): 0 to 200 %, default 20 %. Live. In `settings.txt`: `voice_gain=0..2`. |
+| MUSIC VOLUME | the music (the stereo streams): 0 to 200 %, default 100 %. Live. In `settings.txt`: `music_gain=0..2`. A menu save always writes the three gain keys, so a `settings.txt` saved by an older build keeps its old values; remove the gain lines to get the defaults. |
+| RESOLUTION | NATIVE 1280X720 (default), 1120X630, 960X540, 800X450. Applies at the next start. Fewer pixels give a softer picture: a crutch for stages where the GPU is too slow, not a recommended setting. |
 | BUTTON ICONS | the button pictures in the game's prompts: SWITCH (default, our own Switch button icons), XBOX (the game's Xbox icons, with the A/B and X/Y pictures swapped so that each one shows the Switch letter of that button, as in 0.303). Applies at the next start. In `settings.txt`: `button_glyphs=switch` or `button_glyphs=xbox`. |
 | CONTROLLERS | press **A**: the console's controller applet (1 or 2 players). Pair the second controller there for local 2-player. |
+| CHEATS | press **A** (or left / right): the CHEATS page, **B** goes back. GOD MODE (infinite health and lives, keep weapons), INFINITE LIVES, INFINITE HEALTH, KEEP WEAPONS, RAPID FIRE, WEAPON SLOT A / B (GAME, MG, SPREAD, RIPPLE, HEATED PLASMA, LASER, CRUSH), LEVEL SLOT A / B (GAME, 0, 1, 2) and START STAGE (GAME, 1 to 8). All off (GAME) by default; live. START STAGE sets the stage of a new game, and a change also jumps to that stage when the menu closes, if a stage is being played. In `settings.txt`: `cheat_god`, `cheat_lives`, `cheat_health`, `cheat_keep_weapons`, `cheat_rapid_fire`, `cheat_weapon_a` / `_b`, `cheat_level_a` / `_b`, `cheat_stage`. |
 
 ### Clocks and 60 fps
 
 This build is made with the **Ultimate base** pipeline (`renut_nx_ultimate_base`: its SDK, toolchain and PGO tools), not with the old SDK of the first Switch builds.
 
-- **`clocks=1`** in `settings.txt` (default 0: the game touches no clock) sets the memory to 1600 MHz and starts a **governor** for the CPU/GPU pair. The start pair is also the floor; the governor goes one step up when the game slows down (or, in 45 and 60, when frames are dropped) and back down after several good seconds, never below the start. The preset follows the FRAME RATE setting and the console mode, and changes live when you change either one:
+- **`clocks=1`** in `settings.txt` (default 0: the game touches no clock) sets the memory to 1600 MHz and starts a **governor** for the CPU/GPU pair. The start pair is also the floor. Every 0.1 s the governor takes the speed of the last second in level play (in 45 and 60 also the shown frames). With 3 or more frames lost in that second it goes one step up at once (two steps for 6 or more). Every 2 s it checks for a step down: after 5 such checks in a row with under 1 frame lost, it goes one step down, never below the start (when the lower step fails soon after, the wait doubles, up to 64 checks). Between 1 and 3 lost frames, and in loads and menus, it stays. The preset follows the FRAME RATE setting and the console mode, and changes live when you change either one:
 
   | Console, FRAME RATE | Start and floor (CPU / GPU MHz) | Top | Measured? |
   | --- | --- | --- | --- |
@@ -61,7 +66,7 @@ This build is made with the **Ultimate base** pipeline (`renut_nx_ultimate_base`
   | Handheld, 60 | 1785 / 844.8 | 1785 / 921.6 | partly: 1785 / 844 held 60 fps by hand |
   | Docked, any | 1683 / 844.8 | 1785 / 921.6 | no: the user's guess |
 
-  Memory is 1600 MHz in every preset. On the first Switch model (Erista) the game holds the GPU at 460.8 MHz in every preset and on every step, handheld and docked (the CPU steps stay; the log says `erista, GPU held at 460.8`). Mariko, OLED and Lite use the table as it is. `clocks_auto=0` turns the governor off (a fixed 1581/384); `clocks_cpu=<MHz>` / `clocks_gpu=<MHz>` set a fixed pair. sys-clk keeps priority: a module it sets is left to it.
+  The steps between start and top: handheld 30 1224/384, 1428/384, 1581/384, 1683/460.8; handheld 45 1428/460.8, 1581/460.8, 1683/460.8; handheld 60 none (1785/844.8, then 1785/921.6); docked 1785/844.8. Memory is 1600 MHz in every preset. On the first Switch model (Erista) the game holds the GPU at 460.8 MHz in every preset and on every step, handheld and docked (the CPU steps stay; the log says `erista, GPU held at 460.8`). Mariko, OLED and Lite use the table as it is. `clocks_auto=0` turns the governor off (a fixed 1581/384); `clocks_cpu=<MHz>` / `clocks_gpu=<MHz>` set a fixed pair. sys-clk keeps priority: a module it sets is left to it.
 - **Measured** (the recorded 2.5-minute replay, 30 fps mode, builds 0.404 to 0.414): CPU 1020 with GPU 691 gave 95 % of full speed (worst 5-second window 80 %); CPU 1581 with GPU 384 held about 100 %; CPU 1326 with GPU 384 did not. With the old governor (floor 1020/307, before the per-mode presets) and the PGO build the replay ran 99.7 % of full speed with about 44 % of the time at stock clocks.
 - **60 fps needs an overclock.** By hand, in 60 fps mode (scenes not recorded; clocks set with sys-clk): CPU 1785 / GPU 844 MHz held 60 fps with no drops; CPU 1200 / GPU 800+ MHz held 60 fps; GPU 690 MHz with the stock CPU also held 60 fps. At stock clocks the 60 fps modes can slow down in busy scenes. The presets above are not yet checked on a console with this build.
 
