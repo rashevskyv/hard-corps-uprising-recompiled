@@ -24,8 +24,8 @@ host layer of cvhd-recomp (our Castlevania: Harmony of Despair port). The PC bui
    0.<commits>.<sha7>`).
 2. Eden first: `powershell -File switch/eden-run.ps1 -Minutes 3` (no-GPU mode, file `sdmc:/switch/hcu/nogpu`
    in Eden's sdmc; Eden cannot run NVK). Pass = 60 or more `[nx] gpu: swap #N`. Logs in
-   `E:\conker-data\eden-runs\hcu-<version>\`.
-3. Console: `switch/deploy.sh 192.168.50.69` uploads `hcu.nro.part`, compares SHA-1, renames to `hcu.nro`.
+   the script's run folder `eden-runs\hcu-<version>\`.
+3. Console: `switch/deploy.sh <console IP>` uploads `hcu.nro.part`, compares SHA-1, renames to `hcu.nro`.
    Game data once: `game/extracted/` to `sdmc:/switch/hcu/game/` (lftp mirror with temp files).
 
 On the console: hbmenu entry "Hard Corps: Uprising" by hcu-switch, launched with title takeover (hold R
@@ -83,7 +83,7 @@ image (`tools/shader_scan.py`); vertex shaders come only from dumps (the D3D run
 
 Eden: `powershell -File switch/eden-deko3d.ps1 -Seconds 150 -Every 25 [-Keys "160:M"]` (Eden keys: C = A,
 X = B, V = X, Z = Y, M = +, N = -, WASD = left stick, arrows = d-pad). Screenshots and logs in
-`E:\conker-data\eden-runs\hcu-<version>-deko3d[-tag]\`.
+the script's run folder `eden-runs\hcu-<version>-deko3d[-tag]\`.
 
 ## Player features (0.243 on)
 
@@ -129,13 +129,13 @@ permission). The branch `renut-base` keeps the old build above as the fallback.
 | --- | --- |
 | Sources | `/root/renut-hcu/src`, rsync'd by `switch/build-base.sh` |
 | SDK | `/root/renut-ult/sdk`: the base's SDK, then `switch/sdk-edits-base.py` (committed there) |
-| Base tools | `/mnt/d/git/dev/renut-ref/renut_nx_ultimate_base`: the toolchain file, `tools/store_cards.py`, `tools/pgo_summary.py` |
+| Base tools | a checkout of renut_nx_ultimate_base (`HCU_BASE_DIR`): the toolchain file, `tools/store_cards.py`, `tools/pgo_summary.py` |
 | Build folder | `/root/renut-hcu/src/out/build/switch-base` (`HCU_BUILD_DIR` for another) |
 | PGO profile | `/root/renut-hcu/pgo` (`HCU_PGO_DIR`) |
 
 - `switch/build-base.sh [cmake -D...]`: rsync, SDK edits (the build stops if they change the SDK), codegen and the
-  store cards when the manifest changed, configure with the base's toolchain file, build. Under
-  `D:\git\dev\renut-ref\build.lock`.
+  store cards when the manifest changed, configure with the base's toolchain file, build. Run one
+  build at a time (for example under `flock` on a lock file).
 - The base owns `main`, threads, memory and the exit. `switch/hcu_nx_base.cpp` adds the SD log, `args.txt`, the
   console defaults of the cvars (`--wrap=main`), the quick exit and the clocks: `clocks=1` in `settings.txt` sets the
   memory to 1600 MHz and the CPU / GPU to the governor's first rung (below) through clkrst at start, sets them again

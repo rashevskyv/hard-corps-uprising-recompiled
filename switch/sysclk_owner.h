@@ -1,5 +1,5 @@
 // Which clocks sys-clk sets, from its IPC (service "sys:clk"). Pure C++: the host test includes it too.
-// Layout and rules from D:\git\dev\sys-clk-vanilla-kefir (Kefir's sys-clk, IPC API 5; vanilla API 4, commit 05d6da2,
+// Layout and rules from Kefir's sys-clk ( IPC API 5; vanilla API 4, commit 05d6da2,
 // has the same SysClkContext and SysClkTitleProfileList). Other API versions are not trusted.
 #pragma once
 

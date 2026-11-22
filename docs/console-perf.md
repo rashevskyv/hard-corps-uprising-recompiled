@@ -1,6 +1,6 @@
 # Console speed: what the 0.160 console log shows (2026-10-27)
 
-Source: `hcu_log.txt` of the user's run of 0.160.6fc8ede on the console (`E:\conker-data\hub-logs\2026-10-27\`).
+Source: `hcu_log.txt` of the user's run of 0.160.6fc8ede on the console (2026-10-27).
 
 | Part | fps | Backend `draws` per frame | What the threads do |
 | --- | --- | --- | --- |

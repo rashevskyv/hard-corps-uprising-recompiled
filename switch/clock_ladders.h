@@ -1,7 +1,7 @@
 // The clock governor's ladders (switch/hcu_nx_base.cpp), one per frame-rate mode, and the speed it acts on. Pure
 // C++: the host test (tests/settings_menu_tests.cpp) includes it too. The rates are steps of the clkrst/pcv tables
 // (CPU 1020, 1122, 1224, 1326, 1428, 1581, 1683, 1785; GPU 307.2, 384, 460.8, 537.6, 614.4, 691.2, 768, 844.8,
-// 921.6 MHz; sys-clk's list, D:\git\dev\sys-clk-vanilla-kefir\manager\src\ipc\pc_shim\client.cpp; no ladder uses 537.6
+// 921.6 MHz; sys-clk's list; no ladder uses 537.6
 // or 614.4).
 #pragma once
 

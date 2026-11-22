@@ -16,10 +16,10 @@
 
 ## Nintendo Switch (experimental)
 
-The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled game code, running on the console with a native deko3d renderer (libnx). Ready builds are on the [Releases](https://github.com/rashevskyv/hard-corps-uprising-recompiled/releases) page. The current release is Switch only; the Windows and Linux builds of this branch are in the release `switch-0.303.fdae3aa`. **No game data is included.**
+The `switch` branch adds a Nintendo Switch homebrew build: the same recompiled game code, running on the console with a native deko3d renderer (libnx). Ready builds are on the [Releases](https://github.com/rashevskyv/hard-corps-uprising-recompiled/releases) page. The current release is Switch only; the Windows and Linux builds of this branch are in the release `switch-0.303.fdae3aa`. **No game data is included** (except the game's title image, the NRO's hbmenu icon).
 
 > **Read this first.**
-> - **Very little testing**: a few hours of single player on one console. Graphical glitches, crashes and freezes are possible, and save data may be lost.
+> - **Very little testing**: short sessions on one console (Switch OLED), and a recorded 2.5-minute replay in 30 fps mode. The 45 fps mode and docked mode are not tested. Graphical glitches, crashes and freezes are possible, and save data may be lost.
 > - **Local 2-player needs two full controllers** (Pro Controller or a Joy-Con pair each; a single Joy-Con is not accepted, the game uses every button). The Xbox LIVE features are not available.
 > - **The DLC characters** (Harley Daniels, Sayuri, Leviathan) work from your own marketplace packages: see "DLC characters" below.
 > - **30 fps by default.** The game runs at full speed and every second frame is drawn. The whole default setup (clocks, frame skipping, speed) is tuned for 30 fps. **60 fps needs an overclock** (see "Clocks and 60 fps" below); without it the 60 fps modes can slow the game down in busy scenes.
@@ -63,12 +63,12 @@ This build is made with the **Ultimate base** pipeline (`renut_nx_ultimate_base`
   | --- | --- | --- | --- |
   | Handheld, 30 | 1122 / 384 | 1785 / 768 | no: the user's guess |
   | Handheld, 45 | 1326 / 460.8 | 1785 / 768 | no: the user's guess |
-  | Handheld, 60 | 1785 / 844.8 | 1785 / 921.6 | partly: 1785 / 844 held 60 fps by hand |
+  | Handheld, 60 | 1785 / 844.8 | 1785 / 921.6 | partly: handheld on one OLED, about 57.5 fps on average, with dips |
   | Docked, any | 1683 / 844.8 | 1785 / 921.6 | no: the user's guess |
 
   The steps between start and top: handheld 30 1224/384, 1428/384, 1581/384, 1683/460.8; handheld 45 1428/460.8, 1581/460.8, 1683/460.8; handheld 60 none (1785/844.8, then 1785/921.6); docked 1785/844.8. Memory is 1600 MHz in every preset. On the first Switch model (Erista) the game holds the GPU at 460.8 MHz in every preset and on every step, handheld and docked (the CPU steps stay; the log says `erista, GPU held at 460.8`). Mariko, OLED and Lite use the table as it is. `clocks_auto=0` turns the governor off (a fixed 1581/384); `clocks_cpu=<MHz>` / `clocks_gpu=<MHz>` set a fixed pair. sys-clk keeps priority: a module it sets is left to it.
 - **Measured** (the recorded 2.5-minute replay, 30 fps mode, builds 0.404 to 0.414): CPU 1020 with GPU 691 gave 95 % of full speed (worst 5-second window 80 %); CPU 1581 with GPU 384 held about 100 %; CPU 1326 with GPU 384 did not. With the old governor (floor 1020/307, before the per-mode presets) and the PGO build the replay ran 99.7 % of full speed with about 44 % of the time at stock clocks.
-- **60 fps needs an overclock.** By hand, in 60 fps mode (scenes not recorded; clocks set with sys-clk): CPU 1785 / GPU 844 MHz held 60 fps with no drops; CPU 1200 / GPU 800+ MHz held 60 fps; GPU 690 MHz with the stock CPU also held 60 fps. At stock clocks the 60 fps modes can slow down in busy scenes. The presets above are not yet checked on a console with this build.
+- **60 fps needs an overclock.** By hand, in 60 fps mode (scenes not recorded; clocks set with sys-clk): CPU 1785 / GPU 844 MHz gave about 57.5 fps on average, with dips (handheld, one OLED); CPU 1200 / GPU 800+ MHz held 60 fps; GPU 690 MHz with the stock CPU also held 60 fps. At stock clocks the 60 fps modes can slow down in busy scenes. The presets above are not yet checked on a console with this build.
 
 ### Local 2-player
 
@@ -87,19 +87,19 @@ Both end with `sdmc:/switch/hcu/user/0000000000000000/58410A18/00000002/<content
 
 ### Building the Switch NRO yourself
 
-`switch/build.sh` builds the NRO in WSL or on Linux. You need:
+`switch/build-base.sh [cmake -D options...]` builds the release NRO on the Ultimate base, in WSL or on Linux (one build at a time). You need:
 
-- devkitPro with devkitA64, libnx, switch-tools and `uam` (the deko3d shader compiler).
-- The ReXGlue SDK v0.10.0 source with `patches/rexglue-sdk` (the common and `.linux` patches) applied, then `switch/sdk-edits.py` and `switch/sdk-edits-hcu.py` (the Switch host layer; `build.sh` applies them). The SDK's host CLI built for Linux (`cmake --preset linux-amd64`, target `rexglue`).
-- An NVK (mesa-switch) `libvulkan.a` for the Switch (the executable links it; the renderer in use is deko3d).
-- Your own extracted game files in `game/extracted/` (never committed; the recompiled C++ is generated from your `default.xex`).
-- The game's shader microcode: the backend writes every shader it lacks to `sdmc:/switch/hcu/shaders/missing/`. `switch/fetch-missing-shaders.sh <console IP>` puts those files into the dump folder (`HCU_SHADER_DUMPS`); build again and `switch/stage-shaders.sh` (`tools/xenos2glsl.py`, `uam`) translates them into `<build dir>/stage/shaders/`.
+- devkitPro with devkitA64, libnx, switch-tools and `uam` (the deko3d shader compiler); cmake, ninja, rsync and Python 3.
+- A checkout of [renut_nx_ultimate_base](https://github.com/ChanseyIsTheBest/renut_nx_ultimate_base) (`HCU_BASE_DIR`): its Switch toolchain file and its post-codegen tools.
+- The base's SDK with HCU's patches and edits (`REXSDK_DIR`): `switch/prepare-base-sdk.sh` makes it from the base's `sdk/` at the commit in `switch/BASE_COMMIT` (HCU's `patches/rexglue-sdk`, then `switch/sdk-edits-base.py`, each committed there). Build its host CLI for Linux (`out/linux-amd64/Release/rexglue`). The build stops if the edits would change the SDK.
+- Your own extracted game files in `$HCU_ROOT/src/game/extracted/` (never committed; the recompiled C++ is generated from your `default.xex`).
+- The game's shader microcode: the backend writes every shader it lacks to `sdmc:/switch/hcu/shaders/missing/`. `switch/fetch-missing-shaders.sh <console IP>` puts those files into the dump folder (`HCU_SHADER_DUMPS`). The build also scans the game files for pixel shaders, and `switch/stage-shaders.sh` (`tools/xenos2glsl.py`, `uam`) translates them all into `<build dir>/stage/shaders/`.
 
-The paths are variables at the top of `switch/build.sh` (`HCU_ROOT`, `REXSDK_DIR`, `NVK_SDK`, `HCU_SHADER_DUMPS`). The hbmenu icon is the game's own title image (`packaging/switch/icon-local.jpg`, not in the repository); without it the NRO gets the devkitPro default icon. Details and the port's history: [docs/switch.md](docs/switch.md).
+The script copies the sources from this checkout (`HCU_GIT_DIR`) to `$HCU_ROOT/src`, runs the codegen and the base's tools, and writes `hcu.nro` to the build folder (`HCU_BUILD_DIR`). The version comes from git (`0.<commit count>.<sha7>`, `+` for uncommitted changes). `-DHCU_PGO=use` builds with the PGO profile in `HCU_PGO_DIR` (made with `-DHCU_PGO=generate` and `switch/pgo-merge-base.sh`). The paths are variables at the top of `switch/build-base.sh`. `switch/build.sh` is the old build (the stock ReXGlue SDK and NVK); branch `renut-base` keeps it as the fallback. The hbmenu icon is the game's own title image (`packaging/switch/icon-local.jpg`, not in the repository); without it the NRO gets the devkitPro default icon. Details and the port's history: [docs/switch.md](docs/switch.md).
 
 ### Legal note
 
-The Switch release contains the recompiled game program, which is a derived work of the game, and the translated shaders. It contains no game data (no graphics, sound, music or text). Use it only with a copy of the game you own. Hard Corps: Uprising belongs to Konami. This is an unofficial fan project, not affiliated with Konami, Arc System Works, Microsoft or Nintendo.
+The Switch release contains the recompiled game program, which is a derived work of the game, and the translated shaders. It contains no game data (no graphics, sound, music or text), except the game's title image as the NRO's hbmenu icon. The licence texts of the third-party parts are in the zip's `licenses` folder. Use it only with a copy of the game you own. Hard Corps: Uprising belongs to Konami. This is an unofficial fan project, not affiliated with Konami, Arc System Works, Microsoft or Nintendo.
 
 
 ## Features
@@ -268,11 +268,11 @@ How the launcher, settings and installer work is described in [docs/launcher.md]
 
 ## Credits
 
-- Hard Corps: Uprising by Arc System Works, published by Konami for Xbox Live Arcade (2011). This is an unofficial fan-made PC port. It is not affiliated with or endorsed by Konami or Arc System Works, and it contains none of their files.
+- Hard Corps: Uprising by Arc System Works, published by Konami for Xbox Live Arcade (2011). This is an unofficial fan-made PC port. It is not affiliated with or endorsed by Konami or Arc System Works, and it contains none of their files, except the game's title image as the hbmenu icon of the Switch NRO.
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) for the recompiler and runtime (BSD 3-Clause)
 - [TRG Launcher](https://github.com/TekRantGaming/trg-launcher), the launcher interface, pinned at v1.1.0. The referenced revision contains no explicit license file.
 - The launcher and package installer follow the approach of the [Earthworm Jim HD PC port](https://github.com/TekRantGaming/earthworm-jim-hd-recompiled)
-- The licenses of the libraries the release includes are in the `licenses` folder of the ZIP
+- The licenses of the libraries the release includes are in the `licenses` folder of the release (the Windows ZIP, the Linux AppImage and the Switch ZIP)
 - The Nintendo Switch build uses methods, tools and SDK parts of [renut_nx_ultimate_base](https://github.com/ChanseyIsTheBest/renut_nx_ultimate_base) and [renut-nx](https://github.com/ChanseyIsTheBest/renut-nx) by ChanseyIsTheBest (SDK parts BSD-3-Clause, tools and app code GPL-3.0), used with the author's permission. The Switch build on that base takes its SDK, its store-card tool (`tools/store_cards.py`), its PGO runtime and merge tool (`switch/hcu_pgo.cpp`, `tools/pgo_merge.py`) and its Switch toolchain file. Their notices credit, among others, [nfsmw-nx](https://github.com/StevensND/nfsmw-nx) by StevensND (the Horizon layer of the SDK, the profiling and PGO method), [masseffect-nx](https://github.com/nebadasSwifty/masseffect-nx) by NebadasSwifty, sa2-nx and futari-nx by ChanseyIsTheBest, and [NFSMW Recompiled](https://github.com/madelrandel-blip/NFSMW-Recompiled) by madelrandel-blip. Files taken from them keep their copyright headers.
 - The Direct3D-level renderer of those ports is [reNut](https://github.com/masterspike52/reNut) by reNut and masterspike52, through banjo-nx's adaptation. reNut has no licence file; it is used with the author's permission. Its parts keep their copyright headers.
 
@@ -286,4 +286,4 @@ Original code in this project is licensed under the GNU General Public License v
 
 Third-party components retain their respective licenses and notices. See [licenses/ReXGlue-LICENSE.txt](packaging/licenses/ReXGlue-LICENSE.txt) and [licenses/THIRD-PARTY-LICENSES.txt](packaging/licenses/THIRD-PARTY-LICENSES.txt).
 
-No game files are included. Hard Corps: Uprising and its assets are not covered by this project's license.
+No game files are included (the Switch NRO's hbmenu icon is the game's title image). Hard Corps: Uprising and its assets are not covered by this project's license.

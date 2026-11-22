@@ -1,6 +1,6 @@
 # Nintendo Switch / Horizon for a ReXGlue (or XenonRecomp) port
 
-Tags: [CVHD] our own hardware result (D:\git\dev\cvhd-recomp\CLAUDE.md). [CODE]/[DOC] from other ports. Several of the ports below are GPL-3.0: take ideas, not files.
+Tags: [CVHD] our own hardware result (the cvhd-recomp port's notes). [CODE]/[DOC] from other ports. Several of the ports below are GPL-3.0: take ideas, not files.
 Working notes (temp, may be gone): `x360/notes_sa2_cpu_switch.md`, `notes_usf4_renderers_nx.md`, `notes_futari_xbla.md`.
 
 ## 0. Prior art: ports that already run on the Switch
