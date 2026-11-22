@@ -58,4 +58,8 @@ inline double gov_speed(int fps_mode, uint32_t swaps, uint32_t drawn, double sec
   return shown < game ? shown : game;
 }
 
+// The frames of the last second the mode is short of, from the speed in %: 100 % is 45 frames in 45 fps mode, else 60 (the
+// game's own rate). The governor counts frames, not percent: 1 or 2 lost frames are no reason to clock up.
+inline double gov_lost(int fps_mode, double pct) { return (100.0 - pct) / 100.0 * (fps_mode == 4 ? 45.0 : 60.0); }
+
 }  // namespace hcu_clock

@@ -83,10 +83,10 @@ int ladder_at = -1;
 // ladder (clock_ladders.h) is the frame-rate mode's in handheld (30, 45, 60) and one for every mode docked: from
 // settings.txt fps_mode and the console mode at start, then from the menu's FRAME RATE and the console mode (both read
 // every 2 s in level play); it starts on the first rung, which is also the floor. Every 0.1 s it takes the speed
-// of the last second from the level swaps (the [speed] meter's counts; in 45 and 60 also the drawn ones: gov_speed). Below
-// 98 %: one rung up at once (two below 90 %), then a second of the new rate is judged. Every 2 s: at 99 % or more for
+// of the last second from the level swaps (the [speed] meter's counts; in 45 and 60 also the drawn ones: gov_speed). 3 or more
+// frames lost in that second: one rung up at once (two for 6 or more), then a second of the new rate is judged. Every 2 s: under 1 frame lost for
 // gov_wait samples in a row: one rung down; a rung that fails within 3 such samples of the step down doubles that wait
-// (5 to 64). Between 98 and 99 % and in a stretch of fewer than 30 level swaps in the second (a load, a menu) the rung stays. (0.410 A/B at the replay, 30 fps: CPU 1581 / GPU 384 held 100 %, 1326 / 384 did not.)
+// (5 to 64). Between (1 and 3 frames lost) and in a stretch of fewer than 30 level swaps in the second (a load, a menu) the rung stays. (0.410 A/B at the replay, 30 fps: CPU 1581 / GPU 384 held 100 %, 1326 / 384 did not.)
 bool gov_on = true;  // on with clocks=1; off with clocks_auto=0, with clocks_cpu / clocks_gpu (unless clocks_auto=1), or a ladder
 int gov_mode = 0;    // the fps_mode and the console mode the ladder is for
 bool gov_docked = false;
@@ -471,13 +471,14 @@ void govern() {
   const double pct = hcu_clock::gov_speed(gov_mode, dsw, ddr, double(dtk) / double(armGetSystemTickFreq()));
   if (slow) gov_since_down++;
   int to = gov_rung;
-  if (pct < 98.0) {
+  const double lost = hcu_clock::gov_lost(gov_mode, pct);
+  if (lost >= 3.0) {
     gov_good = 0;
     // The lower rung failed at once: wait longer before trying it again; it held for more than 3 samples: back to 5.
     gov_wait = gov_since_down <= 3 ? std::min(gov_wait * 2, 64u) : 5;
-    to = std::min(gov_rung + (pct < 90.0 ? 2 : 1), gov_ladder.count - 1);
+    to = std::min(gov_rung + (lost >= 6.0 ? 2 : 1), gov_ladder.count - 1);
   } else if (!slow) {
-  } else if (pct >= 99.0 && gov_rung > 0) {
+  } else if (lost < 1.0 && gov_rung > 0) {
     if (++gov_good >= gov_wait) {
       gov_good = 0;
       to = gov_rung - 1;

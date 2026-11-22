@@ -330,6 +330,8 @@ int main() {
     Check(gov_speed(0, 120, 60, 2.0) == 100.0, "clock: 30 fps (every second frame drawn) is 100 %");
     Check(gov_speed(2, 120, 108, 2.0) == 90.0, "clock: 60 with busy skips counts the shown frames");
     Check(gov_speed(4, 120, 90, 2.0) == 100.0, "clock: 45 shows 45 of 60");
+    Check(gov_lost(2, 100.0 * 58 / 60) > 1.99 && gov_lost(2, 100.0 * 58 / 60) < 2.01, "clock: 58 of 60 frames is 2 lost");
+    Check(gov_lost(4, 100.0 * 42 / 45) > 2.99 && gov_lost(4, 100.0 * 42 / 45) < 3.01, "clock: 42 of 45 frames is 3 lost");
     Check(gov_speed(1, 108, 108, 2.0) == 90.0, "clock: 60 with a slow game counts the game speed");
   }
 
