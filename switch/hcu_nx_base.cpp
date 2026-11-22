@@ -82,20 +82,22 @@ int ladder_at = -1;
 // The governor (on with clocks=1; clocks_auto=0 turns it off; a clocks_ladder or a clocks_cpu / clocks_gpu key wins). Its
 // ladder (clock_ladders.h) is the frame-rate mode's in handheld (30, 45, 60) and one for every mode docked: from
 // settings.txt fps_mode and the console mode at start, then from the menu's FRAME RATE and the console mode (both read
-// every 2 s in level play); it starts on the first rung, which is also the floor. Every 2 s it takes the speed
-// from the level swaps of that time (the [speed] meter's counts; in 45 and 60 also the drawn ones: gov_speed). Below
-// 97 %: one rung up (two below 90 %). At 99 % or more for gov_wait samples in a row: one rung down; a rung that fails
-// within 3 samples of the step down doubles that wait (5 to 64). Between 97 and 99 % and in a stretch of fewer than 60
-// level swaps (a load, a menu) the rung stays. (0.410 A/B at the replay, 30 fps: CPU 1581 / GPU 384 held 100 %, 1326 / 384 did not.)
+// every 2 s in level play); it starts on the first rung, which is also the floor. Every 0.1 s it takes the speed
+// of the last second from the level swaps (the [speed] meter's counts; in 45 and 60 also the drawn ones: gov_speed). Below
+// 98 %: one rung up at once (two below 90 %), then a second of the new rate is judged. Every 2 s: at 99 % or more for
+// gov_wait samples in a row: one rung down; a rung that fails within 3 such samples of the step down doubles that wait
+// (5 to 64). Between 98 and 99 % and in a stretch of fewer than 30 level swaps in the second (a load, a menu) the rung stays. (0.410 A/B at the replay, 30 fps: CPU 1581 / GPU 384 held 100 %, 1326 / 384 did not.)
 bool gov_on = true;  // on with clocks=1; off with clocks_auto=0, with clocks_cpu / clocks_gpu (unless clocks_auto=1), or a ladder
 int gov_mode = 0;    // the fps_mode and the console mode the ladder is for
 bool gov_docked = false;
 constinit hcu_clock::Ladder gov_ladder = hcu_clock::ladder_for(0, false);  // constinit: raise_clocks runs before the constructors
 int gov_rung = 0;    // the ladder's first rung: the start and the floor
-u32 gov_swaps = 0, gov_drawn = 0, gov_wait = 5, gov_good = 0, gov_since_down = 100;
-u32 gov_skip = 0;    // samples to drop after a ladder change (the backend takes a new fps_mode within 60 swaps)
+u32 gov_wait = 5, gov_good = 0, gov_since_down = 100;
+struct GovSnap { u32 sw, dr; u64 tk; };
+GovSnap gov_ring[10];  // the running totals at the last 10 passes (100 ms each): the window is the last second
+int gov_n = 0;         // snapshots of this rung and mode in the ring; below 0 = passes to wait (the backend takes a new fps_mode within 60 swaps)
+unsigned gov_pass = 0;
 bool erista = false;  // splGetConfig HardwareType 0 or 1 (raise_clocks): the GPU is held at 460.8 (clock_ladders.h)
-u64 gov_ticks = 0;
 constexpr u32 kNoAnswer = 1;           // owner: sys-clk did not answer, so the module is left alone
 bool clkrst_up = false;
 Service sysclk_srv;                     // sys-clk's IPC (trusted API): asked before every pcv call
@@ -422,23 +424,27 @@ void step_ladder() {
               at, swap, ladder[at].cpu, hcu_clock::for_soc(ladder[at], erista).gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1]);
 }
 
-// Every 2 s (log_flush_loop): the governor (see gov_on).
+// Every 0.1 s (log_flush_loop): the governor (see gov_on). The speed is of the last second (10 passes), taken from the
+// swaps' own tick sums, so it has no phase noise; below 98 % it goes up at once. The rest (the mode check, a step down)
+// is every 2 s as before.
 void govern() {
   if (!gov_on || ladder_n || !clocks_on.load(std::memory_order_acquire)) return;
-  const u32 sw = hcu_speed_swaps, dr = hcu_speed_drawn;
-  const u64 tk = hcu_speed_ticks;
-  const u32 dsw = sw - gov_swaps, ddr = dr - gov_drawn;
-  const u64 dtk = tk - gov_ticks;
-  gov_swaps = sw;
-  gov_drawn = dr;
-  gov_ticks = tk;
-  const bool level = dsw >= 60 && dtk;
+  const GovSnap cur = {hcu_speed_swaps, hcu_speed_drawn, hcu_speed_ticks};
+  const bool slow = ++gov_pass % 20 == 0;
+  const bool full = gov_n >= 10;
+  const GovSnap base = full ? gov_ring[gov_n % 10] : cur;
+  if (gov_n >= 0) gov_ring[gov_n % 10] = cur;
+  gov_n++;
+  const u32 dsw = cur.sw - base.sw, ddr = cur.dr - base.dr;
+  const u64 dtk = cur.tk - base.tk;
+  const bool level = full && dsw >= 30 && dtk;
+  if (!slow && !level) return;
   // The menu's FRAME RATE and the console mode are live. The console mode is read every 2 s (an undock in a menu must
   // not keep the docked rates in handheld); fps_mode only in level play (hcu_settings is loaded by then). A change drops
   // this sample (part of it is the old mode's); a new ladder starts on its first rung.
   const int mode = level ? hcu_settings.fps_mode : gov_mode;
   const bool docked = appletGetOperationMode() == AppletOperationMode_Console;
-  if (mode != gov_mode || docked != gov_docked) {
+  if (slow && (mode != gov_mode || docked != gov_docked)) {
     const hcu_clock::Ladder was = gov_ladder;
     gov_mode = mode;
     gov_docked = docked;
@@ -446,7 +452,7 @@ void govern() {
     gov_good = 0;
     gov_wait = 5;
     gov_since_down = 100;
-    gov_skip = 1;  // the next sample too: the backend may still pace the old mode for up to 60 swaps of it
+    gov_n = -10;  // 1 s more: the backend may still pace the old mode for up to 60 swaps of it
     if (gov_ladder.rungs == was.rungs) {
       std::printf("[clock] auto: mode %s (fps_mode %d), %s, ladder %s stays, rung %d\n", hcu_clock::mode_name(mode), mode,
                   docked ? "docked" : "handheld", gov_ladder.name, gov_rung);
@@ -462,18 +468,15 @@ void govern() {
     return;
   }
   if (!level) return;
-  if (gov_skip) {
-    gov_skip--;
-    return;
-  }
   const double pct = hcu_clock::gov_speed(gov_mode, dsw, ddr, double(dtk) / double(armGetSystemTickFreq()));
-  gov_since_down++;
+  if (slow) gov_since_down++;
   int to = gov_rung;
-  if (pct < 97.0) {
+  if (pct < 98.0) {
     gov_good = 0;
     // The lower rung failed at once: wait longer before trying it again; it held for more than 3 samples: back to 5.
     gov_wait = gov_since_down <= 3 ? std::min(gov_wait * 2, 64u) : 5;
     to = std::min(gov_rung + (pct < 90.0 ? 2 : 1), gov_ladder.count - 1);
+  } else if (!slow) {
   } else if (pct >= 99.0 && gov_rung > 0) {
     if (++gov_good >= gov_wait) {
       gov_good = 0;
@@ -491,6 +494,7 @@ void govern() {
               pct, dsw, ddr, gov_ladder.name, gov_rung, to, (unsigned)hcu_gpu_swap, gov_ladder.rungs[to].cpu,
               hcu_clock::for_soc(gov_ladder.rungs[to], erista).gpu, got[0] / 1000, got[1] / 1000, rcs[0], rcs[1], gov_wait);
   gov_rung = to;
+  gov_n = 0;  // the next judgement needs a second of the new rate
 }
 
 // The old rates come back for the modules the game holds; sys-clk is asked first, its modules are left to it.
@@ -546,17 +550,19 @@ void print_audio_levels() {
 }
 
 // The log is buffered and flushed twice a second; fsync commits it to the card (after a hang and a hard reboot, a log
-// that was only flushed ended in garbage). Every 4th pass (2 s) keeps the clocks; every 2nd (1 s) flushes the input
-// record and prints the [audio] line.
+// that was only flushed ended in garbage). Passes are 0.1 s: the governor every pass, the log every 5th (twice a second),
+// the clocks every 20th (2 s), the input record and the [audio] line every 10th (1 s).
 void log_flush_loop(void*) {
   for (unsigned pass = 1; log_flush_running; pass++) {
-    svcSleepThread(500'000'000LL);
-    if (pass % 4 == 0) keep_clocks();
-    if (pass % 4 == 2) govern();
-    step_ladder();
-    if (pass % 2 == 0) hcu_input_flush(0), print_audio_levels();
-    std::fflush(stdout);
-    fsync(fileno(stdout));
+    svcSleepThread(100'000'000LL);
+    if (pass % 20 == 0) keep_clocks();
+    govern();
+    if (pass % 5 == 0) step_ladder();
+    if (pass % 10 == 0) hcu_input_flush(0), print_audio_levels();
+    if (pass % 5 == 0) {
+      std::fflush(stdout);
+      fsync(fileno(stdout));
+    }
   }
 }
 
